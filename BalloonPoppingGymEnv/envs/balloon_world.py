@@ -16,6 +16,7 @@ from rocketpy import (
     StochasticRocket,
 )
 from vpython import canvas, color, vector, rate, sphere, arrow
+import matplotlib.pyplot as plt
 
 class BalloonPoppingEnv(gym.Env):
     metadata = {"render_modes": ["vpython", "matplotlib"]}
@@ -49,7 +50,7 @@ class BalloonPoppingEnv(gym.Env):
 
         # Graphics-related attributes
         self.render_mode = settings["render"]["mode"]
-        self.first_sphere = None
+        self.balloons = None
         self.canvas = None
 
     def _get_obs(self):
@@ -97,13 +98,27 @@ class BalloonPoppingEnv(gym.Env):
         if self.render_mode == "vpython":
             if self.canvas is None:
                 self.canvas = canvas(title="Balloon Popping Environment", width=800, height=600, center=vector(0,0,0), background=color.white)
-                self.first_sphere = sphere(radius = 1.5, color = color.magenta, make_trail=True)
+                self.balloons = sphere(radius = 1.5, color = color.magenta, make_trail=True)
 
-            self.first_sphere.pos = vector(self._balloon_states[0, 0], self._balloon_states[0, 1], self._balloon_states[0, 2])
+            self.balloons.pos = vector(self._balloon_states[0, 0], self._balloon_states[0, 1], self._balloon_states[0, 2])
             rate(30)
         elif self.render_mode == "matplotlib":
-            # Implementation for matplotlib rendering
-            pass
+            if self.canvas is None:
+                self.canvas = plt.figure().add_subplot(projection='3d')
+                self.balloons, = self.canvas.plot(self._balloon_states[:, 0], self._balloon_states[:, 1], self._balloon_states[:, 2], 'o', color='magenta')
+                self.canvas.set_xlabel('X position (m)')
+                self.canvas.set_ylabel('Y position (m)')
+                self.canvas.set_zlabel('Z position (m)')
+                self.canvas.set_xlim(-1000, 1000)
+                self.canvas.set_ylim(-1000, 1000)
+                self.canvas.set_zlim(0, 1000)
+
+            if np.remainder(self.current_step,1/self.simulation_settings['time_step']) == 0:
+                self.balloons.set_data(self._balloon_states[:, 0], self._balloon_states[:, 1])
+                self.balloons.set_3d_properties(self._balloon_states[:, 2])
+                self.canvas.set_title(f"Time: {self.current_step*self.simulation_settings['time_step']} sec")
+                plt.draw()
+                plt.pause(0.01)
 
     def close(self):
         print('closing environment')
