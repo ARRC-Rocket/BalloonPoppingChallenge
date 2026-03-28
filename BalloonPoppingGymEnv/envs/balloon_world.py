@@ -1,5 +1,3 @@
-from enum import Enum
-from unittest import case
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
@@ -17,6 +15,7 @@ from rocketpy import (
 )
 from vpython import canvas, color, vector, rate, sphere, arrow
 import matplotlib.pyplot as plt
+import pymap3d as pm
 
 class BalloonPoppingEnv(gym.Env):
     metadata = {"render_modes": ["vpython", "matplotlib"]}
@@ -141,6 +140,8 @@ def generate_balloon_flights(environment_settings, simulation_settings, balloon_
 
     stochastic_env = StochasticEnvironment(
         environment=env,
+        latitude=balloon_settings["stochastic"]["latitude_std"],
+        longitude=balloon_settings["stochastic"]["longitude_std"],
     )
     stochastic_env.visualize_attributes()
 
@@ -198,11 +199,11 @@ def generate_balloon_flights(environment_settings, simulation_settings, balloon_
 
     stochastic_balloon = StochasticRocket(
         rocket=Balloon,
-        mass=balloon_settings["stochastic"]["mass"],
-        volume=balloon_settings["stochastic"]["volume"],
-        inertia_11=balloon_settings["stochastic"]["inertia"],
-        inertia_22=balloon_settings["stochastic"]["inertia"],
-        inertia_33=balloon_settings["stochastic"]["inertia"],
+        mass=balloon_settings["stochastic"]["mass_std"],
+        volume=balloon_settings["stochastic"]["volume_std"],
+        inertia_11=balloon_settings["stochastic"]["inertia_std"],
+        inertia_22=balloon_settings["stochastic"]["inertia_std"],
+        inertia_33=balloon_settings["stochastic"]["inertia_std"],
         center_of_mass_without_motor=0,
     )
     stochastic_balloon.add_motor(SM, position=0)
@@ -240,6 +241,8 @@ def generate_balloon_flights(environment_settings, simulation_settings, balloon_
             "vx": lambda flight: flight.vx(np.arange(0, simulation_settings["max_time"], simulation_settings["time_step"])),
             "vy": lambda flight: flight.vy(np.arange(0, simulation_settings["max_time"], simulation_settings["time_step"])),
             "vz": lambda flight: flight.vz(np.arange(0, simulation_settings["max_time"], simulation_settings["time_step"])),
+            "lat0": lambda flight: flight.latitude(0),
+            "lon0": lambda flight: flight.longitude(0),
         },
     )
 
@@ -252,6 +255,19 @@ def generate_balloon_flights(environment_settings, simulation_settings, balloon_
     )
 
     """Convert Monte Carlo dict to [balloon][state][timestep]."""
-    states = ["x", "y", "z", "vx", "vy", "vz"]
-    monte_carlo_results = [np.array(monte_carlo_results_[state]) for state in states]
-    return np.stack(monte_carlo_results, axis=1)
+    east0, north0, up0 = pm.geodetic2enu(
+        monte_carlo_results_["lat0"], monte_carlo_results_["lon0"], environment_settings["elevation"], 
+        environment_settings["latitude"], environment_settings["longitude"], environment_settings["elevation"])
+    # Broadcast initial ENU offsets to all timesteps for each simulation
+    east0, north0, up0 = np.array(east0)[:, None], np.array(north0)[:, None], np.array(up0)[:, None]
+
+    monte_carlo_results = np.stack([
+        np.array(monte_carlo_results_["x"]) + east0,
+        np.array(monte_carlo_results_["y"]) + north0,
+        np.array(monte_carlo_results_["z"]) + up0,
+        np.array(monte_carlo_results_["vx"]), 
+        np.array(monte_carlo_results_["vy"]), 
+        np.array(monte_carlo_results_["vz"]),
+    ], axis=1)
+
+    return monte_carlo_results
