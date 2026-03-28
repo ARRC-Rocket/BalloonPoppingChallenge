@@ -20,22 +20,20 @@ from vpython import canvas, color, vector, rate, sphere, arrow
 class BalloonPoppingEnv(gym.Env):
     metadata = {"render_modes": ["vpython", "matplotlib"]}
     def __init__(self, settings):
-        self.tvc_gimbal_range = settings["rocket"]["tvc_gimbal_range"]
-        self.throttle_range = settings["rocket"]["throttle_range"]
-        self.roll_range = settings["rocket"]["roll_range"]
-        self.balloon_num = settings["balloon"]["num"]
-        self.max_time = settings["balloon"]["max_time"]
-        self.step_time = settings["balloon"]["step_time"]
-        self.time_array = np.arange(0, self.max_time, self.step_time)
+
+        self.environment_settings = settings["environment"]
+        self.simulation_settings = settings["simulation"]
+        self.balloon_settings = settings["balloon"]
+        self.rocket_settings = settings["rocket"]
 
         self._balloon_paths = None
-        self._balloon_states = np.array(np.zeros((self.balloon_num, 6)))    # "[balloon_num, (x, y, z, vx, vy, vz)]"
-        self._rocket_states = np.array(np.zeros(12))                        # (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ)
+        self._balloon_states = np.array(np.zeros((self.balloon_settings["num"], 6)))    # [balloon_num, (x, y, z, vx, vy, vz)]
+        self._rocket_states = np.array(np.zeros(12))                                    # (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ)
 
         # Observations include balloon and rocket states
         self.observation_space = spaces.Dict(
             {
-                "balloon": spaces.Box(low=-np.inf*np.ones((self.balloon_num, 6)), high=np.inf*np.ones((self.balloon_num, 6)), dtype=np.float64),
+                "balloon": spaces.Box(low=-np.inf*np.ones((self.balloon_settings["num"], 6)), high=np.inf*np.ones((self.balloon_settings["num"], 6)), dtype=np.float64),
                 "rocket": spaces.Box(low=-np.inf*np.ones(12), high=np.inf*np.ones(12), dtype=np.float64),
             }
         )
@@ -43,9 +41,9 @@ class BalloonPoppingEnv(gym.Env):
         # TVC, roll, and throttling actions
         self.action_space = spaces.Dict(
             {
-                "TVC":  spaces.Box(low=-self.tvc_gimbal_range*np.ones(2), high=self.tvc_gimbal_range*np.ones(2), dtype=np.float64),
-                "throttle": spaces.Box(low=self.throttle_range[0], high=self.throttle_range[1], shape=(1,), dtype=np.float64),
-                "roll": spaces.Box(low=-self.roll_range*np.ones(2), high=self.roll_range*np.ones(2), dtype=np.float64),
+                "TVC":  spaces.Box(low=-self.rocket_settings["tvc_gimbal_range"]*np.ones(2), high=self.rocket_settings["tvc_gimbal_range"]*np.ones(2), dtype=np.float64),
+                "throttle": spaces.Box(low=self.rocket_settings["throttle_range"][0], high=self.rocket_settings["throttle_range"][1], shape=(1,), dtype=np.float64),
+                "roll": spaces.Box(low=-self.rocket_settings["roll_range"]*np.ones(2), high=self.rocket_settings["roll_range"]*np.ones(2), dtype=np.float64),
             }
         )
 
@@ -66,7 +64,7 @@ class BalloonPoppingEnv(gym.Env):
 
         self.current_step = 0
 
-        self._balloon_paths = generate_balloon_flights(self.balloon_num, self.max_time)
+        self._balloon_paths = generate_balloon_flights(self.environment_settings, self.simulation_settings, self.balloon_settings)
 
         self.num_timesteps = self._balloon_paths.shape[2]
         self._balloon_states = self._balloon_paths[:, :, self.current_step]
@@ -110,28 +108,26 @@ class BalloonPoppingEnv(gym.Env):
     def close(self):
         print('closing environment')
 
-def generate_balloon_flights(balloon_num, max_time):
+def generate_balloon_flights(environment_settings, simulation_settings, balloon_settings):
     env = Environment(
-        date=(2025, 7, 26, 0),
-        latitude=22.1749259,
-        longitude=120.8922531,
-        elevation=20,
+        date=environment_settings["date"],
+        latitude=environment_settings["latitude"],
+        longitude=environment_settings["longitude"],
+        elevation=environment_settings["elevation"],
         datum="WGS84",
         timezone="UTC",
     )
     env.set_atmospheric_model(
         type="Ensemble",
-        file="./BalloonPoppingGymEnv/envs/data/ae7f067fbd351ec2055c0e748c3e7f29.nc",
+        file=environment_settings["atmosphere_data_path"],
         dictionary="ECMWF",
     )
-    env.max_expected_height = 4000
+    # env.max_expected_height = 4000
 
     stochastic_env = StochasticEnvironment(
         environment=env,
     )
     stochastic_env.visualize_attributes()
-
-    balloon_radius = 1.5  # m
 
     SM = SolidMotor(
         thrust_source=50,
@@ -151,26 +147,30 @@ def generate_balloon_flights(balloon_num, max_time):
         dry_mass=0,
     )
 
+    cL0 = balloon_settings["aero_coefficients"]["cL"]
+    cQ0 = balloon_settings["aero_coefficients"]["cQ"]
+    cD0 = balloon_settings["aero_coefficients"]["cD"]
+    cDamping = balloon_settings["aero_coefficients"]["moment_damping"]
     balloon_aero_model = LinearGenericSurface(
-        reference_area=balloon_radius * balloon_radius * 3.14,
+        reference_area=np.pi * balloon_settings["radius"] ** 2,
         reference_length=1,
         coefficient_constants=[
-            0.00, 0, 0, 0, 0, 0,    # cL_0, cL_alpha, cL_beta, cL_p, cL_q, cL_r
-            0.00, 0, 0, 0, 0, 0,    # cQ_0, cQ_alpha, cQ_beta, cQ_p, cQ_q, cQ_r
-            1.00, 0, 0, 0, 0, 0,    # cD_0, cD_alpha, cD_beta, cD_p, cD_q, cD_r
-            0, 0, 0, -0.01, -0.01, -0.01,   # cm_0, cm_alpha, cm_beta, cm_p, cm_q, cm_r
-            0, 0, 0, -0.01, -0.01, -0.01,   # cn_0, cn_alpha, cn_beta, cn_p, cn_q, cn_r
-            0, 0, 0, -0.01, -0.01, -0.01,   # cl_0, cl_alpha, cl_beta, cl_p, cl_q, cl_r
+            cL0, 0, 0, 0, 0, 0,    # cL_0, cL_alpha, cL_beta, cL_p, cL_q, cL_r
+            cQ0, 0, 0, 0, 0, 0,    # cQ_0, cQ_alpha, cQ_beta, cQ_p, cQ_q, cQ_r
+            cD0, 0, 0, 0, 0, 0,    # cD_0, cD_alpha, cD_beta, cD_p, cD_q, cD_r
+            0, 0, 0, cDamping, cDamping, cDamping,   # cm_0, cm_alpha, cm_beta, cm_p, cm_q, cm_r
+            0, 0, 0, cDamping, cDamping, cDamping,   # cn_0, cn_alpha, cn_beta, cn_p, cn_q, cn_r
+            0, 0, 0, cDamping, cDamping, cDamping,   # cl_0, cl_alpha, cl_beta, cl_p, cl_q, cl_r
             ],
         center_of_pressure=(0,0,0),
         name="Balloon Aero Model"
     )
 
     Balloon = Rocket(
-        volume=balloon_radius * balloon_radius * balloon_radius * 3.14 * 4 / 3,
+        volume= 4 / 3 * np.pi * balloon_settings["radius"] ** 3,
         radius=0.05,
-        mass=0.8,
-        inertia=(1, 1, 1),
+        mass=balloon_settings["mass"],
+        inertia=balloon_settings["inertia"],
         center_of_mass_without_motor=0.2,
         power_off_drag=0,
         power_on_drag=0,
@@ -183,11 +183,11 @@ def generate_balloon_flights(balloon_num, max_time):
 
     stochastic_balloon = StochasticRocket(
         rocket=Balloon,
-        mass=0.2,
-        volume=0.5,
-        inertia_11=0.1,
-        inertia_22=0.1,
-        inertia_33=0.1,
+        mass=balloon_settings["stochastic"]["mass"],
+        volume=balloon_settings["stochastic"]["volume"],
+        inertia_11=balloon_settings["stochastic"]["inertia"],
+        inertia_22=balloon_settings["stochastic"]["inertia"],
+        inertia_33=balloon_settings["stochastic"]["inertia"],
         center_of_mass_without_motor=0,
     )
     stochastic_balloon.add_motor(SM, position=0)
@@ -200,7 +200,7 @@ def generate_balloon_flights(balloon_num, max_time):
         inclination=90,
         heading=180,
         rail_length=0.1,
-        max_time=max_time,
+        max_time=simulation_settings["max_time"],
         # max_time_step=0.01,
         # min_time_step=0.01,
         verbose=True,
@@ -219,17 +219,17 @@ def generate_balloon_flights(balloon_num, max_time):
         flight=stochastic_flight,
         export_list=["t_final"],
         data_collector={
-            "x": lambda flight: flight.x(np.arange(0, max_time, 0.01)),
-            "y": lambda flight: flight.y(np.arange(0, max_time, 0.01)),
-            "z": lambda flight: flight.z(np.arange(0, max_time, 0.01)),
-            "vx": lambda flight: flight.vx(np.arange(0, max_time, 0.01)),
-            "vy": lambda flight: flight.vy(np.arange(0, max_time, 0.01)),
-            "vz": lambda flight: flight.vz(np.arange(0, max_time, 0.01)),
+            "x": lambda flight: flight.x(np.arange(0, simulation_settings["max_time"], simulation_settings["time_step"])),
+            "y": lambda flight: flight.y(np.arange(0, simulation_settings["max_time"], simulation_settings["time_step"])),
+            "z": lambda flight: flight.z(np.arange(0, simulation_settings["max_time"], simulation_settings["time_step"])),
+            "vx": lambda flight: flight.vx(np.arange(0, simulation_settings["max_time"], simulation_settings["time_step"])),
+            "vy": lambda flight: flight.vy(np.arange(0, simulation_settings["max_time"], simulation_settings["time_step"])),
+            "vz": lambda flight: flight.vz(np.arange(0, simulation_settings["max_time"], simulation_settings["time_step"])),
         },
     )
 
     monte_carlo_results_ = monte_carlo_sim.simulate(
-        number_of_simulations=balloon_num,
+        number_of_simulations=balloon_settings["num"],
         append=False,
         include_function_data=False,
         parallel=False,
