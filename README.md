@@ -20,6 +20,29 @@ pip install -r requirements.txt
 ```python
 python example.py
 ```
+
+## Gymnasium Environment Operation
+There are three stages in the operation of the Gymnasium environment: reset, stepping, and termination.
+1. **Reset**: The environment is reset using `env.reset()`, which sets up the initial conditions for the rocket and balloons as given in the `[balloon_popping_settings.json]()` file. The trajectory of each balloon is simulated using the `[monte-carlo simulation of ActiveRocketPy]()` then stored in the environment.
+
+2. **Stepping**: The agent takes an action (e.g., launch, roll, throttle and TVC commands) and calls `env.step(action)`, which advances the simulation by one time step. The environment returns the new observations, reward, termination flag, and additional info.
+3. **Termination**: The episode ends when maximum simulation time is reached or the rocket hits the ground. The environment provides a reward based on the number of balloons popped.
+
+## Modelling Details
+- Rocket flight modelling (RocketPy)
+    - The details can be found in the [RocketPy Reference](https://docs.rocketpy.org/en/latest/index.html), but here are some key assumptions and simplifications:
+    - The rocket is modeled as a 6-DoF rigid body.
+    - The Earth is flat.
+- Balloon Popping Challenge-specific modelling
+    - Balloons are modeled as spheres with a certain radius and mass.
+    - The flight of each balloon is not affected by the rocket or other balloons.
+    - Popping detection:
+        - WIP
+    - Many balloons will be released at random intervals and random locations around  the rocket launch site.
+    - There will be a single launch, and the aim is to pop as many balloons as  possible.
+    - Launch time is determined by the agents.
+    - There will be disturbances, e.g., sensor noise, wind in the environment.
+
 ## Reference
 - [RocketPy GitHub](https://github.com/RocketPy/RocketPy)
 - [RocketPy Documentation](https://docs.rocketpy.org/en/latest/index.html)
@@ -51,10 +74,10 @@ Keywords: GNC, autonomous rocket, optimization, path-finding.
 ### Competition Rules
 
 - The participant will develop agents to control a rocket in `[agent.py]()`.
-- Many balloons will be released at random intervals and random locations around the rocket launch site.
-- There will be a single launch, and the aim is to pop as many balloons as possible.
-- Launch time is determined by the agents.
-- There will be disturbances, e.g., sensor noise, wind in the environment.
+- The agent should only take the observastions provided by the environment and output control commands (e.g., launch, roll, throttle and TVC commands) at each time step. The agent should not have access to any other information about the environment or the simulator.
+- Other than the agent, all other components of the simulator are fixed and provided by the organizer. Participants are not allowed to modify any other part of the codebase.
+- Questions about the rules and software can be asked in the `[GitHub Issues]()`. The organizer will hold regular meetings to answer questions and provide updates.
+- Suggestions, contributions, and bug reports to the codebase are highly welcomed. Please submit a pull request or open an issue for discussion.
 
 ### Competetion Scenarios
 Exact scenario for elimation rounds and final rounds will be announced later. Below are some examples of possible scenarios.
