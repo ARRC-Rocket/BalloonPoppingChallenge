@@ -33,23 +33,26 @@ class BalloonPoppingEnv(gym.Env):
         self.rocket_settings = settings["rocket"]
 
         self._balloon_states = np.array(np.zeros((self.balloon_settings["num"], 6)))    # [balloon_num, (x, y, z, vx, vy, vz)]
-        self._rocket_states = np.array(np.zeros(12))                                    # (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ)
+        self._rocket_sensors = np.full(12, np.nan)                                      # (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ)
+        self._rocket_states = np.full(13, np.nan)                                       # (posX, posY, posZ, velX, velY, velZ, e0, e1, e2, e3, w1, w2, w3)
 
         # Observations include balloon and rocket states
         self.observation_space = spaces.Dict(
             {
+                "balloon_time": spaces.Box(low=0, high=self.simulation_settings["max_time"], shape=(1,), dtype=np.float64),
                 "balloon": spaces.Box(low=-np.inf*np.ones((self.balloon_settings["num"], 6)), high=np.inf*np.ones((self.balloon_settings["num"], 6)), dtype=np.float64),
-                "rocket": spaces.Box(low=-np.inf*np.ones(13), high=np.inf*np.ones(13), dtype=np.float64),
+                "rocket_time": spaces.Box(low=0, high=self.simulation_settings["max_time"], shape=(1,), dtype=np.float64),
+                "rocket_sensors": spaces.Box(low=-np.inf*np.ones(12), high=np.inf*np.ones(12), dtype=np.float64),
             }
         )
 
-        # TVC, roll, and throttling actions
+        # tvc, roll, and throttling actions
         self.action_space = spaces.Dict(
             {
                 "launch": spaces.MultiBinary(1),
-                "TVC":  spaces.Box(low=-self.rocket_settings["tvc_gimbal_range"]*np.ones(2), high=self.rocket_settings["tvc_gimbal_range"]*np.ones(2), dtype=np.float64),
+                "tvc":  spaces.Box(low=-self.rocket_settings["tvc_gimbal_range"]*np.ones(2), high=self.rocket_settings["tvc_gimbal_range"]*np.ones(2), dtype=np.float64),
                 "throttle": spaces.Box(low=self.rocket_settings["throttle_range"][0], high=self.rocket_settings["throttle_range"][1], shape=(1,), dtype=np.float64),
-                "roll": spaces.Box(low=-self.rocket_settings["max_roll_torque"]*np.ones(2), high=self.rocket_settings["max_roll_torque"]*np.ones(2), dtype=np.float64),
+                "roll": spaces.Box(low=-self.rocket_settings["max_roll_torque"], high=self.rocket_settings["max_roll_torque"], dtype=np.float64),
             }
         )
 
@@ -60,10 +63,15 @@ class BalloonPoppingEnv(gym.Env):
         self.render_rocket = None
 
     def _get_obs(self):
-        return {"balloon": self._balloon_states, "rocket": self._rocket_states}
+        return {
+            "balloon_time": self.current_step*self.simulation_settings['time_step'],
+            "balloon": self._balloon_states,
+            "rocket_time": self._rocket_flight.t,
+            "rocket_sensors": self._rocket_sensors
+        }
 
     def _get_info(self):
-        return {"balloon_altitude": self._balloon_states[:, 2]}
+        return {"rocket_states": self._rocket_states}
 
     def reset(self, seed=None, options=None):
         # We need the following line to seed self.np_random
@@ -77,7 +85,8 @@ class BalloonPoppingEnv(gym.Env):
 
         self.num_timesteps = self._balloon_flights.shape[2]
         self._balloon_states = self._balloon_flights[:, :, self.current_step]
-        self._rocket_states = np.array(np.zeros(12))
+        self._rocket_states = self._rocket_flight.y_sol[:]
+        self._rocket_sensors = np.full(12, np.nan)
 
         observation = self._get_obs()
         info = self._get_info()
@@ -89,15 +98,19 @@ class BalloonPoppingEnv(gym.Env):
     def step(self, action):
         self.current_step += 1
 
-        if not self.is_launched:
-            if action['launch'][0] > 0:
-                self.is_launched = True
-                self._rocket_flight.step_simulation()
-        else:
+        if action['launch']:
+            self.is_launched = True
+        if self.is_launched:
+            self._rocket_flight.rocket.roll_control.roll_torque = action['roll']
+            self._rocket_flight.rocket.tvc.gimbal_angle_x = action['tvc'][0]
+            self._rocket_flight.rocket.tvc.gimbal_angle_y = action['tvc'][1]
             self._rocket_flight.step_simulation()
+            self._rocket_sensors[ :3] = self._rocket_flight.sensors[0].measurement   # gyro
+            self._rocket_sensors[3:6] = self._rocket_flight.sensors[1].measurement   # accel
 
         self._balloon_states = self._balloon_flights[:, :, self.current_step]
         self._rocket_states = self._rocket_flight.y_sol[:]
+        
 
         # An episode is done iff reaches max time or end of trajectory
         terminated = (self.current_step >= self.num_timesteps - 1) or (self._rocket_flight._step_state["finished"])
@@ -378,13 +391,7 @@ def init_rocket_simulation(environment_settings, simulation_settings, rocket_set
     def tvc_controller_function(
         time, sampling_rate, state, state_history, observed_variables, tvc, sensors
     ):
-        # state = [x, y, z, vx, vy, vz, e0, e1, e2, e3, wx, wy, wz]
-
-        # print(time)
-
-        tvc.gimbal_angle_x = 0
-        tvc.gimbal_angle_y = 0
-        # Return variables of interest to be saved in the observed_variables list
+        # log tvc angles
         return (
             time,
             tvc.gimbal_angle_x,
@@ -400,46 +407,7 @@ def init_rocket_simulation(environment_settings, simulation_settings, rocket_set
     def roll_controller_function(
         time, sampling_rate, state, state_history, observed_variables, roll_control, sensors
     ):
-        # Separate sensor data by type
-        gyro_data = None    # rad/s
-        accel_data = None   # m/s^2
-        
-        for sensor in sensors:
-            if isinstance(sensor, Gyroscope):
-                sensor_time, gx, gy, gz = zip(*sensor.measured_data)
-                gyro_data = {
-                    'time': np.array(sensor_time),
-                    'x': np.array(gx),
-                    'y': np.array(gy),
-                    'z': np.array(gz)
-                }
-            elif isinstance(sensor, Accelerometer):
-                sensor_time, ax, ay, az = zip(*sensor.measured_data)
-                accel_data = {
-                    'time': np.array(sensor_time),
-                    'x': np.array(ax),
-                    'y': np.array(ay),
-                    'z': np.array(az)
-                }
-
-        KP = 50
-        KI = 1
-        KD = 0.0
-
-        # Roll rate target: 0.5 Hz sinusoidal, ±10 deg/s
-        target = np.deg2rad(10 * np.sin(2 * np.pi * 0.5 * time)) # rad/s
-
-        if gyro_data is None:
-            roll_control.roll_torque = 0
-            return (time, roll_control.roll_torque,)
-        
-        roll_rate_errors = target - gyro_data['z']
-        roll_rate_error_integral = np.sum(roll_rate_errors) / sampling_rate
-        roll_rate_error_derivative = (roll_rate_errors[-1] - roll_rate_errors[-2]) * sampling_rate if len(roll_rate_errors) > 1 else 0
-        
-        roll_control.roll_torque = KP * roll_rate_errors[-1] + KI * roll_rate_error_integral + KD * roll_rate_error_derivative
-        
-        # Return variables of interest to be saved in the observed_variables list
+        # log roll control torques
         return (
             time,
             roll_control.roll_torque,
