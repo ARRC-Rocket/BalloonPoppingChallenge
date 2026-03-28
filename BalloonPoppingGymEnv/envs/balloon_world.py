@@ -22,6 +22,7 @@ import pymap3d as pm
 
 from rocketpy.sensors.accelerometer import Accelerometer
 from rocketpy.sensors.gyroscope import Gyroscope
+from rocketpy.sensors.gnss_receiver import GnssReceiver
 
 class BalloonPoppingEnv(gym.Env):
     metadata = {"render_modes": ["vpython", "matplotlib"]}
@@ -32,6 +33,7 @@ class BalloonPoppingEnv(gym.Env):
         self.balloon_settings = settings["balloon"]
         self.rocket_settings = settings["rocket"]
 
+        self._balloon_status = np.array(np.zeros((self.balloon_settings["num"], 1)))    # [balloon_num, status] status: 0-ground; 1-released; 2-popped 
         self._balloon_states = np.array(np.zeros((self.balloon_settings["num"], 6)))    # [balloon_num, (x, y, z, vx, vy, vz)]
         self._rocket_sensors = np.full(12, np.nan)                                      # (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ)
         self._rocket_states = np.full(13, np.nan)                                       # (posX, posY, posZ, velX, velY, velZ, e0, e1, e2, e3, w1, w2, w3)
@@ -40,7 +42,8 @@ class BalloonPoppingEnv(gym.Env):
         self.observation_space = spaces.Dict(
             {
                 "balloon_time": spaces.Box(low=0, high=self.simulation_settings["max_time"], shape=(1,), dtype=np.float64),
-                "balloon": spaces.Box(low=-np.inf*np.ones((self.balloon_settings["num"], 6)), high=np.inf*np.ones((self.balloon_settings["num"], 6)), dtype=np.float64),
+                "balloon_status": spaces.MultiDiscrete(3*np.ones((self.balloon_settings["num"], 1))),
+                "balloon_states": spaces.Box(low=-np.inf*np.ones((self.balloon_settings["num"], 6)), high=np.inf*np.ones((self.balloon_settings["num"], 6)), dtype=np.float64),
                 "rocket_time": spaces.Box(low=0, high=self.simulation_settings["max_time"], shape=(1,), dtype=np.float64),
                 "rocket_sensors": spaces.Box(low=-np.inf*np.ones(12), high=np.inf*np.ones(12), dtype=np.float64),
             }
@@ -65,7 +68,8 @@ class BalloonPoppingEnv(gym.Env):
     def _get_obs(self):
         return {
             "balloon_time": self.current_step*self.simulation_settings['time_step'],
-            "balloon": self._balloon_states,
+            "balloon_status": self._balloon_status,
+            "balloon_states": self._balloon_states,
             "rocket_time": self._rocket_flight.t,
             "rocket_sensors": self._rocket_sensors
         }
@@ -84,6 +88,7 @@ class BalloonPoppingEnv(gym.Env):
         self.is_launched = False
 
         self.num_timesteps = self._balloon_flights.shape[2]
+        self._balloon_status = np.zeros((self.balloon_settings["num"], 1))
         self._balloon_states = self._balloon_flights[:, :, self.current_step]
         self._rocket_states = self._rocket_flight.y_sol[:]
         self._rocket_sensors = np.full(12, np.nan)
@@ -110,11 +115,11 @@ class BalloonPoppingEnv(gym.Env):
 
         self._balloon_states = self._balloon_flights[:, :, self.current_step]
         self._rocket_states = self._rocket_flight.y_sol[:]
-        
+        self._detect_collision()        
 
         # An episode is done iff reaches max time or end of trajectory
         terminated = (self.current_step >= self.num_timesteps - 1) or (self._rocket_flight._step_state["finished"])
-        reward = 1 if terminated else 0  # Binary sparse rewards
+        reward = np.sum(self._balloon_status[:, 0] == 2)
         observation = self._get_obs()
         info = self._get_info()
 
@@ -122,6 +127,21 @@ class BalloonPoppingEnv(gym.Env):
             self._render_frame()
 
         return observation, reward, terminated, False, info
+    
+    def _detect_collision(self):
+        """Detect collision between balloons and rocket.
+        
+        If a balloon is released (status=1) and the distance to rocket position
+        is less than the balloon radius, set the balloon status to popped (status=2).
+        """
+        # Calculate distances from each balloon to the rocket
+        distances = np.linalg.norm(self._balloon_states[:, :3] - self._rocket_states[:3], axis=1)
+        
+        # Find balloons that are released and colliding
+        released_and_colliding = (distances < self.balloon_settings["radius"]) & (self._balloon_status[:, 0] == 1)
+        
+        # Update status to popped for collided balloons
+        self._balloon_status[released_and_colliding, 0] = 2
 
     def _render_frame(self):
         if self.render_mode == "vpython":
@@ -385,6 +405,7 @@ def init_rocket_simulation(environment_settings, simulation_settings, rocket_set
 
     gyro_clean = Gyroscope(sampling_rate=rocket_settings["sensor_frequency"])
     accelerometer_clean = Accelerometer(sampling_rate=rocket_settings["sensor_frequency"])
+    gnss_clean = GnssReceiver(sampling_rate=rocket_settings["sensor_frequency"])
     rocket.add_sensor(gyro_clean, position=1.5)
     rocket.add_sensor(accelerometer_clean, position=1.5)
 
