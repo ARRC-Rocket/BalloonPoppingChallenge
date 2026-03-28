@@ -26,7 +26,6 @@ class BalloonPoppingEnv(gym.Env):
         self.balloon_settings = settings["balloon"]
         self.rocket_settings = settings["rocket"]
 
-        self._balloon_paths = None
         self._balloon_states = np.array(np.zeros((self.balloon_settings["num"], 6)))    # [balloon_num, (x, y, z, vx, vy, vz)]
         self._rocket_states = np.array(np.zeros(12))                                    # (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ)
 
@@ -64,10 +63,10 @@ class BalloonPoppingEnv(gym.Env):
 
         self.current_step = 0
 
-        self._balloon_paths = generate_balloon_flights(self.environment_settings, self.simulation_settings, self.balloon_settings)
+        self._balloon_flights = generate_balloon_flights(self.environment_settings, self.simulation_settings, self.balloon_settings)
 
-        self.num_timesteps = self._balloon_paths.shape[2]
-        self._balloon_states = self._balloon_paths[:, :, self.current_step]
+        self.num_timesteps = self._balloon_flights.shape[2]
+        self._balloon_states = self._balloon_flights[:, :, self.current_step]
         self._rocket_states = np.array(np.zeros(12))
 
         observation = self._get_obs()
@@ -80,7 +79,7 @@ class BalloonPoppingEnv(gym.Env):
     def step(self, action):
         self.current_step += 1
 
-        self._balloon_states = self._balloon_paths[:, :, self.current_step]
+        self._balloon_states = self._balloon_flights[:, :, self.current_step]
         self._rocket_states = np.array(np.zeros(12))
 
         # An episode is done iff reaches max time or end of trajectory
@@ -108,9 +107,9 @@ class BalloonPoppingEnv(gym.Env):
                 self.canvas.set_xlabel('X position (m)')
                 self.canvas.set_ylabel('Y position (m)')
                 self.canvas.set_zlabel('Z position (m)')
-                self.canvas.set_xlim(-1000, 1000)
-                self.canvas.set_ylim(-1000, 1000)
-                self.canvas.set_zlim(0, 1000)
+                self.canvas.set_xlim(self._balloon_flights[:, 0,:].min(), self._balloon_flights[:, 0,:].max())
+                self.canvas.set_ylim(self._balloon_flights[:, 1,:].min(), self._balloon_flights[:, 1,:].max())
+                self.canvas.set_zlim(0, self._balloon_flights[:, 2,:].max())
 
             if np.remainder(self.current_step,1/self.simulation_settings['time_step']) == 0:
                 self.balloons.set_data(self._balloon_states[:, 0], self._balloon_states[:, 1])
