@@ -46,6 +46,7 @@ class BalloonPoppingEnv(gym.Env):
         # TVC, roll, and throttling actions
         self.action_space = spaces.Dict(
             {
+                "launch": spaces.MultiBinary(1),
                 "TVC":  spaces.Box(low=-self.rocket_settings["tvc_gimbal_range"]*np.ones(2), high=self.rocket_settings["tvc_gimbal_range"]*np.ones(2), dtype=np.float64),
                 "throttle": spaces.Box(low=self.rocket_settings["throttle_range"][0], high=self.rocket_settings["throttle_range"][1], shape=(1,), dtype=np.float64),
                 "roll": spaces.Box(low=-self.rocket_settings["max_roll_torque"]*np.ones(2), high=self.rocket_settings["max_roll_torque"]*np.ones(2), dtype=np.float64),
@@ -72,6 +73,7 @@ class BalloonPoppingEnv(gym.Env):
 
         self._balloon_flights = generate_balloon_flights(self.environment_settings, self.simulation_settings, self.balloon_settings)
         self._rocket_flight = init_rocket_simulation(self.environment_settings, self.simulation_settings, self.rocket_settings)
+        self.is_launched = False
 
         self.num_timesteps = self._balloon_flights.shape[2]
         self._balloon_states = self._balloon_flights[:, :, self.current_step]
@@ -87,7 +89,12 @@ class BalloonPoppingEnv(gym.Env):
     def step(self, action):
         self.current_step += 1
 
-        self._rocket_flight.step_simulation()
+        if not self.is_launched:
+            if action['launch'][0] > 0:
+                self.is_launched = True
+                self._rocket_flight.step_simulation()
+        else:
+            self._rocket_flight.step_simulation()
 
         self._balloon_states = self._balloon_flights[:, :, self.current_step]
         self._rocket_states = self._rocket_flight.y_sol[:]
