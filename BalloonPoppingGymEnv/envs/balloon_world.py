@@ -100,12 +100,13 @@ class BalloonPoppingEnv(gym.Env):
         self._rocket_states = self._rocket_flight.y_sol[:]
 
         # An episode is done iff reaches max time or end of trajectory
-        terminated = (self.current_step >= self.num_timesteps - 1)
+        terminated = (self.current_step >= self.num_timesteps - 1) or (self._rocket_flight._step_state["finished"])
         reward = 1 if terminated else 0  # Binary sparse rewards
         observation = self._get_obs()
         info = self._get_info()
 
-        self._render_frame()
+        if np.remainder(self.current_step,1/self.simulation_settings['time_step']) == 0 or terminated:
+            self._render_frame()
 
         return observation, reward, terminated, False, info
 
@@ -129,14 +130,13 @@ class BalloonPoppingEnv(gym.Env):
                 self.render_canvas.set_ylim(self._balloon_flights[:, 1,:].min(), self._balloon_flights[:, 1,:].max())
                 self.render_canvas.set_zlim(0, self._balloon_flights[:, 2,:].max())
 
-            if np.remainder(self.current_step,1/self.simulation_settings['time_step']) == 0:
-                self.render_balloons[0].set_data(self._balloon_states[:, 0], self._balloon_states[:, 1])
-                self.render_balloons[0].set_3d_properties(self._balloon_states[:, 2])
-                self.render_rocket[0].set_data([self._rocket_states[0]], [self._rocket_states[1]])
-                self.render_rocket[0].set_3d_properties([self._rocket_states[2]])
-                self.render_canvas.set_title(f"Time: {self.current_step*self.simulation_settings['time_step']} sec")
-                plt.draw()
-                plt.pause(0.01)
+            self.render_balloons[0].set_data(self._balloon_states[:, 0], self._balloon_states[:, 1])
+            self.render_balloons[0].set_3d_properties(self._balloon_states[:, 2])
+            self.render_rocket[0].set_data([self._rocket_states[0]], [self._rocket_states[1]])
+            self.render_rocket[0].set_3d_properties([self._rocket_states[2]])
+            self.render_canvas.set_title(f"Time: {self.current_step*self.simulation_settings['time_step']} sec")
+            plt.draw()
+            plt.pause(0.1)
 
     def close(self):
         print('closing environment')
@@ -463,14 +463,3 @@ def init_rocket_simulation(environment_settings, simulation_settings, rocket_set
         time_overshoot=False,
         verbose=True,
     )
-
-def finalize_rocket_simulation(flight):
-    flight.t_final = flight.t
-    flight.__transform_pressure_signals_lists_to_functions()
-    if flight._controllers:
-        # cache post process variables
-        flight.__evaluate_post_process = np.array(flight.__post_processed_variables)
-    if flight.sensors:
-        flight.__cache_sensor_data()
-    if flight.verbose:
-        print(f"\n>>> Simulation Completed at Time: {flight.t:3.4f} s")
