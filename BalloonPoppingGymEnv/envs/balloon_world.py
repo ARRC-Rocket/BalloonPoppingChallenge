@@ -88,7 +88,7 @@ class BalloonPoppingEnv(gym.Env):
         self.is_launched = False
 
         self.num_timesteps = self._balloon_flights.shape[2]
-        self._balloon_status = np.zeros((self.balloon_settings["num"], 1))
+        self._balloon_status = np.ones((self.balloon_settings["num"], 1))
         self._balloon_states = self._balloon_flights[:, :, self.current_step]
         self._rocket_states = self._rocket_flight.y_sol[:]
         self._rocket_sensors = np.full(12, np.nan)
@@ -123,7 +123,7 @@ class BalloonPoppingEnv(gym.Env):
         observation = self._get_obs()
         info = self._get_info()
 
-        if np.remainder(self.current_step,1/self.simulation_settings['time_step']) == 0 or terminated:
+        if np.remainder(self.current_step,0.1/self.simulation_settings['time_step']) == 0 or terminated:
             self._render_frame()
 
         return observation, reward, terminated, False, info
@@ -321,6 +321,17 @@ def generate_balloon_flights(environment_settings, simulation_settings, balloon_
         np.array(monte_carlo_results_["vy"]), 
         np.array(monte_carlo_results_["vz"]),
     ], axis=1)
+
+    # Debug mode: overwrite with simple test data
+    if "debug" in balloon_settings:
+        num_balloons = monte_carlo_results.shape[0]
+        z_values = 10 + environment_settings["elevation"] + np.arange(num_balloons) * 10  # Spaced 5 m apart
+        monte_carlo_results[:, 0, :] = 0  # x = 0
+        monte_carlo_results[:, 1, :] = 0  # y = 0  
+        monte_carlo_results[:, 2, :] = z_values[:, None]  # z = constant per balloon, 1m apart
+        monte_carlo_results[:, 3, :] = 0  # vx = 0
+        monte_carlo_results[:, 4, :] = 0  # vy = 0
+        monte_carlo_results[:, 5, :] = 0  # vz = 0
 
     return monte_carlo_results
 
