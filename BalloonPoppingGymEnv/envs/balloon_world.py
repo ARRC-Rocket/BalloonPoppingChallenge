@@ -13,9 +13,15 @@ from rocketpy import (
     StochasticFlight,
     StochasticRocket,
 )
+from rocketpy.motors import CylindricalTank, Fluid, HybridMotor
+from rocketpy.motors.tank import MassFlowRateBasedTank
+
 from vpython import canvas, color, vector, rate, sphere, arrow
 import matplotlib.pyplot as plt
 import pymap3d as pm
+
+from rocketpy.sensors.accelerometer import Accelerometer
+from rocketpy.sensors.gyroscope import Gyroscope
 
 class BalloonPoppingEnv(gym.Env):
     metadata = {"render_modes": ["vpython", "matplotlib"]}
@@ -42,7 +48,7 @@ class BalloonPoppingEnv(gym.Env):
             {
                 "TVC":  spaces.Box(low=-self.rocket_settings["tvc_gimbal_range"]*np.ones(2), high=self.rocket_settings["tvc_gimbal_range"]*np.ones(2), dtype=np.float64),
                 "throttle": spaces.Box(low=self.rocket_settings["throttle_range"][0], high=self.rocket_settings["throttle_range"][1], shape=(1,), dtype=np.float64),
-                "roll": spaces.Box(low=-self.rocket_settings["roll_range"]*np.ones(2), high=self.rocket_settings["roll_range"]*np.ones(2), dtype=np.float64),
+                "roll": spaces.Box(low=-self.rocket_settings["max_roll_torque"]*np.ones(2), high=self.rocket_settings["max_roll_torque"]*np.ones(2), dtype=np.float64),
             }
         )
 
@@ -64,6 +70,7 @@ class BalloonPoppingEnv(gym.Env):
         self.current_step = 0
 
         self._balloon_flights = generate_balloon_flights(self.environment_settings, self.simulation_settings, self.balloon_settings)
+        self._rocket_flight = init_rocket_simulation(self.environment_settings, self.simulation_settings, self.rocket_settings)
 
         self.num_timesteps = self._balloon_flights.shape[2]
         self._balloon_states = self._balloon_flights[:, :, self.current_step]
@@ -270,3 +277,178 @@ def generate_balloon_flights(environment_settings, simulation_settings, balloon_
     ], axis=1)
 
     return monte_carlo_results
+
+def init_rocket_simulation(environment_settings, simulation_settings, rocket_settings):
+    # Rocket flight simulation initialization
+    env = Environment(
+        date=environment_settings["date"],
+        latitude=environment_settings["latitude"],
+        longitude=environment_settings["longitude"],
+        elevation=environment_settings["elevation"],
+        datum="WGS84",
+        timezone="UTC",
+    )
+    env.set_atmospheric_model(
+        type="Ensemble",
+        file=environment_settings["atmosphere_data_path"],
+        dictionary="ECMWF",
+    )
+    # env.max_expected_height = 4000
+
+    oxidizer_liq = Fluid(name="N2O_l", density=960)
+    oxidizer_gas = Fluid(name="N2O_g", density=1.9277)
+    tank_shape = CylindricalTank(70 / 1000, 320 / 1000)
+    oxidizer_tank = MassFlowRateBasedTank(
+        name="oxidizer_tank",
+        geometry=tank_shape,
+        flux_time=(5),
+        initial_liquid_mass=4.3,
+        initial_gas_mass=0,
+        liquid_mass_flow_rate_in=0,
+        liquid_mass_flow_rate_out=4.2 / 5,
+        gas_mass_flow_rate_in=0,
+        gas_mass_flow_rate_out=0,
+        liquid=oxidizer_liq,
+        gas=oxidizer_gas,
+    )
+    hybrid_motor = HybridMotor(
+        thrust_source=rocket_settings["thrust_source"],
+        dry_mass=10670 / 1000,
+        dry_inertia=(1.668, 1.668, 0.026),
+        center_of_dry_mass_position=780 / 1000,
+        burn_time=5,
+        reshape_thrust_curve=False,
+        grain_number=1,
+        grain_separation=0,
+        grain_outer_radius=43 / 1000,
+        grain_initial_inner_radius=22.5 / 1000,
+        grain_initial_height=310 / 1000,
+        grain_density=920,
+        nozzle_radius=0.0141,
+        throat_radius=0.00677,
+        interpolation_method="linear",
+        grains_center_of_mass_position=385 / 1000,
+        coordinate_system_orientation="nozzle_to_combustion_chamber",
+    )
+    hybrid_motor.add_tank(tank=oxidizer_tank, position=934.75 / 1000)
+
+    rocket = Rocket(
+        radius=152.4 / 2000,
+        mass=14613 / 1000,
+        inertia=(24.56, 24.56, 70.074),
+        center_of_mass_without_motor=2344 / 1000,
+        power_off_drag=rocket_settings["power_off_drag"],
+        power_on_drag=rocket_settings["power_on_drag"],
+        coordinate_system_orientation="tail_to_nose",
+        volume=None,
+    )
+    rocket.set_rail_buttons(2.808, 1.549)
+    rocket.add_motor(hybrid_motor, position=20 / 1000)
+
+    NoseCone = rocket.add_nose(length=0.46, kind="vonKarman", position=3556 / 1000)
+    FinSet = rocket.add_trapezoidal_fins(
+        n=4,
+        span=0.125,
+        root_chord=0.247,
+        tip_chord=0.045,
+        position=0.263,
+    )
+    Tail = rocket.add_tail(
+        top_radius=152.4 / 2000, bottom_radius=0.0496, length=0.254, position=0.254
+    )
+
+    gyro_clean = Gyroscope(sampling_rate=rocket_settings["sensor_frequency"])
+    accelerometer_clean = Accelerometer(sampling_rate=rocket_settings["sensor_frequency"])
+    rocket.add_sensor(gyro_clean, position=1.5)
+    rocket.add_sensor(accelerometer_clean, position=1.5)
+
+    def tvc_controller_function(
+        time, sampling_rate, state, state_history, observed_variables, tvc, sensors
+    ):
+        # state = [x, y, z, vx, vy, vz, e0, e1, e2, e3, wx, wy, wz]
+
+        # print(time)
+
+        tvc.gimbal_angle_x = 0
+        tvc.gimbal_angle_y = 0
+        # Return variables of interest to be saved in the observed_variables list
+        return (
+            time,
+            tvc.gimbal_angle_x,
+            tvc.gimbal_angle_y,
+        )
+    tvc, tvc_controller = rocket.add_tvc(
+        gimbal_range=rocket_settings["tvc_gimbal_range"],
+        sampling_rate=rocket_settings["control_frequency"],
+        controller_function=tvc_controller_function,
+        return_controller=True,
+    )
+
+    def roll_controller_function(
+        time, sampling_rate, state, state_history, observed_variables, roll_control, sensors
+    ):
+        # Separate sensor data by type
+        gyro_data = None    # rad/s
+        accel_data = None   # m/s^2
+        
+        for sensor in sensors:
+            if isinstance(sensor, Gyroscope):
+                sensor_time, gx, gy, gz = zip(*sensor.measured_data)
+                gyro_data = {
+                    'time': np.array(sensor_time),
+                    'x': np.array(gx),
+                    'y': np.array(gy),
+                    'z': np.array(gz)
+                }
+            elif isinstance(sensor, Accelerometer):
+                sensor_time, ax, ay, az = zip(*sensor.measured_data)
+                accel_data = {
+                    'time': np.array(sensor_time),
+                    'x': np.array(ax),
+                    'y': np.array(ay),
+                    'z': np.array(az)
+                }
+
+        KP = 50
+        KI = 1
+        KD = 0.0
+
+        # Roll rate target: 0.5 Hz sinusoidal, ±10 deg/s
+        target = np.deg2rad(10 * np.sin(2 * np.pi * 0.5 * time)) # rad/s
+
+        if gyro_data is None:
+            roll_control.roll_torque = 0
+            return (time, roll_control.roll_torque,)
+        
+        roll_rate_errors = target - gyro_data['z']
+        roll_rate_error_integral = np.sum(roll_rate_errors) / sampling_rate
+        roll_rate_error_derivative = (roll_rate_errors[-1] - roll_rate_errors[-2]) * sampling_rate if len(roll_rate_errors) > 1 else 0
+        
+        roll_control.roll_torque = KP * roll_rate_errors[-1] + KI * roll_rate_error_integral + KD * roll_rate_error_derivative
+        
+        # Return variables of interest to be saved in the observed_variables list
+        return (
+            time,
+            roll_control.roll_torque,
+        )
+
+    roll_control, roll_controller = rocket.add_roll_control(
+        max_roll_torque=rocket_settings["max_roll_torque"],
+        sampling_rate=rocket_settings["control_frequency"],
+        controller_function=roll_controller_function,
+        return_controller=True,
+    )
+
+    return Flight(
+        rocket=rocket,
+        environment=env,
+        inclination=90,
+        heading=180,
+        rail_length=0.1,
+        max_time=simulation_settings["max_time"],
+        time_overshoot=False,
+        verbose=False,
+    )
+def step_rocket_simulation(flight):
+    # Placeholder for future rocket simulation logic
+    pass
