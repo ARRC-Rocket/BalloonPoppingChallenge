@@ -39,7 +39,7 @@ class BalloonPoppingEnv(gym.Env):
         self.observation_space = spaces.Dict(
             {
                 "balloon": spaces.Box(low=-np.inf*np.ones((self.balloon_settings["num"], 6)), high=np.inf*np.ones((self.balloon_settings["num"], 6)), dtype=np.float64),
-                "rocket": spaces.Box(low=-np.inf*np.ones(12), high=np.inf*np.ones(12), dtype=np.float64),
+                "rocket": spaces.Box(low=-np.inf*np.ones(13), high=np.inf*np.ones(13), dtype=np.float64),
             }
         )
 
@@ -54,8 +54,9 @@ class BalloonPoppingEnv(gym.Env):
 
         # Graphics-related attributes
         self.render_mode = settings["render"]["mode"]
-        self.balloons = None
-        self.canvas = None
+        self.render_canvas = None
+        self.render_balloons = None
+        self.render_rocket = None
 
     def _get_obs(self):
         return {"balloon": self._balloon_states, "rocket": self._rocket_states}
@@ -86,8 +87,10 @@ class BalloonPoppingEnv(gym.Env):
     def step(self, action):
         self.current_step += 1
 
+        self._rocket_flight.step_simulation()
+
         self._balloon_states = self._balloon_flights[:, :, self.current_step]
-        self._rocket_states = np.array(np.zeros(12))
+        self._rocket_states = self._rocket_flight.y_sol[:]
 
         # An episode is done iff reaches max time or end of trajectory
         terminated = (self.current_step >= self.num_timesteps - 1)
@@ -101,27 +104,30 @@ class BalloonPoppingEnv(gym.Env):
 
     def _render_frame(self):
         if self.render_mode == "vpython":
-            if self.canvas is None:
-                self.canvas = canvas(title="Balloon Popping Environment", width=800, height=600, center=vector(0,0,0), background=color.white)
-                self.balloons = sphere(radius = 1.5, color = color.magenta, make_trail=True)
+            if self.render_canvas is None:
+                self.render_canvas = canvas(title="Balloon Popping Environment", width=800, height=600, center=vector(0,0,0), background=color.white)
+                self.render_balloons = sphere(radius = 1.5, color = color.magenta, make_trail=True)
 
-            self.balloons.pos = vector(self._balloon_states[0, 0], self._balloon_states[0, 1], self._balloon_states[0, 2])
+            self.render_balloons.pos = vector(self._balloon_states[0, 0], self._balloon_states[0, 1], self._balloon_states[0, 2])
             rate(30)
         elif self.render_mode == "matplotlib":
-            if self.canvas is None:
-                self.canvas = plt.figure().add_subplot(projection='3d')
-                self.balloons, = self.canvas.plot(self._balloon_states[:, 0], self._balloon_states[:, 1], self._balloon_states[:, 2], 'o', color='magenta')
-                self.canvas.set_xlabel('X position (m)')
-                self.canvas.set_ylabel('Y position (m)')
-                self.canvas.set_zlabel('Z position (m)')
-                self.canvas.set_xlim(self._balloon_flights[:, 0,:].min(), self._balloon_flights[:, 0,:].max())
-                self.canvas.set_ylim(self._balloon_flights[:, 1,:].min(), self._balloon_flights[:, 1,:].max())
-                self.canvas.set_zlim(0, self._balloon_flights[:, 2,:].max())
+            if self.render_canvas is None:
+                self.render_canvas = plt.figure().add_subplot(projection='3d')
+                self.render_balloons = self.render_canvas.plot(self._balloon_states[:, 0], self._balloon_states[:, 1], self._balloon_states[:, 2], 'o', color='magenta')
+                self.render_rocket = self.render_canvas.plot(self._rocket_states[0], self._rocket_states[1], self._rocket_states[2], 's', color='blue')
+                self.render_canvas.set_xlabel('X position (m)')
+                self.render_canvas.set_ylabel('Y position (m)')
+                self.render_canvas.set_zlabel('Z position (m)')
+                self.render_canvas.set_xlim(self._balloon_flights[:, 0,:].min(), self._balloon_flights[:, 0,:].max())
+                self.render_canvas.set_ylim(self._balloon_flights[:, 1,:].min(), self._balloon_flights[:, 1,:].max())
+                self.render_canvas.set_zlim(0, self._balloon_flights[:, 2,:].max())
 
             if np.remainder(self.current_step,1/self.simulation_settings['time_step']) == 0:
-                self.balloons.set_data(self._balloon_states[:, 0], self._balloon_states[:, 1])
-                self.balloons.set_3d_properties(self._balloon_states[:, 2])
-                self.canvas.set_title(f"Time: {self.current_step*self.simulation_settings['time_step']} sec")
+                self.render_balloons[0].set_data(self._balloon_states[:, 0], self._balloon_states[:, 1])
+                self.render_balloons[0].set_3d_properties(self._balloon_states[:, 2])
+                self.render_rocket[0].set_data([self._rocket_states[0]], [self._rocket_states[1]])
+                self.render_rocket[0].set_3d_properties([self._rocket_states[2]])
+                self.render_canvas.set_title(f"Time: {self.current_step*self.simulation_settings['time_step']} sec")
                 plt.draw()
                 plt.pause(0.01)
 
@@ -446,9 +452,18 @@ def init_rocket_simulation(environment_settings, simulation_settings, rocket_set
         heading=180,
         rail_length=0.1,
         max_time=simulation_settings["max_time"],
+        min_time_step=simulation_settings["time_step"]/10,
         time_overshoot=False,
-        verbose=False,
+        verbose=True,
     )
-def step_rocket_simulation(flight):
-    # Placeholder for future rocket simulation logic
-    pass
+
+def finalize_rocket_simulation(flight):
+    flight.t_final = flight.t
+    flight.__transform_pressure_signals_lists_to_functions()
+    if flight._controllers:
+        # cache post process variables
+        flight.__evaluate_post_process = np.array(flight.__post_processed_variables)
+    if flight.sensors:
+        flight.__cache_sensor_data()
+    if flight.verbose:
+        print(f"\n>>> Simulation Completed at Time: {flight.t:3.4f} s")
