@@ -154,20 +154,22 @@ class BalloonPoppingEnv(gym.Env):
         elif self.render_mode == "matplotlib":
             if self.render_canvas is None:
                 self.render_canvas = plt.figure().add_subplot(projection='3d')
-                self.render_balloons = self.render_canvas.plot(self._balloon_states[:, 0], self._balloon_states[:, 1], self._balloon_states[:, 2], 'o', color='magenta')
+                self.render_balloons = self.render_canvas.scatter(self._balloon_states[:, 0], self._balloon_states[:, 1], self._balloon_states[:, 2], c='magenta')
                 self.render_rocket = self.render_canvas.plot(self._rocket_states[0], self._rocket_states[1], self._rocket_states[2], 's', color='blue')
                 self.render_canvas.set_xlabel('X position (m)')
                 self.render_canvas.set_ylabel('Y position (m)')
                 self.render_canvas.set_zlabel('Z position (m)')
-                self.render_canvas.set_xlim(self._balloon_flights[:, 0,:].min(), self._balloon_flights[:, 0,:].max())
-                self.render_canvas.set_ylim(self._balloon_flights[:, 1,:].min(), self._balloon_flights[:, 1,:].max())
-                self.render_canvas.set_zlim(0, self._balloon_flights[:, 2,:].max())
+                self.render_canvas.set_xlim(self._balloon_flights[:, 0,:].min()-10, self._balloon_flights[:, 0,:].max()+10)
+                self.render_canvas.set_ylim(self._balloon_flights[:, 1,:].min()-10, self._balloon_flights[:, 1,:].max()+10)
+                self.render_canvas.set_zlim(0, self._balloon_flights[:, 2,:].max()+10)
 
-            self.render_balloons[0].set_data(self._balloon_states[:, 0], self._balloon_states[:, 1])
-            self.render_balloons[0].set_3d_properties(self._balloon_states[:, 2])
+            # Update balloon positions and colors based on status (red if popped)
+            colors = ['red' if status == 2 else 'magenta' for status in self._balloon_status[:, 0]]
+            self.render_balloons._offsets3d = (self._balloon_states[:, 0], self._balloon_states[:, 1], self._balloon_states[:, 2])
+            self.render_balloons.set_facecolors(colors)
             self.render_rocket[0].set_data([self._rocket_states[0]], [self._rocket_states[1]])
             self.render_rocket[0].set_3d_properties([self._rocket_states[2]])
-            self.render_canvas.set_title(f"Time: {self.current_step*self.simulation_settings['time_step']} sec")
+            self.render_canvas.set_title(f"Time: {self.current_step*self.simulation_settings['time_step']} sec\nReward: {np.sum(self._balloon_status[:, 0] == 2)}")
             plt.draw()
             plt.pause(0.1)
 
