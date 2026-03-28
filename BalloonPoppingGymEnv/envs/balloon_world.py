@@ -18,29 +18,29 @@ from rocketpy import (
 from vpython import canvas, color, vector, rate, sphere, arrow
 
 class BalloonPoppingEnv(gym.Env):
-    def __init__(self):
-        self.tvc_gimbal_range = 15      # degrees
-        self.throttle_range = (0.5, 1)  # throttle can be between 50% and 100%
-        self.roll_range = 10            # N-m
-        self.balloon_num = 3
-        self.max_time = 100
-        self.step_time = 0.01
+    metadata = {"render_modes": ["vpython", "matplotlib"]}
+    def __init__(self, settings):
+        self.tvc_gimbal_range = settings["rocket"]["tvc_gimbal_range"]
+        self.throttle_range = settings["rocket"]["throttle_range"]
+        self.roll_range = settings["rocket"]["roll_range"]
+        self.balloon_num = settings["balloon"]["num"]
+        self.max_time = settings["balloon"]["max_time"]
+        self.step_time = settings["balloon"]["step_time"]
         self.time_array = np.arange(0, self.max_time, self.step_time)
 
-        # Observations are dictionaries with the agent's and the target's location.
-        # Each location is encoded as an element of {0, ..., `size`}^2,
-        # i.e. MultiDiscrete([size, size]).
+        self._balloon_paths = None
+        self._balloon_states = np.array(np.zeros((self.balloon_num, 6)))    # "[balloon_num, (x, y, z, vx, vy, vz)]"
+        self._rocket_states = np.array(np.zeros(12))                        # (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ)
+
+        # Observations include balloon and rocket states
         self.observation_space = spaces.Dict(
             {
                 "balloon": spaces.Box(low=-np.inf*np.ones((self.balloon_num, 6)), high=np.inf*np.ones((self.balloon_num, 6)), dtype=np.float64),
                 "rocket": spaces.Box(low=-np.inf*np.ones(12), high=np.inf*np.ones(12), dtype=np.float64),
             }
         )
-        self._balloon_paths = None
-        self._balloon_states = np.array(np.zeros((self.balloon_num, 6)))
-        self._rocket_states = np.array(np.zeros(12))
 
-        # We have TVC, roll, and throttling actions
+        # TVC, roll, and throttling actions
         self.action_space = spaces.Dict(
             {
                 "TVC":  spaces.Box(low=-self.tvc_gimbal_range*np.ones(2), high=self.tvc_gimbal_range*np.ones(2), dtype=np.float64),
@@ -50,7 +50,7 @@ class BalloonPoppingEnv(gym.Env):
         )
 
         # Graphics-related attributes
-        self.render_mode = None
+        self.render_mode = settings["render"]["mode"]
         self.first_sphere = None
         self.canvas = None
 
