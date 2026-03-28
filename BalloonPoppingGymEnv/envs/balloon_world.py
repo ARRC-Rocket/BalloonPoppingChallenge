@@ -118,8 +118,9 @@ class BalloonPoppingEnv(gym.Env):
             self._rocket_flight.rocket.tvc.gimbal_angle_x = action['tvc'][0]
             self._rocket_flight.rocket.tvc.gimbal_angle_y = action['tvc'][1]
             self._rocket_flight.step_simulation()
-            self._rocket_sensors[ :3] = self._rocket_flight.sensors[0].measurement   # gyro
-            self._rocket_sensors[3:6] = self._rocket_flight.sensors[1].measurement   # accel
+            self._rocket_sensors[ :3] = self._rocket_flight.sensors[0].measurement  # gyro
+            self._rocket_sensors[3:6] = self._rocket_flight.sensors[1].measurement  # accel
+            self._rocket_sensors[6:12] = self._rocket_flight.sensors[2].measurement # gnss
             self._rocket_states = self._rocket_flight.y_sol[:]
 
         #  Update the balloon states forward by one time step
@@ -422,6 +423,7 @@ def init_rocket_simulation(environment_settings, simulation_settings, rocket_set
     gnss_clean = GnssReceiver(sampling_rate=rocket_settings["sensor_frequency"])
     rocket.add_sensor(gyro_clean, position=1.5)
     rocket.add_sensor(accelerometer_clean, position=1.5)
+    rocket.add_sensor(gnss_clean, position=1.5)
 
     def tvc_controller_function(
         time, sampling_rate, state, state_history, observed_variables, tvc, sensors
