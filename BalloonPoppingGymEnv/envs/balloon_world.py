@@ -248,7 +248,9 @@ class BalloonPoppingEnv(gym.Env):
             self.render_rocket[0].set_3d_properties([self._rocket_states[2]])
             self.render_canvas.set_title(f"Time: {self.current_step*self.simulation_settings['time_step']:.2f} sec\nReward: {np.sum(self._balloon_status[:, 0] == 2)}")
             plt.draw()
-            plt.pause(0.1)
+            plt.pause(0.001)
+        else:
+            pass
 
     def close(self):
         print('closing environment')
@@ -316,7 +318,6 @@ class BalloonPoppingEnv(gym.Env):
             latitude=self.balloon_settings["stochastic"]["latitude_std"],
             longitude=self.balloon_settings["stochastic"]["longitude_std"],
         )
-        stochastic_env.visualize_attributes()
 
         SM = SolidMotor(
             thrust_source=50,
@@ -381,7 +382,6 @@ class BalloonPoppingEnv(gym.Env):
         )
         stochastic_balloon.add_motor(SM, position=0)
         stochastic_balloon.add_linear_generic_surface(balloon_aero_model)
-        stochastic_balloon.visualize_attributes()
 
         flight = Flight(
             rocket=Balloon,
@@ -399,7 +399,6 @@ class BalloonPoppingEnv(gym.Env):
             inclination=5,
             heading=90,
         )
-        stochastic_flight.visualize_attributes()
 
         monte_carlo_sim = MonteCarlo(
             filename="./BalloonPoppingGymEnv/envs/data/balloon_sim",
