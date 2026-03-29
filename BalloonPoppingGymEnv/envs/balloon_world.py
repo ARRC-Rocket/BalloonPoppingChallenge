@@ -4,7 +4,6 @@ import numpy as np
 from vpython import canvas, color, vector, rate, sphere, arrow
 import matplotlib.pyplot as plt
 import pymap3d as pm
-from CoolProp.CoolProp import PropsSI
 
 from rocketpy import (
     Environment,
