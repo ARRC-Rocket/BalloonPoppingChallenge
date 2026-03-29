@@ -1,6 +1,11 @@
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
+from vpython import canvas, color, vector, rate, sphere, arrow
+import matplotlib.pyplot as plt
+import pymap3d as pm
+from CoolProp.CoolProp import PropsSI
+
 from rocketpy import (
     Environment,
     Flight,
@@ -15,11 +20,6 @@ from rocketpy import (
 )
 from rocketpy.motors import CylindricalTank, Fluid, HybridMotor
 from rocketpy.motors.tank import MassFlowRateBasedTank
-
-from vpython import canvas, color, vector, rate, sphere, arrow
-import matplotlib.pyplot as plt
-import pymap3d as pm
-
 from rocketpy.sensors.accelerometer import Accelerometer
 from rocketpy.sensors.gyroscope import Gyroscope
 from rocketpy.sensors.gnss_receiver import GnssReceiver
@@ -54,9 +54,9 @@ class BalloonPoppingEnv(gym.Env):
         self.action_space = spaces.Dict(
             {
                 "launch": spaces.MultiBinary(1),
-                "tvc":  spaces.Box(low=-self.rocket_settings["tvc_gimbal_range"]*np.ones(2), high=self.rocket_settings["tvc_gimbal_range"]*np.ones(2), dtype=np.float64),
-                "throttle": spaces.Box(low=self.rocket_settings["throttle_range"][0], high=self.rocket_settings["throttle_range"][1], shape=(1,), dtype=np.float64),
-                "roll": spaces.Box(low=-self.rocket_settings["max_roll_torque"], high=self.rocket_settings["max_roll_torque"], dtype=np.float64),
+                "tvc":  spaces.Box(low=-self.rocket_settings["control"]["tvc_gimbal_range"]*np.ones(2), high=self.rocket_settings["control"]["tvc_gimbal_range"]*np.ones(2), dtype=np.float64),
+                "throttle": spaces.Box(low=self.rocket_settings["control"]["throttle_range"][0], high=self.rocket_settings["control"]["throttle_range"][1], shape=(1,), dtype=np.float64),
+                "roll": spaces.Box(low=-self.rocket_settings["control"]["max_roll_torque"], high=self.rocket_settings["control"]["max_roll_torque"], dtype=np.float64),
             }
         )
 
@@ -356,74 +356,107 @@ def init_rocket_simulation(environment_settings, simulation_settings, rocket_set
     )
     # env.max_expected_height = 4000
 
-    oxidizer_liq = Fluid(name="N2O_l", density=960)
-    oxidizer_gas = Fluid(name="N2O_g", density=1.9277)
-    tank_shape = CylindricalTank(70 / 1000, 320 / 1000)
+    # Create tank fluids from settings
+    tank_cfg = rocket_settings["tank"]
+    oxidizer_gas = Fluid(name=tank_cfg["gas"],density=tank_cfg["gas_density"])
+    oxidizer_liq = Fluid(name=tank_cfg["liquid"], density=tank_cfg["liquid_density"])
+    
+    # Create tank from settings
+    tank_shape = CylindricalTank(radius=tank_cfg["radius"],height=tank_cfg["height"])
     oxidizer_tank = MassFlowRateBasedTank(
         name="oxidizer_tank",
         geometry=tank_shape,
-        flux_time=(5),
-        initial_liquid_mass=4.3,
-        initial_gas_mass=0,
+        flux_time=tank_cfg["flux_time"],
+        initial_liquid_mass=tank_cfg["initial_liquid_mass"],
+        initial_gas_mass=tank_cfg["initial_gas_mass"],
         liquid_mass_flow_rate_in=0,
-        liquid_mass_flow_rate_out=4.2 / 5,
+        liquid_mass_flow_rate_out=tank_cfg["liquid_mass_flow_rate_out"],
         gas_mass_flow_rate_in=0,
         gas_mass_flow_rate_out=0,
         liquid=oxidizer_liq,
         gas=oxidizer_gas,
+        temperature=tank_cfg["temperature"],
+        pressure=tank_cfg["pressure"],
     )
+    
+    # Create motor from settings
+    motor_cfg = rocket_settings["motor"]
     hybrid_motor = HybridMotor(
-        thrust_source=rocket_settings["thrust_source"],
-        dry_mass=10670 / 1000,
-        dry_inertia=(1.668, 1.668, 0.026),
-        center_of_dry_mass_position=780 / 1000,
-        burn_time=5,
+        thrust_source=motor_cfg["thrust_source"],
+        dry_mass=motor_cfg["dry_mass"],
+        dry_inertia=tuple(motor_cfg["dry_inertia"]),
+        center_of_dry_mass_position=motor_cfg["center_of_dry_mass_position"],
+        burn_time=motor_cfg["burn_time"],
         reshape_thrust_curve=False,
-        grain_number=1,
-        grain_separation=0,
-        grain_outer_radius=43 / 1000,
-        grain_initial_inner_radius=22.5 / 1000,
-        grain_initial_height=310 / 1000,
-        grain_density=920,
-        nozzle_radius=0.0141,
-        throat_radius=0.00677,
+        grain_number=motor_cfg["grain_number"],
+        grain_separation=motor_cfg["grain_separation"],
+        grain_outer_radius=motor_cfg["grain_outer_radius"],
+        grain_initial_inner_radius=motor_cfg["grain_initial_inner_radius"],
+        grain_initial_height=motor_cfg["grain_initial_height"],
+        grain_density=motor_cfg["grain_density"],
+        nozzle_radius=motor_cfg["nozzle_radius"],
+        throat_radius=motor_cfg["throat_radius"],
         interpolation_method="linear",
-        grains_center_of_mass_position=385 / 1000,
+        nozzle_position=motor_cfg["nozzle_position"],
+        grains_center_of_mass_position=motor_cfg["grains_center_of_mass_position"],
         coordinate_system_orientation="nozzle_to_combustion_chamber",
     )
-    hybrid_motor.add_tank(tank=oxidizer_tank, position=934.75 / 1000)
+    
+    # Add tank to motor
+    tank_position = -tank_cfg["height"] / 2 - motor_cfg["motor_position"]
+    hybrid_motor.add_tank(tank=oxidizer_tank, position=tank_position)
 
+    # Create rocket body from settings
+    rocket_cfg = rocket_settings["rocket_body"]
     rocket = Rocket(
-        radius=152.4 / 2000,
-        mass=14613 / 1000,
-        inertia=(24.56, 24.56, 70.074),
-        center_of_mass_without_motor=2344 / 1000,
-        power_off_drag=rocket_settings["power_off_drag"],
-        power_on_drag=rocket_settings["power_on_drag"],
+        radius=rocket_cfg["radius"],
+        mass=rocket_cfg["mass"],
+        inertia=tuple(rocket_cfg["inertia"]),
+        center_of_mass_without_motor=rocket_cfg["center_of_mass_without_motor"],
+        power_off_drag=rocket_cfg["power_off_drag"],
+        power_on_drag=rocket_cfg["power_on_drag"],
         coordinate_system_orientation="tail_to_nose",
-        volume=None,
+        volume=rocket_cfg["volume"],
     )
-    rocket.set_rail_buttons(2.808, 1.549)
-    rocket.add_motor(hybrid_motor, position=20 / 1000)
+    
+    # Set rail buttons from settings
+    rail_buttons = rocket_cfg["rail_buttons"]
+    rocket.set_rail_buttons(rail_buttons[0], rail_buttons[1])
+    
+    # Add motor from settings
+    rocket.add_motor(hybrid_motor, position=motor_cfg["motor_position"])
+    
+    # Add nose from settings
+    nose_cfg = rocket_settings["nose"]
+    rocket.add_nose(
+        length=nose_cfg["length"],
+        kind=nose_cfg["kind"],
+        position=nose_cfg["position"]
+    )
+    
+    # Add fins from settings
+    fins_cfg = rocket_settings["fins"]
+    if fins_cfg["useFins"]:
+        rocket.add_trapezoidal_fins(
+            n=fins_cfg["n"],
+            span=fins_cfg["span"],
+            root_chord=fins_cfg["root_chord"],
+            tip_chord=fins_cfg["tip_chord"],
+            position=fins_cfg["position"],
+        )
 
-    NoseCone = rocket.add_nose(length=0.46, kind="vonKarman", position=3556 / 1000)
-    FinSet = rocket.add_trapezoidal_fins(
-        n=4,
-        span=0.125,
-        root_chord=0.247,
-        tip_chord=0.045,
-        position=0.263,
-    )
-    Tail = rocket.add_tail(
-        top_radius=152.4 / 2000, bottom_radius=0.0496, length=0.254, position=0.254
-    )
+    # Add sensors from settings
+    sensors_cfg = rocket_settings["sensors"]
+    gyro_clean = Gyroscope(sampling_rate=sensors_cfg["sampling_rate"])
+    accelerometer_clean = Accelerometer(sampling_rate=sensors_cfg["sampling_rate"])
+    gnss_clean = GnssReceiver(sampling_rate=sensors_cfg["sampling_rate"])
+    rocket.add_sensor(gyro_clean, position=sensors_cfg["gyro_position"])
+    rocket.add_sensor(accelerometer_clean, position=sensors_cfg["accelerometer_position"])
+    rocket.add_sensor(gnss_clean, position=sensors_cfg["gnss_position"])
+    rocket.draw()
 
-    gyro_clean = Gyroscope(sampling_rate=rocket_settings["sensor_frequency"])
-    accelerometer_clean = Accelerometer(sampling_rate=rocket_settings["sensor_frequency"])
-    gnss_clean = GnssReceiver(sampling_rate=rocket_settings["sensor_frequency"])
-    rocket.add_sensor(gyro_clean, position=1.5)
-    rocket.add_sensor(accelerometer_clean, position=1.5)
-    rocket.add_sensor(gnss_clean, position=1.5)
+    # Add control systems from settings
+    control_cfg = rocket_settings["control"]
 
     def tvc_controller_function(
         time, sampling_rate, state, state_history, observed_variables, tvc, sensors
@@ -435,8 +468,8 @@ def init_rocket_simulation(environment_settings, simulation_settings, rocket_set
             tvc.gimbal_angle_y,
         )
     tvc, tvc_controller = rocket.add_tvc(
-        gimbal_range=rocket_settings["tvc_gimbal_range"],
-        sampling_rate=rocket_settings["control_frequency"],
+        gimbal_range=control_cfg["tvc_gimbal_range"],
+        sampling_rate=control_cfg["control_frequency"],
         controller_function=tvc_controller_function,
         return_controller=True,
     )
@@ -451,8 +484,8 @@ def init_rocket_simulation(environment_settings, simulation_settings, rocket_set
         )
 
     roll_control, roll_controller = rocket.add_roll_control(
-        max_roll_torque=rocket_settings["max_roll_torque"],
-        sampling_rate=rocket_settings["control_frequency"],
+        max_roll_torque=control_cfg["max_roll_torque"],
+        sampling_rate=control_cfg["control_frequency"],
         controller_function=roll_controller_function,
         return_controller=True,
     )
