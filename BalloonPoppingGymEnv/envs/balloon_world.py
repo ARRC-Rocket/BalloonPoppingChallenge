@@ -150,53 +150,88 @@ class BalloonPoppingEnv(gym.Env):
         return observation, reward, terminated, False, info
     
     @staticmethod
-    def _segment_distance_squared(segment_start_a, segment_end_a, segment_start_b, segment_end_b):
-        """Return the squared minimum distance between two 3D line segments."""
+    def _segment_distance_squared_batch(
+        segment_start_a,
+        segment_end_a,
+        segment_start_b,
+        segment_end_b,
+    ):
+        """Return squared minimum distance between one segment and N segments."""
+        segment_start_a = np.asarray(segment_start_a, dtype=float)
+        segment_end_a = np.asarray(segment_end_a, dtype=float)
+        segment_start_b = np.asarray(segment_start_b, dtype=float)
+        segment_end_b = np.asarray(segment_end_b, dtype=float)
+
         epsilon = 1e-12
         direction_a = segment_end_a - segment_start_a
         direction_b = segment_end_b - segment_start_b
         offset = segment_start_a - segment_start_b
 
-        a_coeff = np.dot(direction_a, direction_a)
-        e_coeff = np.dot(direction_b, direction_b)
-        f_coeff = np.dot(direction_b, offset)
+        n_segments = segment_start_b.shape[0]
+        s_param = np.zeros(n_segments)
+        t_param = np.zeros(n_segments)
 
-        if a_coeff <= epsilon and e_coeff <= epsilon:
-            return np.dot(offset, offset)
+        a_coeff = float(np.dot(direction_a, direction_a))
+        e_coeff = np.einsum("ij,ij->i", direction_b, direction_b)
+        f_coeff = np.einsum("ij,ij->i", direction_b, offset)
+
         if a_coeff <= epsilon:
-            s_param = 0.0
-            t_param = np.clip(f_coeff / e_coeff, 0.0, 1.0)
+            valid_e = e_coeff > epsilon
+            t_param[valid_e] = np.clip(
+                f_coeff[valid_e] / e_coeff[valid_e],
+                0.0,
+                1.0,
+            )
         else:
-            c_coeff = np.dot(direction_a, offset)
-            if e_coeff <= epsilon:
-                t_param = 0.0
-                s_param = np.clip(-c_coeff / a_coeff, 0.0, 1.0)
-            else:
-                b_coeff = np.dot(direction_a, direction_b)
+            c_coeff = np.einsum("j,ij->i", direction_a, offset)
+
+            degenerate_b = e_coeff <= epsilon
+            s_param[degenerate_b] = np.clip(
+                -c_coeff[degenerate_b] / a_coeff,
+                0.0,
+                1.0,
+            )
+
+            regular = ~degenerate_b
+            if np.any(regular):
+                b_coeff = np.einsum("j,ij->i", direction_a, direction_b)
                 denominator = a_coeff * e_coeff - b_coeff * b_coeff
 
-                if denominator != 0:
-                    s_param = np.clip(
-                        (b_coeff * f_coeff - c_coeff * e_coeff) / denominator,
-                        0.0,
-                        1.0,
+                non_parallel = regular & (np.abs(denominator) > epsilon)
+                s_param[non_parallel] = np.clip(
+                    (
+                        b_coeff[non_parallel] * f_coeff[non_parallel]
+                        - c_coeff[non_parallel] * e_coeff[non_parallel]
                     )
-                else:
-                    s_param = 0.0
+                    / denominator[non_parallel],
+                    0.0,
+                    1.0,
+                )
 
-                t_param = (b_coeff * s_param + f_coeff) / e_coeff
+                t_param[regular] = (
+                    b_coeff[regular] * s_param[regular] + f_coeff[regular]
+                ) / e_coeff[regular]
 
-                if t_param < 0.0:
-                    t_param = 0.0
-                    s_param = np.clip(-c_coeff / a_coeff, 0.0, 1.0)
-                elif t_param > 1.0:
-                    t_param = 1.0
-                    s_param = np.clip((b_coeff - c_coeff) / a_coeff, 0.0, 1.0)
+                t_too_low = regular & (t_param < 0.0)
+                t_param[t_too_low] = 0.0
+                s_param[t_too_low] = np.clip(
+                    -c_coeff[t_too_low] / a_coeff,
+                    0.0,
+                    1.0,
+                )
 
-        closest_point_a = segment_start_a + s_param * direction_a
-        closest_point_b = segment_start_b + t_param * direction_b
+                t_too_high = regular & (t_param > 1.0)
+                t_param[t_too_high] = 1.0
+                s_param[t_too_high] = np.clip(
+                    (b_coeff[t_too_high] - c_coeff[t_too_high]) / a_coeff,
+                    0.0,
+                    1.0,
+                )
+
+        closest_point_a = segment_start_a + s_param[:, None] * direction_a
+        closest_point_b = segment_start_b + t_param[:, None] * direction_b
         separation = closest_point_a - closest_point_b
-        return np.dot(separation, separation)
+        return np.einsum("ij,ij->i", separation, separation)
 
     def _detect_collision(self, previous_balloon_positions, previous_rocket_position):
         """Detect collisions using swept paths over the current timestep."""
@@ -205,20 +240,19 @@ class BalloonPoppingEnv(gym.Env):
         current_balloon_positions = np.asarray(self._balloon_states[:, :3], dtype=float)
         current_rocket_position = np.asarray(self._rocket_states[:3], dtype=float)
         balloon_radius_squared = self.balloon_settings["radius"] ** 2
+        released_mask = self._balloon_status[:, 0] == 1
+        if not np.any(released_mask):
+            return
 
-        for balloon_index, balloon_status in enumerate(self._balloon_status[:, 0]):
-            if balloon_status != 1:
-                continue
-
-            distance_squared = self._segment_distance_squared(
-                previous_rocket_position,
-                current_rocket_position,
-                previous_balloon_positions[balloon_index],
-                current_balloon_positions[balloon_index],
-            )
-
-            if distance_squared <= balloon_radius_squared:
-                self._balloon_status[balloon_index, 0] = 2
+        distance_squared = self._segment_distance_squared_batch(
+            previous_rocket_position,
+            current_rocket_position,
+            previous_balloon_positions[released_mask],
+            current_balloon_positions[released_mask],
+        )
+        collided_released = distance_squared <= balloon_radius_squared
+        released_indices = np.flatnonzero(released_mask)
+        self._balloon_status[released_indices[collided_released], 0] = 2
 
     def _render_frame(self):
         if self.render_mode == "vpython":
