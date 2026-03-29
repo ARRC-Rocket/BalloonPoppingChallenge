@@ -90,9 +90,9 @@ class BalloonPoppingEnv(gym.Env):
         if self.scenario_number == 0: # Scenario 0: hello world with static balloons
             self._balloon_status = np.ones((self.balloon_settings["num"], 1))
             num_balloons = self._balloon_flights.shape[0]
-            z_values = 10 + self._rocketpy_env.elevation + np.arange(num_balloons) * 10  # Spaced 10 m apart
+            z_values = 10 + self._rocketpy_env.elevation + np.arange(num_balloons) * 40  # Spaced 40 m apart
             self._balloon_flights[:, [0, 1, 3, 4, 5], :] = 0    # x, y, vx, vy, vz = 0 for static balloons
-            self._balloon_flights[:, 2, :] = z_values[:, None]  # z = constant per balloon, 1m apart
+            self._balloon_flights[:, 2, :] = z_values[:, None]  # z = constant per balloon
         else:
             self._balloon_status = np.zeros((self.balloon_settings["num"], 1))
 
