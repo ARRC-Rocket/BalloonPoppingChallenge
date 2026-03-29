@@ -111,6 +111,8 @@ class BalloonPoppingEnv(gym.Env):
         return observation, info
 
     def step(self, action):
+        previous_balloon_positions = self._balloon_states[:, :3].copy()
+        previous_rocket_position = self._rocket_states[:3].copy()
 
         # Apply action to step the rocket simulation and get sensor measurements
         if action['launch']:
@@ -130,7 +132,7 @@ class BalloonPoppingEnv(gym.Env):
         self._balloon_states = self._balloon_flights[:, :, self.current_step]
 
         # detect collisions
-        self._detect_collision()        
+        self._detect_collision(previous_balloon_positions, previous_rocket_position)
 
         # An episode is done iff reaches max time or end of trajectory
         terminated = (self.current_step >= self.num_timesteps - 1) or (self._rocket_flight._step_state["finished"])
@@ -143,20 +145,76 @@ class BalloonPoppingEnv(gym.Env):
 
         return observation, reward, terminated, False, info
     
-    def _detect_collision(self):
-        """Detect collision between balloons and rocket.
-        
-        If a balloon is released (status=1) and the distance to rocket position
-        is less than the balloon radius, set the balloon status to popped (status=2).
-        """
-        # Calculate distances from each balloon to the rocket
-        distances = np.linalg.norm(self._balloon_states[:, :3] - self._rocket_states[:3], axis=1)
-        
-        # Find balloons that are released and colliding
-        released_and_colliding = (distances < self.balloon_settings["radius"]) & (self._balloon_status[:, 0] == 1)
-        
-        # Update status to popped for collided balloons
-        self._balloon_status[released_and_colliding, 0] = 2
+    @staticmethod
+    def _segment_distance_squared(segment_start_a, segment_end_a, segment_start_b, segment_end_b):
+        """Return the squared minimum distance between two 3D line segments."""
+        epsilon = 1e-12
+        direction_a = segment_end_a - segment_start_a
+        direction_b = segment_end_b - segment_start_b
+        offset = segment_start_a - segment_start_b
+
+        a_coeff = np.dot(direction_a, direction_a)
+        e_coeff = np.dot(direction_b, direction_b)
+        f_coeff = np.dot(direction_b, offset)
+
+        if a_coeff <= epsilon and e_coeff <= epsilon:
+            return np.dot(offset, offset)
+        if a_coeff <= epsilon:
+            s_param = 0.0
+            t_param = np.clip(f_coeff / e_coeff, 0.0, 1.0)
+        else:
+            c_coeff = np.dot(direction_a, offset)
+            if e_coeff <= epsilon:
+                t_param = 0.0
+                s_param = np.clip(-c_coeff / a_coeff, 0.0, 1.0)
+            else:
+                b_coeff = np.dot(direction_a, direction_b)
+                denominator = a_coeff * e_coeff - b_coeff * b_coeff
+
+                if denominator != 0:
+                    s_param = np.clip(
+                        (b_coeff * f_coeff - c_coeff * e_coeff) / denominator,
+                        0.0,
+                        1.0,
+                    )
+                else:
+                    s_param = 0.0
+
+                t_param = (b_coeff * s_param + f_coeff) / e_coeff
+
+                if t_param < 0.0:
+                    t_param = 0.0
+                    s_param = np.clip(-c_coeff / a_coeff, 0.0, 1.0)
+                elif t_param > 1.0:
+                    t_param = 1.0
+                    s_param = np.clip((b_coeff - c_coeff) / a_coeff, 0.0, 1.0)
+
+        closest_point_a = segment_start_a + s_param * direction_a
+        closest_point_b = segment_start_b + t_param * direction_b
+        separation = closest_point_a - closest_point_b
+        return np.dot(separation, separation)
+
+    def _detect_collision(self, previous_balloon_positions, previous_rocket_position):
+        """Detect collisions using swept paths over the current timestep."""
+        previous_balloon_positions = np.asarray(previous_balloon_positions, dtype=float)
+        previous_rocket_position = np.asarray(previous_rocket_position, dtype=float)
+        current_balloon_positions = np.asarray(self._balloon_states[:, :3], dtype=float)
+        current_rocket_position = np.asarray(self._rocket_states[:3], dtype=float)
+        balloon_radius_squared = self.balloon_settings["radius"] ** 2
+
+        for balloon_index, balloon_status in enumerate(self._balloon_status[:, 0]):
+            if balloon_status != 1:
+                continue
+
+            distance_squared = self._segment_distance_squared(
+                previous_rocket_position,
+                current_rocket_position,
+                previous_balloon_positions[balloon_index],
+                current_balloon_positions[balloon_index],
+            )
+
+            if distance_squared <= balloon_radius_squared:
+                self._balloon_status[balloon_index, 0] = 2
 
     def _render_frame(self):
         if self.render_mode == "vpython":
