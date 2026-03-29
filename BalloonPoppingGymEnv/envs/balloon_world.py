@@ -82,13 +82,14 @@ class BalloonPoppingEnv(gym.Env):
         # We need the following line to seed self.np_random
         super().reset(seed=seed)
 
-        self._balloon_flights = generate_balloon_flights(self.environment_settings, self.simulation_settings, self.balloon_settings)
-        self._rocket_flight = init_rocket_simulation(self.environment_settings, self.simulation_settings, self.rocket_settings)
+        env = create_environment(self.environment_settings)
+        self._balloon_flights = generate_balloon_flights(env, self.simulation_settings, self.balloon_settings)
+        self._rocket_flight = init_rocket_simulation(env, self.simulation_settings, self.rocket_settings)
 
         if self.scenario_number == 0: #scenario 0: hello world with static balloons
             self._balloon_status = np.ones((self.balloon_settings["num"], 1))
             num_balloons = self._balloon_flights.shape[0]
-            z_values = 10 + self.environment_settings["elevation"] + np.arange(num_balloons) * 10  # Spaced 5 m apart
+            z_values = 10 + env.elevation + np.arange(num_balloons) * 10  # Spaced 5 m apart
             self._balloon_flights[:, [0, 1, 3, 4, 5], :] = 0    # x, y, vx, vy, vz = 0 for static balloons
             self._balloon_flights[:, 2, :] = z_values[:, None]  # z = constant per balloon, 1m apart
         else:
@@ -189,7 +190,7 @@ class BalloonPoppingEnv(gym.Env):
     def close(self):
         print('closing environment')
 
-def generate_balloon_flights(environment_settings, simulation_settings, balloon_settings):
+def create_environment(environment_settings):
     env = Environment(
         date=environment_settings["date"],
         latitude=environment_settings["latitude"],
@@ -198,12 +199,20 @@ def generate_balloon_flights(environment_settings, simulation_settings, balloon_
         datum="WGS84",
         timezone="UTC",
     )
-    env.set_atmospheric_model(
-        type="Ensemble",
-        file=environment_settings["atmosphere_data_path"],
-        dictionary="ECMWF",
-    )
-    # env.max_expected_height = 4000
+    if environment_settings["use_standard_atmosphere"]:
+        env.set_atmospheric_model(type="standard_atmosphere")
+    else:
+        if environment_settings["atmosphere_data_path"] == "":
+            raise ValueError("Atmosphere data path must be provided if not using standard atmosphere.")
+        env.set_atmospheric_model(
+            type="Ensemble",
+            file=environment_settings["atmosphere_data_path"],
+            dictionary="ECMWF",
+        )
+    return env
+
+
+def generate_balloon_flights(env, simulation_settings, balloon_settings):
 
     stochastic_env = StochasticEnvironment(
         environment=env,
@@ -323,8 +332,8 @@ def generate_balloon_flights(environment_settings, simulation_settings, balloon_
 
     """Convert Monte Carlo dict to [balloon][state][timestep]."""
     east0, north0, up0 = pm.geodetic2enu(
-        monte_carlo_results_["lat0"], monte_carlo_results_["lon0"], environment_settings["elevation"], 
-        environment_settings["latitude"], environment_settings["longitude"], environment_settings["elevation"])
+        monte_carlo_results_["lat0"], monte_carlo_results_["lon0"], env.elevation, 
+        env.latitude, env.longitude, env.elevation)
     # Broadcast initial ENU offsets to all timesteps for each simulation
     east0, north0, up0 = np.array(east0)[:, None], np.array(north0)[:, None], np.array(up0)[:, None]
 
@@ -339,22 +348,8 @@ def generate_balloon_flights(environment_settings, simulation_settings, balloon_
 
     return monte_carlo_results
 
-def init_rocket_simulation(environment_settings, simulation_settings, rocket_settings):
+def init_rocket_simulation(env, simulation_settings, rocket_settings):
     # Rocket flight simulation initialization
-    env = Environment(
-        date=environment_settings["date"],
-        latitude=environment_settings["latitude"],
-        longitude=environment_settings["longitude"],
-        elevation=environment_settings["elevation"],
-        datum="WGS84",
-        timezone="UTC",
-    )
-    env.set_atmospheric_model(
-        type="Ensemble",
-        file=environment_settings["atmosphere_data_path"],
-        dictionary="ECMWF",
-    )
-    # env.max_expected_height = 4000
 
     # Create tank fluids from settings
     tank_cfg = rocket_settings["tank"]
