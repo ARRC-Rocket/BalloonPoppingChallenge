@@ -59,6 +59,9 @@ class BalloonPoppingEnv(gym.Env):
             }
         )
 
+        # Create environment for balloon flights and rocket simulation
+        self._rocketpy_env = create_environment(self.environment_settings)
+
         # Graphics-related attributes
         self.render_mode = settings["render"]["mode"]
         self.render_canvas = None
@@ -81,14 +84,13 @@ class BalloonPoppingEnv(gym.Env):
         # We need the following line to seed self.np_random
         super().reset(seed=seed)
 
-        env = create_environment(self.environment_settings)
-        self._balloon_flights = generate_balloon_flights(env, self.simulation_settings, self.balloon_settings)
-        self._rocket_flight = init_rocket_simulation(env, self.simulation_settings, self.rocket_settings)
+        self._balloon_flights = generate_balloon_flights(self._rocketpy_env, self.simulation_settings, self.balloon_settings)
+        self._rocket_flight = init_rocket_simulation(self._rocketpy_env, self.simulation_settings, self.rocket_settings)
 
-        if self.scenario_number == 0: #scenario 0: hello world with static balloons
+        if self.scenario_number == 0: # Scenario 0: hello world with static balloons
             self._balloon_status = np.ones((self.balloon_settings["num"], 1))
             num_balloons = self._balloon_flights.shape[0]
-            z_values = 10 + env.elevation + np.arange(num_balloons) * 10  # Spaced 5 m apart
+            z_values = 10 + self._rocketpy_env.elevation + np.arange(num_balloons) * 10  # Spaced 10 m apart
             self._balloon_flights[:, [0, 1, 3, 4, 5], :] = 0    # x, y, vx, vy, vz = 0 for static balloons
             self._balloon_flights[:, 2, :] = z_values[:, None]  # z = constant per balloon, 1m apart
         else:
@@ -447,7 +449,7 @@ def init_rocket_simulation(env, simulation_settings, rocket_settings):
     rocket.add_sensor(gyro_clean, position=sensors_cfg["gyro_position"])
     rocket.add_sensor(accelerometer_clean, position=sensors_cfg["accelerometer_position"])
     rocket.add_sensor(gnss_clean, position=sensors_cfg["gnss_position"])
-    rocket.draw()
+    # rocket.draw()
 
     # Add control systems from settings
     control_cfg = rocket_settings["control"]
