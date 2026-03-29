@@ -533,12 +533,27 @@ class BalloonPoppingEnv(gym.Env):
 
         # Add sensors from settings
         sensors_cfg = self.rocket_settings["sensors"]
-        gyro_clean = Gyroscope(sampling_rate=sensors_cfg["sampling_rate"])
-        accelerometer_clean = Accelerometer(sampling_rate=sensors_cfg["sampling_rate"])
-        gnss_clean = GnssReceiver(sampling_rate=sensors_cfg["sampling_rate"])
-        rocket.add_sensor(gyro_clean, position=sensors_cfg["gyro_position"])
-        rocket.add_sensor(accelerometer_clean, position=sensors_cfg["accelerometer_position"])
-        rocket.add_sensor(gnss_clean, position=sensors_cfg["gnss_position"])
+        gyro = Gyroscope(
+            sampling_rate=sensors_cfg["sampling_rate"],
+            noise_density=sensors_cfg["gyro_noise_density"],
+            random_walk_density=sensors_cfg["gyro_random_walk_density"],
+            constant_bias=sensors_cfg["gyro_constant_bias"],
+            )
+        accelerometer = Accelerometer(
+            sampling_rate=sensors_cfg["sampling_rate"],
+            noise_density=sensors_cfg["accelerometer_noise_density"],
+            random_walk_density=sensors_cfg["accelerometer_random_walk_density"],
+            constant_bias=sensors_cfg["accelerometer_constant_bias"],
+            )
+        gnss = GnssReceiver(
+            sampling_rate=sensors_cfg["sampling_rate"],
+            position_accuracy=sensors_cfg["gnss_position_accuracy"],
+            altitude_accuracy=sensors_cfg["gnss_altitude_accuracy"],
+            velocity_accuracy=sensors_cfg["gnss_velocity_accuracy"],
+            )
+        rocket.add_sensor(gyro, position=sensors_cfg["gyro_position"])
+        rocket.add_sensor(accelerometer, position=sensors_cfg["accelerometer_position"])
+        rocket.add_sensor(gnss, position=sensors_cfg["gnss_position"])
         # rocket.draw()
 
         # Add control systems from settings
