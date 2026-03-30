@@ -1,10 +1,8 @@
 import gymnasium as gym
-from gymnasium import spaces
-import numpy as np
-from vpython import canvas, color, vector, rate, sphere, arrow
 import matplotlib.pyplot as plt
+import numpy as np
 import pymap3d as pm
-
+from gymnasium import spaces
 from rocketpy import (
     Environment,
     Flight,
@@ -20,12 +18,15 @@ from rocketpy import (
 from rocketpy.motors import CylindricalTank, Fluid, HybridMotor
 from rocketpy.motors.tank import MassFlowRateBasedTank
 from rocketpy.sensors.accelerometer import Accelerometer
-from rocketpy.sensors.gyroscope import Gyroscope
 from rocketpy.sensors.gnss_receiver import GnssReceiver
+from rocketpy.sensors.gyroscope import Gyroscope
 from rocketpy.tools import euler313_to_quaternions
+from vpython import arrow, canvas, color, rate, sphere, vector
+
 
 class BalloonPoppingEnv(gym.Env):
     metadata = {"render_modes": ["vpython", "matplotlib"]}
+
     def __init__(self, settings):
 
         self.scenario_number = settings["scenario_number"]
@@ -34,19 +35,43 @@ class BalloonPoppingEnv(gym.Env):
         self.balloon_settings = settings["balloon"]
         self.rocket_settings = settings["rocket"]
 
-        self._balloon_status = np.array(np.zeros((self.balloon_settings["num"], 1)))    # [balloon_num, status] status: 0-ground; 1-released; 2-popped 
-        self._balloon_states = np.array(np.zeros((self.balloon_settings["num"], 6)))    # [balloon_num, (x, y, z, vx, vy, vz)]
-        self._rocket_sensors = np.full(12, np.nan)                                      # (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ)
-        self._rocket_states = np.full(13, np.nan)                                       # (posX, posY, posZ, velX, velY, velZ, e0, e1, e2, e3, w1, w2, w3)
+        # [balloon_num, status] status: 0-ground; 1-released; 2-popped
+        self._balloon_status = np.array(np.zeros((self.balloon_settings["num"], 1)))
+        # [balloon_num, (x, y, z, vx, vy, vz)]
+        self._balloon_states = np.array(np.zeros((self.balloon_settings["num"], 6)))
+        # (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ)
+        self._rocket_sensors = np.full(12, np.nan)
+        # (posX, posY, posZ, velX, velY, velZ, e0, e1, e2, e3, w1, w2, w3)
+        self._rocket_states = np.full(13, np.nan)
 
         # Observations include balloon and rocket states
         self.observation_space = spaces.Dict(
             {
-                "balloon_time": spaces.Box(low=0, high=self.simulation_settings["max_time"], shape=(1,), dtype=np.float64),
-                "balloon_status": spaces.MultiDiscrete(3*np.ones((self.balloon_settings["num"], 1))),
-                "balloon_states": spaces.Box(low=-np.inf*np.ones((self.balloon_settings["num"], 6)), high=np.inf*np.ones((self.balloon_settings["num"], 6)), dtype=np.float64),
-                "rocket_time": spaces.Box(low=0, high=self.simulation_settings["max_time"], shape=(1,), dtype=np.float64),
-                "rocket_sensors": spaces.Box(low=-np.inf*np.ones(12), high=np.inf*np.ones(12), dtype=np.float64),
+                "balloon_time": spaces.Box(
+                    low=0,
+                    high=self.simulation_settings["max_time"],
+                    shape=(1,),
+                    dtype=np.float64,
+                ),
+                "balloon_status": spaces.MultiDiscrete(
+                    3 * np.ones((self.balloon_settings["num"], 1))
+                ),
+                "balloon_states": spaces.Box(
+                    low=-np.inf * np.ones((self.balloon_settings["num"], 6)),
+                    high=np.inf * np.ones((self.balloon_settings["num"], 6)),
+                    dtype=np.float64,
+                ),
+                "rocket_time": spaces.Box(
+                    low=0,
+                    high=self.simulation_settings["max_time"],
+                    shape=(1,),
+                    dtype=np.float64,
+                ),
+                "rocket_sensors": spaces.Box(
+                    low=-np.inf * np.ones(12),
+                    high=np.inf * np.ones(12),
+                    dtype=np.float64,
+                ),
             }
         )
 
@@ -54,10 +79,30 @@ class BalloonPoppingEnv(gym.Env):
         self.action_space = spaces.Dict(
             {
                 "launch": spaces.MultiBinary(1),
-                "launch_inclination_heading": spaces.Box(low=np.array([0, 0]), high=np.array([90, 360]), shape=(2,), dtype=np.float64),
-                "tvc":  spaces.Box(low=-self.rocket_settings["control"]["tvc_gimbal_range"]*np.ones(2), high=self.rocket_settings["control"]["tvc_gimbal_range"]*np.ones(2), dtype=np.float64),
-                "throttle": spaces.Box(low=self.rocket_settings["control"]["throttle_range"][0], high=self.rocket_settings["control"]["throttle_range"][1], shape=(1,), dtype=np.float64),
-                "roll": spaces.Box(low=-self.rocket_settings["control"]["max_roll_torque"], high=self.rocket_settings["control"]["max_roll_torque"], dtype=np.float64),
+                "launch_inclination_heading": spaces.Box(
+                    low=np.array([0, 0]),
+                    high=np.array([90, 360]),
+                    shape=(2,),
+                    dtype=np.float64,
+                ),
+                "tvc": spaces.Box(
+                    low=-self.rocket_settings["control"]["tvc_gimbal_range"]
+                    * np.ones(2),
+                    high=self.rocket_settings["control"]["tvc_gimbal_range"]
+                    * np.ones(2),
+                    dtype=np.float64,
+                ),
+                "throttle": spaces.Box(
+                    low=self.rocket_settings["control"]["throttle_range"][0],
+                    high=self.rocket_settings["control"]["throttle_range"][1],
+                    shape=(1,),
+                    dtype=np.float64,
+                ),
+                "roll": spaces.Box(
+                    low=-self.rocket_settings["control"]["max_roll_torque"],
+                    high=self.rocket_settings["control"]["max_roll_torque"],
+                    dtype=np.float64,
+                ),
             }
         )
 
@@ -72,10 +117,10 @@ class BalloonPoppingEnv(gym.Env):
 
     def _get_obs(self):
         return {
-            "balloon_time": self.current_step*self.simulation_settings['time_step'],
+            "balloon_time": self.current_step * self.simulation_settings["time_step"],
             "balloon_status": self._balloon_status,
             "balloon_states": self._balloon_states,
-            "rocket_sensors": self._rocket_sensors
+            "rocket_sensors": self._rocket_sensors,
         }
 
     def _get_info(self):
@@ -87,12 +132,16 @@ class BalloonPoppingEnv(gym.Env):
 
         self.__generate_balloon_flights()
 
-        if self.scenario_number == 0: # Scenario 0: hello world with static balloons
+        if self.scenario_number == 0:  # Scenario 0: hello world with static balloons
             self._balloon_status = np.ones((self.balloon_settings["num"], 1))
             num_balloons = self._balloon_flights.shape[0]
-            z_values = 10 + self._rocketpy_env.elevation + np.arange(num_balloons) * 40  # Spaced 40 m apart
-            self._balloon_flights[:, [0, 1, 3, 4, 5], :] = 0    # x, y, vx, vy, vz = 0 for static balloons
-            self._balloon_flights[:, 2, :] = z_values[:, None]  # z = constant per balloon
+
+            # Spaced 40 m apart
+            z_values = 10 + self._rocketpy_env.elevation + np.arange(num_balloons) * 40
+            # x, y, vx, vy, vz = 0 for static balloons
+            self._balloon_flights[:, [0, 1, 3, 4, 5], :] = 0
+            # z = constant per balloon
+            self._balloon_flights[:, 2, :] = z_values[:, None]
         else:
             self._balloon_status = np.zeros((self.balloon_settings["num"], 1))
 
@@ -119,22 +168,28 @@ class BalloonPoppingEnv(gym.Env):
 
         if not self.rocket_launched:
             _rocket_finished = False
-            if  action['launch']:   # Init rocket flight with first launch action
+            if action["launch"]:  # Init rocket flight with first launch action
                 self.rocket_launched = True
-                self.__get_init_rocket_states(action['launch_inclination_heading'][0], action['launch_inclination_heading'][1])
-                self.initial_solution[0] = self.current_step*self.simulation_settings['time_step']
+                self.__get_init_rocket_states(
+                    action["launch_inclination_heading"][0],
+                    action["launch_inclination_heading"][1],
+                )
+                self.initial_solution[0] = (
+                    self.current_step * self.simulation_settings["time_step"]
+                )
                 self.__init_rocket_simulation()
-        else:   # Apply action to step the rocket simulation and get sensor measurements
-            self._rocket_flight.rocket.roll_control.roll_torque = action['roll']
-            self._rocket_flight.rocket.tvc.gimbal_angle_x = action['tvc'][0]
-            self._rocket_flight.rocket.tvc.gimbal_angle_y = action['tvc'][1]
+        else:  # Apply action to step the rocket simulation and get sensor measurements
+            self._rocket_flight.rocket.roll_control.roll_torque = action["roll"]
+            self._rocket_flight.rocket.tvc.gimbal_angle_x = action["tvc"][0]
+            self._rocket_flight.rocket.tvc.gimbal_angle_y = action["tvc"][1]
             self._rocket_flight.step_simulation()
-            self._rocket_sensors[ :3] = self._rocket_flight.sensors[0].measurement  # gyro
-            self._rocket_sensors[3:6] = self._rocket_flight.sensors[1].measurement  # accel
-            self._rocket_sensors[6:12] = self._rocket_flight.sensors[2].measurement # gnss
+            _sensor = self._rocket_flight.sensors
+            self._rocket_sensors[:3] = _sensor[0].measurement  # gyro
+            self._rocket_sensors[3:6] = _sensor[1].measurement  # accel
+            self._rocket_sensors[6:12] = _sensor[2].measurement  # gnss
             self._rocket_states = self._rocket_flight.y_sol[:]
-            _rocket_finished = (self._rocket_flight._step_state["finished"])
-            
+            _rocket_finished = self._rocket_flight._step_state["finished"]
+
             # detect collisions
             self._detect_collision(previous_balloon_positions, previous_rocket_position)
 
@@ -144,11 +199,15 @@ class BalloonPoppingEnv(gym.Env):
         observation = self._get_obs()
         info = self._get_info()
 
-        if np.remainder(self.current_step,0.1/self.simulation_settings['time_step']) == 0 or terminated:
+        if (
+            np.remainder(self.current_step, 0.1 / self.simulation_settings["time_step"])
+            == 0
+            or terminated
+        ):
             self._render_frame()
 
         return observation, reward, terminated, False, info
-    
+
     @staticmethod
     def _segment_distance_squared_batch(
         segment_start_a,
@@ -257,37 +316,79 @@ class BalloonPoppingEnv(gym.Env):
     def _render_frame(self):
         if self.render_mode == "vpython":
             if self.render_canvas is None:
-                self.render_canvas = canvas(title="Balloon Popping Environment", width=800, height=600, center=vector(0,0,0), background=color.white)
-                self.render_balloons = sphere(radius = 1.5, color = color.magenta, make_trail=True)
+                self.render_canvas = canvas(
+                    title="Balloon Popping Environment",
+                    width=800,
+                    height=600,
+                    center=vector(0, 0, 0),
+                    background=color.white,
+                )
+                self.render_balloons = sphere(
+                    radius=1.5, color=color.magenta, make_trail=True
+                )
 
-            self.render_balloons.pos = vector(self._balloon_states[0, 0], self._balloon_states[0, 1], self._balloon_states[0, 2])
+            self.render_balloons.pos = vector(
+                self._balloon_states[0, 0],
+                self._balloon_states[0, 1],
+                self._balloon_states[0, 2],
+            )
             rate(30)
         elif self.render_mode == "matplotlib":
             if self.render_canvas is None:
-                self.render_canvas = plt.figure().add_subplot(projection='3d')
-                self.render_balloons = self.render_canvas.scatter(self._balloon_states[:, 0], self._balloon_states[:, 1], self._balloon_states[:, 2], c='magenta')
-                self.render_rocket = self.render_canvas.plot(self._rocket_states[0], self._rocket_states[1], self._rocket_states[2], 's', color='blue')
-                self.render_canvas.set_xlabel('X position (m)')
-                self.render_canvas.set_ylabel('Y position (m)')
-                self.render_canvas.set_zlabel('Z position (m)')
-                self.render_canvas.set_xlim(self._balloon_flights[:, 0,:].min()-10, self._balloon_flights[:, 0,:].max()+10)
-                self.render_canvas.set_ylim(self._balloon_flights[:, 1,:].min()-10, self._balloon_flights[:, 1,:].max()+10)
-                self.render_canvas.set_zlim(0, self._balloon_flights[:, 2,:].max()+10)
+                self.render_canvas = plt.figure().add_subplot(projection="3d")
+                self.render_balloons = self.render_canvas.scatter(
+                    self._balloon_states[:, 0],
+                    self._balloon_states[:, 1],
+                    self._balloon_states[:, 2],
+                    c="magenta",
+                )
+                self.render_rocket = self.render_canvas.plot(
+                    self._rocket_states[0],
+                    self._rocket_states[1],
+                    self._rocket_states[2],
+                    "s",
+                    color="blue",
+                )
+                self.render_canvas.set_xlabel("X position (m)")
+                self.render_canvas.set_ylabel("Y position (m)")
+                self.render_canvas.set_zlabel("Z position (m)")
+                self.render_canvas.set_xlim(
+                    self._balloon_flights[:, 0, :].min() - 10,
+                    self._balloon_flights[:, 0, :].max() + 10,
+                )
+                self.render_canvas.set_ylim(
+                    self._balloon_flights[:, 1, :].min() - 10,
+                    self._balloon_flights[:, 1, :].max() + 10,
+                )
+                self.render_canvas.set_zlim(
+                    0, self._balloon_flights[:, 2, :].max() + 10
+                )
 
             # Update balloon positions and colors based on status (red if popped)
-            colors = ['red' if status == 2 else 'magenta' for status in self._balloon_status[:, 0]]
-            self.render_balloons._offsets3d = (self._balloon_states[:, 0], self._balloon_states[:, 1], self._balloon_states[:, 2])
+            colors = [
+                "red" if status == 2 else "magenta"
+                for status in self._balloon_status[:, 0]
+            ]
+            self.render_balloons._offsets3d = (
+                self._balloon_states[:, 0],
+                self._balloon_states[:, 1],
+                self._balloon_states[:, 2],
+            )
             self.render_balloons.set_facecolors(colors)
-            self.render_rocket[0].set_data([self._rocket_states[0]], [self._rocket_states[1]])
+            self.render_rocket[0].set_data(
+                [self._rocket_states[0]], [self._rocket_states[1]]
+            )
             self.render_rocket[0].set_3d_properties([self._rocket_states[2]])
-            self.render_canvas.set_title(f"Time: {self.current_step*self.simulation_settings['time_step']:.2f} sec\nReward: {np.sum(self._balloon_status[:, 0] == 2)}")
+            self.render_canvas.set_title(
+                f"Time: {self.current_step * self.simulation_settings['time_step']:.2f} sec\nReward: {np.sum(self._balloon_status[:, 0] == 2)}"
+            )
             plt.draw()
             plt.pause(0.001)
         else:
             pass
 
     def close(self):
-        print('closing environment')
+        print("closing environment")
 
     def __create_environment(self):
         self._rocketpy_env = Environment(
@@ -302,13 +403,15 @@ class BalloonPoppingEnv(gym.Env):
             self._rocketpy_env.set_atmospheric_model(type="standard_atmosphere")
         else:
             if self.environment_settings["atmosphere_data_path"] == "":
-                raise ValueError("Atmosphere data path must be provided if not using standard atmosphere.")
+                raise ValueError(
+                    "Atmosphere data path must be provided if not using standard atmosphere."
+                )
             self._rocketpy_env.set_atmospheric_model(
                 type="Ensemble",
                 file=self.environment_settings["atmosphere_data_path"],
                 dictionary="ECMWF",
             )
-    
+
     def __get_init_rocket_states(self, inclination, heading):
         # Initialize time and state variables
         t_initial = 0
@@ -385,13 +488,13 @@ class BalloonPoppingEnv(gym.Env):
                 0, 0, 0, cDamping, cDamping, cDamping,   # cm_0, cm_alpha, cm_beta, cm_p, cm_q, cm_r
                 0, 0, 0, cDamping, cDamping, cDamping,   # cn_0, cn_alpha, cn_beta, cn_p, cn_q, cn_r
                 0, 0, 0, cDamping, cDamping, cDamping,   # cl_0, cl_alpha, cl_beta, cl_p, cl_q, cl_r
-                ],
-            center_of_pressure=(0,0,0),
-            name="Balloon Aero Model"
-        )
+            ],
+            center_of_pressure=(0, 0, 0),
+            name="Balloon Aero Model",
+        )  # fmt: skip
 
         Balloon = Rocket(
-            volume= 4 / 3 * np.pi * self.balloon_settings["radius"] ** 3,
+            volume=4 / 3 * np.pi * self.balloon_settings["radius"] ** 3,
             radius=0.05,
             mass=self.balloon_settings["mass"],
             inertia=self.balloon_settings["inertia"],
@@ -434,6 +537,11 @@ class BalloonPoppingEnv(gym.Env):
             heading=90,
         )
 
+        time_array = np.arange(
+            0,
+            self.simulation_settings["max_time"],
+            self.simulation_settings["time_step"],
+        )
         monte_carlo_sim = MonteCarlo(
             filename="./BalloonPoppingGymEnv/envs/data/balloon_sim",
             environment=stochastic_env,
@@ -441,12 +549,12 @@ class BalloonPoppingEnv(gym.Env):
             flight=stochastic_flight,
             export_list=["t_final"],
             data_collector={
-                "x": lambda flight: flight.x(np.arange(0, self.simulation_settings["max_time"], self.simulation_settings["time_step"])),
-                "y": lambda flight: flight.y(np.arange(0, self.simulation_settings["max_time"], self.simulation_settings["time_step"])),
-                "z": lambda flight: flight.z(np.arange(0, self.simulation_settings["max_time"], self.simulation_settings["time_step"])),
-                "vx": lambda flight: flight.vx(np.arange(0, self.simulation_settings["max_time"], self.simulation_settings["time_step"])),
-                "vy": lambda flight: flight.vy(np.arange(0, self.simulation_settings["max_time"], self.simulation_settings["time_step"])),
-                "vz": lambda flight: flight.vz(np.arange(0, self.simulation_settings["max_time"], self.simulation_settings["time_step"])),
+                "x": lambda flight: flight.x(time_array),
+                "y": lambda flight: flight.y(time_array),
+                "z": lambda flight: flight.z(time_array),
+                "vx": lambda flight: flight.vx(time_array),
+                "vy": lambda flight: flight.vy(time_array),
+                "vz": lambda flight: flight.vz(time_array),
                 "lat0": lambda flight: flight.latitude(0),
                 "lon0": lambda flight: flight.longitude(0),
             },
@@ -462,30 +570,46 @@ class BalloonPoppingEnv(gym.Env):
 
         """Convert Monte Carlo dict to [balloon][state][timestep]."""
         east0, north0, up0 = pm.geodetic2enu(
-            monte_carlo_results_["lat0"], monte_carlo_results_["lon0"], self._rocketpy_env.elevation, 
-            self._rocketpy_env.latitude, self._rocketpy_env.longitude, self._rocketpy_env.elevation)
+            monte_carlo_results_["lat0"],
+            monte_carlo_results_["lon0"],
+            self._rocketpy_env.elevation,
+            self._rocketpy_env.latitude,
+            self._rocketpy_env.longitude,
+            self._rocketpy_env.elevation,
+        )
         # Broadcast initial ENU offsets to all timesteps for each simulation
-        east0, north0, up0 = np.array(east0)[:, None], np.array(north0)[:, None], np.array(up0)[:, None]
+        east0, north0, up0 = (
+            np.array(east0)[:, None],
+            np.array(north0)[:, None],
+            np.array(up0)[:, None],
+        )
 
-        self._balloon_flights = np.stack([
-            np.array(monte_carlo_results_["x"]) + east0,
-            np.array(monte_carlo_results_["y"]) + north0,
-            np.array(monte_carlo_results_["z"]) + up0,
-            np.array(monte_carlo_results_["vx"]), 
-            np.array(monte_carlo_results_["vy"]), 
-            np.array(monte_carlo_results_["vz"]),
-        ], axis=1)
+        self._balloon_flights = np.stack(
+            [
+                np.array(monte_carlo_results_["x"]) + east0,
+                np.array(monte_carlo_results_["y"]) + north0,
+                np.array(monte_carlo_results_["z"]) + up0,
+                np.array(monte_carlo_results_["vx"]),
+                np.array(monte_carlo_results_["vy"]),
+                np.array(monte_carlo_results_["vz"]),
+            ],
+            axis=1,
+        )
 
     def __init_rocket_simulation(self):
         # Rocket flight simulation initialization
 
         # Create tank fluids from settings
         tank_cfg = self.rocket_settings["tank"]
-        oxidizer_gas = Fluid(name=tank_cfg["gas"],density=tank_cfg["gas_density"])
-        oxidizer_liq = Fluid(name=tank_cfg["liquid"], density=tank_cfg["liquid_density"])
-        
+        oxidizer_gas = Fluid(name=tank_cfg["gas"], density=tank_cfg["gas_density"])
+        oxidizer_liq = Fluid(
+            name=tank_cfg["liquid"], density=tank_cfg["liquid_density"]
+        )
+
         # Create tank from settings
-        tank_shape = CylindricalTank(radius=tank_cfg["radius"],height=tank_cfg["height"])
+        tank_shape = CylindricalTank(
+            radius=tank_cfg["radius"], height=tank_cfg["height"]
+        )
         oxidizer_tank = MassFlowRateBasedTank(
             name="oxidizer_tank",
             geometry=tank_shape,
@@ -501,7 +625,7 @@ class BalloonPoppingEnv(gym.Env):
             temperature=tank_cfg["temperature"],
             pressure=tank_cfg["pressure"],
         )
-        
+
         # Create motor from settings
         motor_cfg = self.rocket_settings["motor"]
         hybrid_motor = HybridMotor(
@@ -524,7 +648,7 @@ class BalloonPoppingEnv(gym.Env):
             grains_center_of_mass_position=motor_cfg["grains_center_of_mass_position"],
             coordinate_system_orientation="nozzle_to_combustion_chamber",
         )
-        
+
         # Add tank to motor
         tank_position = -tank_cfg["height"] / 2 - motor_cfg["motor_position"]
         hybrid_motor.add_tank(tank=oxidizer_tank, position=tank_position)
@@ -541,18 +665,18 @@ class BalloonPoppingEnv(gym.Env):
             coordinate_system_orientation="tail_to_nose",
             volume=rocket_cfg["volume"],
         )
-        
+
         # Add motor from settings
         rocket.add_motor(hybrid_motor, position=motor_cfg["motor_position"])
-        
+
         # Add nose from settings
         nose_cfg = self.rocket_settings["nose"]
         rocket.add_nose(
             length=nose_cfg["length"],
             kind=nose_cfg["kind"],
-            position=nose_cfg["position"]
+            position=nose_cfg["position"],
         )
-        
+
         # Add fins from settings
         fins_cfg = self.rocket_settings["fins"]
         if fins_cfg["useFins"]:
@@ -571,19 +695,19 @@ class BalloonPoppingEnv(gym.Env):
             noise_density=sensors_cfg["gyro_noise_density"],
             random_walk_density=sensors_cfg["gyro_random_walk_density"],
             constant_bias=sensors_cfg["gyro_constant_bias"],
-            )
+        )
         accelerometer = Accelerometer(
             sampling_rate=sensors_cfg["sampling_rate"],
             noise_density=sensors_cfg["accelerometer_noise_density"],
             random_walk_density=sensors_cfg["accelerometer_random_walk_density"],
             constant_bias=sensors_cfg["accelerometer_constant_bias"],
-            )
+        )
         gnss = GnssReceiver(
             sampling_rate=sensors_cfg["sampling_rate"],
             position_accuracy=sensors_cfg["gnss_position_accuracy"],
             altitude_accuracy=sensors_cfg["gnss_altitude_accuracy"],
             velocity_accuracy=sensors_cfg["gnss_velocity_accuracy"],
-            )
+        )
         rocket.add_sensor(gyro, position=sensors_cfg["gyro_position"])
         rocket.add_sensor(accelerometer, position=sensors_cfg["accelerometer_position"])
         rocket.add_sensor(gnss, position=sensors_cfg["gnss_position"])
@@ -601,6 +725,7 @@ class BalloonPoppingEnv(gym.Env):
                 tvc.gimbal_angle_x,
                 tvc.gimbal_angle_y,
             )
+
         rocket.add_tvc(
             gimbal_range=control_cfg["tvc_gimbal_range"],
             sampling_rate=control_cfg["control_frequency"],
@@ -609,7 +734,13 @@ class BalloonPoppingEnv(gym.Env):
         )
 
         def roll_controller_function(
-            time, sampling_rate, state, state_history, observed_variables, roll_control, sensors
+            time,
+            sampling_rate,
+            state,
+            state_history,
+            observed_variables,
+            roll_control,
+            sensors,
         ):
             # log roll control torques
             return (
@@ -627,10 +758,10 @@ class BalloonPoppingEnv(gym.Env):
         self._rocket_flight = Flight(
             rocket=rocket,
             environment=self._rocketpy_env,
-            rail_length=0.01,    # No rail since we directly set initial conditions to simulate launch
-            initial_solution = self.initial_solution,
+            rail_length=0.01,  # No rail since we directly set initial conditions to simulate launch
+            initial_solution=self.initial_solution,
             max_time=self.simulation_settings["max_time"],
-            min_time_step=self.simulation_settings["time_step"]/10,
+            min_time_step=self.simulation_settings["time_step"] / 10,
             time_overshoot=False,
             verbose=True,
         )
