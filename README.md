@@ -6,19 +6,20 @@ This repository contains the code for the Balloon Popping Challenge, a 6-DoF roc
 
 ```bash
 git clone https://github.com/ARRC-Rocket/BalloonPoppingChallenge.git
-git submodule update --init # Initialize the ActiveRocketPy submodule
 cd BalloonPoppingChallenge
+git submodule update --init # Initialize the ActiveRocketPy submodule
 python -m venv .venv        # Create a virtual environment (optional but recommended)
-source .venv/bin/activate   # On Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+.venv\Scripts\activate      # On Windows
+# source .venv/bin/activate # On Unix or MacOS
+python -m pip install -r requirements.txt
 ```
 
-## Example
+## Evaluate example agent
 
-> WIP
 
-```python
-python example.py
+```bash
+cd BalloonPoppingChallenge
+python .\BalloonPoppingGymEnv\evaluation\evaluate_scenario.py .\BalloonPoppingGymEnv\evaluation\configs\example_eval_cfg.yaml
 ```
 
 ## Gymnasium Environment Operation
@@ -33,11 +34,11 @@ There are three stages in the operation of the Gymnasium environment: reset, ste
     - The details can be found in the [RocketPy Reference](https://docs.rocketpy.org/en/latest/index.html), but here are some key assumptions and simplifications:
     - The rocket is modeled as a 6-DoF rigid body.
     - The Earth is flat.
-- Balloon Popping Challenge-specific modelling
+- Balloon popping specific modelling
     - Balloons are modeled as spheres with a certain radius and mass.
+    - Balloon flights are simulated using `[Monte-Carlo simulation]()` method provided by ActiveRocketPy. To use the `[Flight]()` class of ActiveRocketPy, a small solid motor will push the balloon out-of rail. The balloon will then fly freely under the influence of gravity, buoyancy, wind, and atmospheric drag.
     - The flight of each balloon is not affected by the rocket or other balloons.
-    - Popping detection:
-        - WIP
+    - A balloon is considered popped if the distance between the path of the rocket and the balloon within a timestep is less than the radius of the balloon.
     - Many balloons will be released at random intervals and random locations around  the rocket launch site.
     - There will be a single launch, and the aim is to pop as many balloons as  possible.
     - Launch time is determined by the agents.
