@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "BalloonPoppingGymEnv"
+version = "0.0.1"
+description = "6-DoF rocket GNC simulation Gymnasium environment based on RocketPy"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+	"gymnasium==1.2.3",
+	"pymap3d==3.2.0",
+	"vpython==7.6.5",
+    "setuptools<82.0.0",
+	"ruff>0.9",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["BalloonPoppingGymEnv"]
