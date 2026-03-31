@@ -532,6 +532,7 @@ class BalloonPoppingEnv(gym.Env):
             # max_time_step=0.01,
             # min_time_step=0.01,
             verbose=True,
+            run_simulation=False,
         )
         stochastic_flight = StochasticFlight(
             flight=flight,
@@ -764,4 +765,5 @@ class BalloonPoppingEnv(gym.Env):
             min_time_step=self.simulation_parameters["time_step"] / 10,
             time_overshoot=False,
             verbose=True,
+            run_simulation=False,
         )
