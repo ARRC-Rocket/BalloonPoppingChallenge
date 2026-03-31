@@ -622,8 +622,6 @@ class BalloonPoppingEnv(gym.Env):
             gas_mass_flow_rate_out=0,
             liquid=oxidizer_liq,
             gas=oxidizer_gas,
-            temperature=tank_cfg["temperature"],
-            pressure=tank_cfg["pressure"],
         )
 
         # Create motor from settings
