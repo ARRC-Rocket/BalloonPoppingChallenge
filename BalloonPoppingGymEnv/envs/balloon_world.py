@@ -27,18 +27,18 @@ from vpython import arrow, canvas, color, rate, sphere, vector
 class BalloonPoppingEnv(gym.Env):
     metadata = {"render_modes": ["vpython", "matplotlib"]}
 
-    def __init__(self, settings):
+    def __init__(self, render_mode, parameters):
 
-        self.scenario_number = settings["scenario_number"]
-        self.environment_settings = settings["environment"]
-        self.simulation_settings = settings["simulation"]
-        self.balloon_settings = settings["balloon"]
-        self.rocket_settings = settings["rocket"]
+        self.scenario_number = parameters["scenario_number"]
+        self.environment_parameters = parameters["environment"]
+        self.simulation_parameters = parameters["simulation"]
+        self.balloon_parameters = parameters["balloon"]
+        self.rocket_parameters = parameters["rocket"]
 
         # [balloon_num, status] status: 0-ground; 1-released; 2-popped
-        self._balloon_status = np.array(np.zeros((self.balloon_settings["num"], 1)))
+        self._balloon_status = np.array(np.zeros((self.balloon_parameters["num"], 1)))
         # [balloon_num, (x, y, z, vx, vy, vz)]
-        self._balloon_states = np.array(np.zeros((self.balloon_settings["num"], 6)))
+        self._balloon_states = np.array(np.zeros((self.balloon_parameters["num"], 6)))
         # (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ)
         self._rocket_sensors = np.full(12, np.nan)
         # (posX, posY, posZ, velX, velY, velZ, e0, e1, e2, e3, w1, w2, w3)
@@ -49,21 +49,21 @@ class BalloonPoppingEnv(gym.Env):
             {
                 "balloon_time": spaces.Box(
                     low=0,
-                    high=self.simulation_settings["max_time"],
+                    high=self.simulation_parameters["max_time"],
                     shape=(1,),
                     dtype=np.float64,
                 ),
                 "balloon_status": spaces.MultiDiscrete(
-                    3 * np.ones((self.balloon_settings["num"], 1))
+                    3 * np.ones((self.balloon_parameters["num"], 1))
                 ),
                 "balloon_states": spaces.Box(
-                    low=-np.inf * np.ones((self.balloon_settings["num"], 6)),
-                    high=np.inf * np.ones((self.balloon_settings["num"], 6)),
+                    low=-np.inf * np.ones((self.balloon_parameters["num"], 6)),
+                    high=np.inf * np.ones((self.balloon_parameters["num"], 6)),
                     dtype=np.float64,
                 ),
                 "rocket_time": spaces.Box(
                     low=0,
-                    high=self.simulation_settings["max_time"],
+                    high=self.simulation_parameters["max_time"],
                     shape=(1,),
                     dtype=np.float64,
                 ),
@@ -86,21 +86,21 @@ class BalloonPoppingEnv(gym.Env):
                     dtype=np.float64,
                 ),
                 "tvc": spaces.Box(
-                    low=-self.rocket_settings["control"]["tvc_gimbal_range"]
+                    low=-self.rocket_parameters["control"]["tvc_gimbal_range"]
                     * np.ones(2),
-                    high=self.rocket_settings["control"]["tvc_gimbal_range"]
+                    high=self.rocket_parameters["control"]["tvc_gimbal_range"]
                     * np.ones(2),
                     dtype=np.float64,
                 ),
                 "throttle": spaces.Box(
-                    low=self.rocket_settings["control"]["throttle_range"][0],
-                    high=self.rocket_settings["control"]["throttle_range"][1],
+                    low=self.rocket_parameters["control"]["throttle_range"][0],
+                    high=self.rocket_parameters["control"]["throttle_range"][1],
                     shape=(1,),
                     dtype=np.float64,
                 ),
                 "roll": spaces.Box(
-                    low=-self.rocket_settings["control"]["max_roll_torque"],
-                    high=self.rocket_settings["control"]["max_roll_torque"],
+                    low=-self.rocket_parameters["control"]["max_roll_torque"],
+                    high=self.rocket_parameters["control"]["max_roll_torque"],
                     dtype=np.float64,
                 ),
             }
@@ -110,14 +110,15 @@ class BalloonPoppingEnv(gym.Env):
         self.__create_environment()
 
         # Graphics-related attributes
-        self.render_mode = settings["render"]["mode"]
+        assert render_mode is None or render_mode in self.metadata["render_modes"]
+        self.render_mode = render_mode
         self.render_canvas = None
         self.render_balloons = None
         self.render_rocket = None
 
     def _get_obs(self):
         return {
-            "balloon_time": self.current_step * self.simulation_settings["time_step"],
+            "balloon_time": self.current_step * self.simulation_parameters["time_step"],
             "balloon_status": self._balloon_status,
             "balloon_states": self._balloon_states,
             "rocket_sensors": self._rocket_sensors,
@@ -133,7 +134,7 @@ class BalloonPoppingEnv(gym.Env):
         self.__generate_balloon_flights()
 
         if self.scenario_number == 0:  # Scenario 0: hello world with static balloons
-            self._balloon_status = np.ones((self.balloon_settings["num"], 1))
+            self._balloon_status = np.ones((self.balloon_parameters["num"], 1))
             num_balloons = self._balloon_flights.shape[0]
 
             # Spaced 40 m apart
@@ -143,7 +144,7 @@ class BalloonPoppingEnv(gym.Env):
             # z = constant per balloon
             self._balloon_flights[:, 2, :] = z_values[:, None]
         else:
-            self._balloon_status = np.zeros((self.balloon_settings["num"], 1))
+            self._balloon_status = np.zeros((self.balloon_parameters["num"], 1))
 
         self.rocket_launched = False
         self.current_step = 0
@@ -175,7 +176,7 @@ class BalloonPoppingEnv(gym.Env):
                     action["launch_inclination_heading"][1],
                 )
                 self.initial_solution[0] = (
-                    self.current_step * self.simulation_settings["time_step"]
+                    self.current_step * self.simulation_parameters["time_step"]
                 )
                 self.__init_rocket_simulation()
         else:  # Apply action to step the rocket simulation and get sensor measurements
@@ -200,7 +201,9 @@ class BalloonPoppingEnv(gym.Env):
         info = self._get_info()
 
         if (
-            np.remainder(self.current_step, 0.1 / self.simulation_settings["time_step"])
+            np.remainder(
+                self.current_step, 0.1 / self.simulation_parameters["time_step"]
+            )
             == 0
             or terminated
         ):
@@ -298,7 +301,7 @@ class BalloonPoppingEnv(gym.Env):
         previous_rocket_position = np.asarray(previous_rocket_position, dtype=float)
         current_balloon_positions = np.asarray(self._balloon_states[:, :3], dtype=float)
         current_rocket_position = np.asarray(self._rocket_states[:3], dtype=float)
-        balloon_radius_squared = self.balloon_settings["radius"] ** 2
+        balloon_radius_squared = self.balloon_parameters["radius"] ** 2
         released_mask = self._balloon_status[:, 0] == 1
         if not np.any(released_mask):
             return
@@ -380,7 +383,7 @@ class BalloonPoppingEnv(gym.Env):
             )
             self.render_rocket[0].set_3d_properties([self._rocket_states[2]])
             self.render_canvas.set_title(
-                f"Time: {self.current_step * self.simulation_settings['time_step']:.2f} sec\nReward: {np.sum(self._balloon_status[:, 0] == 2)}"
+                f"Time: {self.current_step * self.simulation_parameters['time_step']:.2f} sec\nReward: {np.sum(self._balloon_status[:, 0] == 2)}"
             )
             plt.draw()
             plt.pause(0.001)
@@ -392,30 +395,30 @@ class BalloonPoppingEnv(gym.Env):
 
     def __create_environment(self):
         self._rocketpy_env = Environment(
-            date=self.environment_settings["date"],
-            latitude=self.environment_settings["latitude"],
-            longitude=self.environment_settings["longitude"],
-            elevation=self.environment_settings["elevation"],
+            date=self.environment_parameters["date"],
+            latitude=self.environment_parameters["latitude"],
+            longitude=self.environment_parameters["longitude"],
+            elevation=self.environment_parameters["elevation"],
             datum="WGS84",
             timezone="UTC",
         )
-        if self.environment_settings["use_standard_atmosphere"]:
+        if self.environment_parameters["use_standard_atmosphere"]:
             self._rocketpy_env.set_atmospheric_model(type="standard_atmosphere")
         else:
-            if self.environment_settings["atmosphere_data_path"] == "":
+            if self.environment_parameters["atmosphere_data_path"] == "":
                 raise ValueError(
                     "Atmosphere data path must be provided if not using standard atmosphere."
                 )
             self._rocketpy_env.set_atmospheric_model(
                 type="Ensemble",
-                file=self.environment_settings["atmosphere_data_path"],
+                file=self.environment_parameters["atmosphere_data_path"],
                 dictionary="ECMWF",
             )
 
     def __get_init_rocket_states(self, inclination, heading):
         # Initialize time and state variables
         t_initial = 0
-        x_init, y_init, z_init = 0, 0, self.environment_settings["elevation"]
+        x_init, y_init, z_init = 0, 0, self.environment_parameters["elevation"]
         vx_init, vy_init, vz_init = 0, 0, 0
         w1_init, w2_init, w3_init = 0, 0, 0
         # Initialize attitude
@@ -452,8 +455,8 @@ class BalloonPoppingEnv(gym.Env):
 
         stochastic_env = StochasticEnvironment(
             environment=self._rocketpy_env,
-            latitude=self.balloon_settings["stochastic"]["latitude_std"],
-            longitude=self.balloon_settings["stochastic"]["longitude_std"],
+            latitude=self.balloon_parameters["stochastic"]["latitude_std"],
+            longitude=self.balloon_parameters["stochastic"]["longitude_std"],
         )
 
         SM = SolidMotor(
@@ -474,12 +477,12 @@ class BalloonPoppingEnv(gym.Env):
             dry_mass=0,
         )
 
-        cL0 = self.balloon_settings["aero_coefficients"]["cL"]
-        cQ0 = self.balloon_settings["aero_coefficients"]["cQ"]
-        cD0 = self.balloon_settings["aero_coefficients"]["cD"]
-        cDamping = self.balloon_settings["aero_coefficients"]["moment_damping"]
+        cL0 = self.balloon_parameters["aero_coefficients"]["cL"]
+        cQ0 = self.balloon_parameters["aero_coefficients"]["cQ"]
+        cD0 = self.balloon_parameters["aero_coefficients"]["cD"]
+        cDamping = self.balloon_parameters["aero_coefficients"]["moment_damping"]
         balloon_aero_model = LinearGenericSurface(
-            reference_area=np.pi * self.balloon_settings["radius"] ** 2,
+            reference_area=np.pi * self.balloon_parameters["radius"] ** 2,
             reference_length=1,
             coefficient_constants=[
                 cL0, 0, 0, 0, 0, 0,    # cL_0, cL_alpha, cL_beta, cL_p, cL_q, cL_r
@@ -494,10 +497,10 @@ class BalloonPoppingEnv(gym.Env):
         )  # fmt: skip
 
         Balloon = Rocket(
-            volume=4 / 3 * np.pi * self.balloon_settings["radius"] ** 3,
+            volume=4 / 3 * np.pi * self.balloon_parameters["radius"] ** 3,
             radius=0.05,
-            mass=self.balloon_settings["mass"],
-            inertia=self.balloon_settings["inertia"],
+            mass=self.balloon_parameters["mass"],
+            inertia=self.balloon_parameters["inertia"],
             center_of_mass_without_motor=0.2,
             power_off_drag=0,
             power_on_drag=0,
@@ -509,11 +512,11 @@ class BalloonPoppingEnv(gym.Env):
 
         stochastic_balloon = StochasticRocket(
             rocket=Balloon,
-            mass=self.balloon_settings["stochastic"]["mass_std"],
-            volume=self.balloon_settings["stochastic"]["volume_std"],
-            inertia_11=self.balloon_settings["stochastic"]["inertia_std"],
-            inertia_22=self.balloon_settings["stochastic"]["inertia_std"],
-            inertia_33=self.balloon_settings["stochastic"]["inertia_std"],
+            mass=self.balloon_parameters["stochastic"]["mass_std"],
+            volume=self.balloon_parameters["stochastic"]["volume_std"],
+            inertia_11=self.balloon_parameters["stochastic"]["inertia_std"],
+            inertia_22=self.balloon_parameters["stochastic"]["inertia_std"],
+            inertia_33=self.balloon_parameters["stochastic"]["inertia_std"],
             center_of_mass_without_motor=0,
         )
         stochastic_balloon.add_motor(SM, position=0)
@@ -525,7 +528,7 @@ class BalloonPoppingEnv(gym.Env):
             inclination=90,
             heading=180,
             rail_length=0.1,
-            max_time=self.simulation_settings["max_time"],
+            max_time=self.simulation_parameters["max_time"],
             # max_time_step=0.01,
             # min_time_step=0.01,
             verbose=True,
@@ -538,8 +541,8 @@ class BalloonPoppingEnv(gym.Env):
 
         time_array = np.arange(
             0,
-            self.simulation_settings["max_time"],
-            self.simulation_settings["time_step"],
+            self.simulation_parameters["max_time"],
+            self.simulation_parameters["time_step"],
         )
         monte_carlo_sim = MonteCarlo(
             filename="./BalloonPoppingGymEnv/envs/data/balloon_sim",
@@ -560,7 +563,7 @@ class BalloonPoppingEnv(gym.Env):
         )
 
         monte_carlo_results_ = monte_carlo_sim.simulate(
-            number_of_simulations=self.balloon_settings["num"],
+            number_of_simulations=self.balloon_parameters["num"],
             append=False,
             include_function_data=False,
             parallel=False,
@@ -598,14 +601,14 @@ class BalloonPoppingEnv(gym.Env):
     def __init_rocket_simulation(self):
         # Rocket flight simulation initialization
 
-        # Create tank fluids from settings
-        tank_cfg = self.rocket_settings["tank"]
+        # Create tank fluids from parameters
+        tank_cfg = self.rocket_parameters["tank"]
         oxidizer_gas = Fluid(name=tank_cfg["gas"], density=tank_cfg["gas_density"])
         oxidizer_liq = Fluid(
             name=tank_cfg["liquid"], density=tank_cfg["liquid_density"]
         )
 
-        # Create tank from settings
+        # Create tank from parameters
         tank_shape = CylindricalTank(
             radius=tank_cfg["radius"], height=tank_cfg["height"]
         )
@@ -623,8 +626,8 @@ class BalloonPoppingEnv(gym.Env):
             gas=oxidizer_gas,
         )
 
-        # Create motor from settings
-        motor_cfg = self.rocket_settings["motor"]
+        # Create motor from parameters
+        motor_cfg = self.rocket_parameters["motor"]
         hybrid_motor = HybridMotor(
             thrust_source=motor_cfg["thrust_source"],
             dry_mass=motor_cfg["dry_mass"],
@@ -650,8 +653,8 @@ class BalloonPoppingEnv(gym.Env):
         tank_position = -tank_cfg["height"] / 2 - motor_cfg["motor_position"]
         hybrid_motor.add_tank(tank=oxidizer_tank, position=tank_position)
 
-        # Create rocket body from settings
-        rocket_cfg = self.rocket_settings["rocket_body"]
+        # Create rocket body from parameters
+        rocket_cfg = self.rocket_parameters["rocket_body"]
         rocket = Rocket(
             radius=rocket_cfg["radius"],
             mass=rocket_cfg["mass"],
@@ -663,19 +666,19 @@ class BalloonPoppingEnv(gym.Env):
             volume=rocket_cfg["volume"],
         )
 
-        # Add motor from settings
+        # Add motor from parameters
         rocket.add_motor(hybrid_motor, position=motor_cfg["motor_position"])
 
-        # Add nose from settings
-        nose_cfg = self.rocket_settings["nose"]
+        # Add nose from parameters
+        nose_cfg = self.rocket_parameters["nose"]
         rocket.add_nose(
             length=nose_cfg["length"],
             kind=nose_cfg["kind"],
             position=nose_cfg["position"],
         )
 
-        # Add fins from settings
-        fins_cfg = self.rocket_settings["fins"]
+        # Add fins from parameters
+        fins_cfg = self.rocket_parameters["fins"]
         if fins_cfg["useFins"]:
             rocket.add_trapezoidal_fins(
                 n=fins_cfg["n"],
@@ -685,8 +688,8 @@ class BalloonPoppingEnv(gym.Env):
                 position=fins_cfg["position"],
             )
 
-        # Add sensors from settings
-        sensors_cfg = self.rocket_settings["sensors"]
+        # Add sensors from parameters
+        sensors_cfg = self.rocket_parameters["sensors"]
         gyro = Gyroscope(
             sampling_rate=sensors_cfg["sampling_rate"],
             noise_density=sensors_cfg["gyro_noise_density"],
@@ -710,8 +713,8 @@ class BalloonPoppingEnv(gym.Env):
         rocket.add_sensor(gnss, position=sensors_cfg["gnss_position"])
         # rocket.draw()
 
-        # Add control systems from settings
-        control_cfg = self.rocket_settings["control"]
+        # Add control systems from parameters
+        control_cfg = self.rocket_parameters["control"]
 
         def tvc_controller_function(
             time, sampling_rate, state, state_history, observed_variables, tvc, sensors
@@ -757,8 +760,8 @@ class BalloonPoppingEnv(gym.Env):
             environment=self._rocketpy_env,
             rail_length=0.01,  # No rail since we directly set initial conditions to simulate launch
             initial_solution=self.initial_solution,
-            max_time=self.simulation_settings["max_time"],
-            min_time_step=self.simulation_settings["time_step"] / 10,
+            max_time=self.simulation_parameters["max_time"],
+            min_time_step=self.simulation_parameters["time_step"] / 10,
             time_overshoot=False,
             verbose=True,
         )
