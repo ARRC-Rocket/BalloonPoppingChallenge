@@ -506,7 +506,6 @@ class BalloonPoppingEnv(gym.Env):
 
         Balloon.add_motor(SM, position=0)
         Balloon.add_surfaces(balloon_aero_model, positions=(0, 0, 0.2))
-        Balloon.prints.rocket_aerodynamics_quantities()
 
         stochastic_balloon = StochasticRocket(
             rocket=Balloon,
