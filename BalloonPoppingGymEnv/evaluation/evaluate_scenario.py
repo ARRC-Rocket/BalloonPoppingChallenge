@@ -42,6 +42,31 @@ def _extract_nested_parameters(scenario_parameters, given_parameters_spec):
 
     return given_parameters
 
+def _load_agent(agent_module_path, agent_cls_name, given_parameters, agent_kwargs):
+    """Load agent class dynamically from specified module path.
+
+    Parameters
+    ----------
+    agent_module_path : str
+        Path to the agent module file
+    agent_cls_name : str
+        Name of the agent class to instantiate
+    given_parameters : dict
+        Parameters to pass to agent initialization
+    agent_kwargs : dict
+        Additional keyword arguments for agent initialization
+
+    Returns
+    -------
+    object
+        Instantiated agent object
+    """
+    spec = importlib.util.spec_from_file_location("agent_module", agent_module_path)
+    agent_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(agent_module)
+    AgentClass = getattr(agent_module, agent_cls_name)
+    return AgentClass(given_parameters, **agent_kwargs)
+
 
 def evaluate_scenario(eval_cfg_path):
     """Evaluate a scenario with a given agent configuration.
@@ -82,14 +107,8 @@ def evaluate_scenario(eval_cfg_path):
     # Create environment with scenario parameters
     env = BalloonPoppingEnv(render_mode=render_mode, parameters=scenario_parameters)
 
-    # Dynamically import the agent class from the specified module path
-    spec = importlib.util.spec_from_file_location("agent_module", agent_module_path)
-    agent_module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(agent_module)
-    AgentClass = getattr(agent_module, agent_cls_name)
-
-    # Instantiate the agent with the provided kwargs
-    agent = AgentClass(given_parameters, **agent_kwargs)
+    # Load agent class dynamically from specified module path.
+    agent = _load_agent(agent_module_path, agent_cls_name, given_parameters, agent_kwargs)
 
     observation, info = env.reset()
     terminated = False
