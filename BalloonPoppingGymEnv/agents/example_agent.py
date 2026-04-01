@@ -27,7 +27,7 @@ class RollControlAgent(BaseAgent):
         """
         sensor_frequency = self.given_parameters["rocket"]["sensors"]["sampling_rate"]
 
-        if observation["balloon_time"] >= 1.0:
+        if observation["simulation_time"] >= 1.0:
             launch = True
         else:
             launch = False

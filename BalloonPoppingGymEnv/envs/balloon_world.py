@@ -47,24 +47,12 @@ class BalloonPoppingEnv(gym.Env):
         # Observations include balloon and rocket states
         self.observation_space = spaces.Dict(
             {
-                "balloon_time": spaces.Box(
-                    low=0,
-                    high=self.simulation_parameters["max_time"],
-                    shape=(1,),
-                    dtype=np.float64,
-                ),
                 "balloon_status": spaces.MultiDiscrete(
                     3 * np.ones((self.balloon_parameters["num"], 1))
                 ),
                 "balloon_states": spaces.Box(
                     low=-np.inf * np.ones((self.balloon_parameters["num"], 6)),
                     high=np.inf * np.ones((self.balloon_parameters["num"], 6)),
-                    dtype=np.float64,
-                ),
-                "rocket_time": spaces.Box(
-                    low=0,
-                    high=self.simulation_parameters["max_time"],
-                    shape=(1,),
                     dtype=np.float64,
                 ),
                 "rocket_sensors": spaces.Box(
@@ -117,15 +105,18 @@ class BalloonPoppingEnv(gym.Env):
         self.render_rocket = None
 
     def _get_obs(self):
+        sim_time = self.current_step * self.simulation_parameters["time_step"]
         return {
-            "balloon_time": self.current_step * self.simulation_parameters["time_step"],
+            "simulation_time": sim_time,
             "balloon_status": self._balloon_status,
             "balloon_states": self._balloon_states,
             "rocket_sensors": self._rocket_sensors,
         }
 
     def _get_info(self):
-        return {"rocket_states": self._rocket_states}
+        return {
+            "rocket_states": self._rocket_states,
+        }
 
     def reset(self, seed=None, options=None):
         # We need the following line to seed self.np_random
