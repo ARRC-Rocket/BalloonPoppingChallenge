@@ -182,8 +182,8 @@ class BalloonPoppingEnv(gym.Env):
             self._rocket_states = self._rocket_flight.y_sol[:]
             _rocket_finished = self._rocket_flight._step_state["finished"]
 
-            # detect collisions
-            self._detect_collision(previous_balloon_positions, previous_rocket_position)
+            # detect pops
+            self._detect_pops(previous_balloon_positions, previous_rocket_position)
 
         # An episode is done iff reaches max time or end of trajectory
         terminated = (self.current_step >= self.num_timesteps - 1) or _rocket_finished
@@ -286,8 +286,8 @@ class BalloonPoppingEnv(gym.Env):
         separation = closest_point_a - closest_point_b
         return np.einsum("ij,ij->i", separation, separation)
 
-    def _detect_collision(self, previous_balloon_positions, previous_rocket_position):
-        """Detect collisions using swept paths over the current timestep."""
+    def _detect_pops(self, previous_balloon_positions, previous_rocket_position):
+        """Detect pops using swept paths over the current timestep."""
         previous_balloon_positions = np.asarray(previous_balloon_positions, dtype=float)
         previous_rocket_position = np.asarray(previous_rocket_position, dtype=float)
         current_balloon_positions = np.asarray(self._balloon_states[:, :3], dtype=float)
@@ -303,9 +303,9 @@ class BalloonPoppingEnv(gym.Env):
             previous_balloon_positions[released_mask],
             current_balloon_positions[released_mask],
         )
-        collided_released = distance_squared <= balloon_radius_squared
+        popped_released = distance_squared <= balloon_radius_squared
         released_indices = np.flatnonzero(released_mask)
-        self._balloon_status[released_indices[collided_released], 0] = 2
+        self._balloon_status[released_indices[popped_released], 0] = 2
 
     def _render_frame(self):
         if self.render_mode == "vpython":
