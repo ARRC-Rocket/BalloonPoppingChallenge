@@ -21,6 +21,7 @@ cd BalloonPoppingChallenge
 python .\BalloonPoppingGymEnv\evaluation\evaluate_scenario.py .\BalloonPoppingGymEnv\evaluation\configs\example_eval_cfg.yaml
 ```
 You should see a rocket popping static balloons in the sky:
+
 ![screen shot of scenario 0 running](Doc/scenario_0_screenshot.png)
 
 ## Gymnasium Environment Operation
@@ -58,6 +59,8 @@ Agents for evaluation are placed in the [/agents folder](./BalloonPoppingGymEnv/
 ## Evaluation
 
 The evaluation script is located in [/evaluation folder](./BalloonPoppingGymEnv/evaluation). It takes a configuration file as input, which specifies the scenario parameters and the agent to be evaluated. The script runs the specified scenario with the given agent and outputs the results.
+
+![alt text](Doc/EvaluationFlowChart.drawio.svg)
 
 ## Modelling Details
 - Rocket flight modelling (RocketPy)
