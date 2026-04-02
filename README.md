@@ -26,7 +26,7 @@ You should see a rocket popping static balloons in the sky:
 
 ## Gymnasium Environment Operation
 There are three stages in the operation of the Gymnasium environment: reset, stepping, and termination.
-1. **Reset**: The environment is reset using `env.reset()`, which sets up the initial conditions for the rocket and balloons as given in the [scenario_0_parameter.json](./BalloonPoppingGymEnv/envs/scenario_parameters/scenario_0_parameters.json) files. The trajectory of each balloon is simulated using the [monte-carlo simulation of ActiveRocketPy](./ActiveRocketPy/rocketpy/simulation/monte_carlo.py) then stored in the environment.
+1. **Reset**: The environment is reset using `env.reset()`, which sets up the initial conditions for the rocket and balloons as given in the [scenario_0_parameter.yaml](./BalloonPoppingGymEnv/envs/scenario_parameters/scenario_0_parameters.yaml) files. The trajectory of each balloon is simulated using the [monte-carlo simulation of ActiveRocketPy](./ActiveRocketPy/rocketpy/simulation/monte_carlo.py) then stored in the environment.
 
 2. **Stepping**: The agent takes an action (e.g., launch, roll, throttle and TVC commands) and calls `env.step(action)`, which advances the simulation by one time step. The environment returns the new observations, reward, termination flag, and additional info.
 
@@ -54,7 +54,7 @@ The actions, observations, info, rewards in this environment are:
     - The reward is calculated based on the number of balloons popped at each time step.
 
 ## Agent Development
-Agents for evaluation are placed in the [/agents folder](./BalloonPoppingGymEnv/agents). They should be implemented as a class that inherits from [BaseAgent](./BalloonPoppingGymEnv/agents/base_agent.py) and implements the `get_action` method. The agent can access the scenario parameters through `self.given_parameters`, as defined in `scenario_given_parameters.json` files in [/scenario_parameters folder](./BalloonPoppingGymEnv/envs/scenario_parameters/). Observations are passed throught the `get_action` method. The agent should output an action dictionary that matches the action space defined in the environment.
+Agents for evaluation are placed in the [/agents folder](./BalloonPoppingGymEnv/agents). They should be implemented as a class that inherits from [BaseAgent](./BalloonPoppingGymEnv/agents/base_agent.py) and implements the `get_action` method. The agent can access the scenario parameters through `self.given_parameters`, as defined in `scenario_given_parameters.yaml` files in [/scenario_parameters folder](./BalloonPoppingGymEnv/envs/scenario_parameters/). Observations are passed throught the `get_action` method. The agent should output an action dictionary that matches the action space defined in the environment.
 
 ## Evaluation
 

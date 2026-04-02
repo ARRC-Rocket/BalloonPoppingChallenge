@@ -1,5 +1,4 @@
 import importlib.util
-import json
 import sys
 
 import yaml
@@ -41,6 +40,7 @@ def _extract_nested_parameters(scenario_parameters, given_parameters_spec):
                 }
 
     return given_parameters
+
 
 def _load_agent(agent_module_path, agent_cls_name, given_parameters, agent_kwargs):
     """Load agent class dynamically from specified module path.
@@ -87,17 +87,17 @@ def evaluate_scenario(eval_cfg_path):
     agent_kwargs = eval_cfg["agent_kwargs"]
 
     with open(
-        f"./BalloonPoppingGymEnv/envs/scenario_parameters/scenario_{scenario_number}_parameters.json",
+        f"./BalloonPoppingGymEnv/envs/scenario_parameters/scenario_{scenario_number}_parameters.yaml",
         "r",
     ) as file:
-        scenario_parameters = json.load(file)
+        scenario_parameters = yaml.safe_load(file)
     file.close()
 
     with open(
-        f"./BalloonPoppingGymEnv/envs/scenario_parameters/scenario_{scenario_number}_given_parameters.json",
+        f"./BalloonPoppingGymEnv/envs/scenario_parameters/scenario_{scenario_number}_given_parameters.yaml",
         "r",
     ) as file:
-        given_parameters_spec = json.load(file)
+        given_parameters_spec = yaml.safe_load(file)
     file.close()
 
     given_parameters = _extract_nested_parameters(
