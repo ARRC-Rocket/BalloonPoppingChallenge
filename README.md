@@ -89,7 +89,10 @@ ___
 
 __Develop your own Python software to guide, navigate, and control a rocket to pop balloons in the sky.__
 
-This is the official code repository for the Balloon Popping Challenge, a competition held at the Taiwan International Assembly of Space Science, Technology, and Industry (TASTI) 2026. The challenge tasks participants with developing guidance, navigation, and control (GNC) algorithms in a Python simulator to pop scattered balloons using a TVC-equipped throttleable rocket in the sky. All techniques are encouraged, including classic/modern/optimal control, as well as machine/reinforcement learning.
+This is the official code repository for the Balloon Popping Challenge, a competition held at the Taiwan International Assembly of Space Science, Technology, and Industry (TASTI) 2026.
+
+This competition aims to cultivate next-generation talent in rocket Guidance, Navigation, and Control (GNC) by engaging participants in the development of autonomous flight control algorithms.
+Participants are required to develop Python-based software to autonomously control a simulated rocket. Within a physics-based simulation environment, the rocket must navigate and pop balloons released dynamically to maximize the number of pops under uncertain conditions.
 
 Keywords: GNC, autonomous rocket, optimization, path-finding.
 
