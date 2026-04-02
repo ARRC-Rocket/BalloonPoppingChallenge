@@ -1,5 +1,6 @@
 # BalloonPoppingGymEnv specific
 BalloonPoppingGymEnv/envs/data/
+!BalloonPoppingGymEnv/envs/data/README.md
 
 # VSCode specific
 .vscode/
