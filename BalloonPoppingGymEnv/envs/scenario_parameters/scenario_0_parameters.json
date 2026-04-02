@@ -1,5 +1,8 @@
 {
-    "scenario_number": 0,
+    "scenario": {
+        "number": 0,
+        "random_seed": 0
+    },
     "environment":{
         "date": [2025, 7, 26, 0],
         "latitude": 22.1749259,
