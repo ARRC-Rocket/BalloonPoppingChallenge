@@ -29,7 +29,7 @@ class BalloonPoppingEnv(gym.Env):
 
     def __init__(self, render_mode, parameters):
 
-        self.scenario_number = parameters["scenario_number"]
+        self.scenario_parameters = parameters["scenario"]
         self.environment_parameters = parameters["environment"]
         self.simulation_parameters = parameters["simulation"]
         self.balloon_parameters = parameters["balloon"]
@@ -124,7 +124,7 @@ class BalloonPoppingEnv(gym.Env):
 
         self.__generate_balloon_flights()
 
-        if self.scenario_number == 0:  # Scenario 0: hello world with static balloons
+        if self.scenario_parameters["number"] == 0:  # Scenario 0: hello world with static balloons
             self._balloon_status = np.ones((self.balloon_parameters["num"], 1))
             num_balloons = self._balloon_flights.shape[0]
 
@@ -558,8 +558,8 @@ class BalloonPoppingEnv(gym.Env):
             number_of_simulations=self.balloon_parameters["num"],
             append=False,
             include_function_data=False,
-            parallel=False,
-            n_workers=4,
+            random_seed=self.scenario_parameters["random_seed"],
+            parallel=False
         )
 
         """Convert Monte Carlo dict to [balloon][state][timestep]."""

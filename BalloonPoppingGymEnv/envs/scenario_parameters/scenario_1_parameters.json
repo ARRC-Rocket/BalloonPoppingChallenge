@@ -1,6 +1,6 @@
 {
     "scenario": {
-        "number": 0,
+        "number": 1,
         "random_seed": 0
     },
     "environment":{
@@ -16,7 +16,7 @@
         "max_time": 100
     },
     "balloon":{
-        "num": 10,
+        "num": 20,
         "radius": 1.5,
         "mass": 0.8,
         "inertia": [1, 1, 1],
