@@ -19,6 +19,7 @@ simulation:
 
 # Balloon model and uncertainty parameters
 balloon:
+  release_interval: 1 # no actual effect in scenario 0
   num: 10
   radius: 1.5
   mass: 0.8
