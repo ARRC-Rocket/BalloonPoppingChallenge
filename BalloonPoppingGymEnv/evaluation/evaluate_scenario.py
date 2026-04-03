@@ -42,7 +42,7 @@ def _extract_nested_parameters(scenario_parameters, given_parameters_spec):
     return given_parameters
 
 
-def _load_agent(agent_module_path, agent_cls_name, given_parameters, agent_kwargs):
+def _load_agent_class(agent_module_path, agent_cls_name):
     """Load agent class dynamically from specified module path.
 
     Parameters
@@ -51,40 +51,41 @@ def _load_agent(agent_module_path, agent_cls_name, given_parameters, agent_kwarg
         Path to the agent module file
     agent_cls_name : str
         Name of the agent class to instantiate
-    given_parameters : dict
-        Parameters to pass to agent initialization
-    agent_kwargs : dict
-        Additional keyword arguments for agent initialization
 
     Returns
     -------
-    object
-        Instantiated agent object
+    type
+        Agent class
     """
     spec = importlib.util.spec_from_file_location("agent_module", agent_module_path)
     agent_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(agent_module)
     AgentClass = getattr(agent_module, agent_cls_name)
-    return AgentClass(given_parameters, **agent_kwargs)
+    return AgentClass
 
 
-def evaluate_scenario(eval_cfg_path):
-    """Evaluate a scenario with a given agent configuration.
+def evaluate_scenario(
+    agent_class,
+    agent_kwargs=None,
+    agent_name="default_agent_name",
+    scenario_number=0,
+    render_mode=None,
+):
+    """Evaluate a scenario with given configuration and agent.
 
     Parameters
     ----------
-    eval_cfg_path : str
-        Path to evaluation configuration YAML file
+    agent_class : type
+        Agent class to use for evaluation
+    agent_kwargs : dict or None
+        Additional keyword arguments for agent initialization
+    agent_name : str
+        Name of the agent for logging purposes
+    scenario_number : int
+        Scenario number to evaluate
+    render_mode : str or None
+        Rendering mode for the environment ('matplotlib') or None
     """
-    with open(eval_cfg_path, "r") as file:
-        eval_cfg = yaml.safe_load(file)
-    file.close()
-
-    scenario_number = eval_cfg["scenario_number"]
-    render_mode = eval_cfg["render_mode"]
-    agent_module_path = eval_cfg["agent_module_path"]
-    agent_cls_name = eval_cfg["agent_cls"]
-    agent_kwargs = eval_cfg["agent_kwargs"]
 
     with open(
         f"./BalloonPoppingGymEnv/envs/scenario_parameters/scenario_{scenario_number}_parameters.yaml",
@@ -107,10 +108,8 @@ def evaluate_scenario(eval_cfg_path):
     # Create environment with scenario parameters
     env = BalloonPoppingEnv(render_mode=render_mode, parameters=scenario_parameters)
 
-    # Load agent class dynamically from specified module path.
-    agent = _load_agent(
-        agent_module_path, agent_cls_name, given_parameters, agent_kwargs
-    )
+    # Instantiate agent with given parameters and any additional user kwargs
+    agent = agent_class(given_parameters, **agent_kwargs)
 
     observation, info = env.reset(seed=scenario_parameters["scenario"]["random_seed"])
     terminated = False
@@ -119,9 +118,7 @@ def evaluate_scenario(eval_cfg_path):
         action = agent.get_action(observation)
         observation, reward, terminated, _, info = env.step(action)
 
-    print(
-        f"Scenario {scenario_number} evaluation completed with agent '{eval_cfg['agent_name']}'."
-    )
+    print(f"Scenario {scenario_number} evaluation completed with agent '{agent_name}'.")
     print(f"Final reward: {reward}")
 
 
@@ -131,5 +128,25 @@ if __name__ == "__main__":
             "Configuration file path is required. "
             "Usage: python evaluate_scenario.py <path_to_eval_config.yaml>"
         )
-    eval_config_path = sys.argv[1]
-    evaluate_scenario(eval_config_path)
+
+    eval_cfg_path = sys.argv[1]
+    with open(eval_cfg_path, "r") as file:
+        eval_cfg = yaml.safe_load(file)
+    file.close()
+
+    scenario_number = eval_cfg["scenario_number"]
+    render_mode = eval_cfg["render_mode"]
+    agent_module_path = eval_cfg["agent_module_path"]
+    agent_class_name = eval_cfg["agent_class_name"]
+    agent_name = eval_cfg["agent_name"]
+    agent_kwargs = eval_cfg["agent_kwargs"]
+
+    # Load agent class dynamically from specified module path.
+    agent_class = _load_agent_class(agent_module_path, agent_class_name)
+    evaluate_scenario(
+        agent_class,
+        agent_kwargs=agent_kwargs,
+        agent_name=agent_name,
+        scenario_number=scenario_number,
+        render_mode=render_mode,
+    )
