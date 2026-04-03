@@ -108,7 +108,9 @@ def evaluate_scenario(eval_cfg_path):
     env = BalloonPoppingEnv(render_mode=render_mode, parameters=scenario_parameters)
 
     # Load agent class dynamically from specified module path.
-    agent = _load_agent(agent_module_path, agent_cls_name, given_parameters, agent_kwargs)
+    agent = _load_agent(
+        agent_module_path, agent_cls_name, given_parameters, agent_kwargs
+    )
 
     observation, info = env.reset()
     terminated = False
