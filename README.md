@@ -4,7 +4,7 @@ This repository contains the code for the Balloon Popping Challenge, a 6-DoF roc
 
 ## Installation
 
-```bash
+```shell
 git clone https://github.com/ARRC-Rocket/BalloonPoppingChallenge.git
 cd BalloonPoppingChallenge
 git submodule update --init # Initialize the ActiveRocketPy submodule
@@ -14,9 +14,17 @@ python -m venv .venv        # Create a virtual environment (optional but recomme
 python -m pip install -r requirements.txt
 ```
 
+## Update from the repository:
+
+```shell
+cd BalloonPoppingChallenge
+git pull origin main
+git submodule update --remote --merge
+```
+
 ## Evaluation example
 
-```bash
+```shell
 cd BalloonPoppingChallenge
 python .\BalloonPoppingGymEnv\evaluation\evaluate_scenario.py .\BalloonPoppingGymEnv\evaluation\configs\example_eval_cfg.yaml
 ```
