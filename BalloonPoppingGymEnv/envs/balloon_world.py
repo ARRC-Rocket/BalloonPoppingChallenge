@@ -445,10 +445,22 @@ class BalloonPoppingEnv(gym.Env):
 
     def __generate_balloon_flights(self):
 
+        lat = self.environment_parameters["latitude"]
+        lon = self.environment_parameters["longitude"]
+        lat_std = self.balloon_parameters["stochastic"]["latitude_std"]
+        lon_std = self.balloon_parameters["stochastic"]["longitude_std"]
         stochastic_env = StochasticEnvironment(
             environment=self._rocketpy_env,
-            latitude=self.balloon_parameters["stochastic"]["latitude_std"],
-            longitude=self.balloon_parameters["stochastic"]["longitude_std"],
+            latitude=(
+                lat - lat_std,
+                lat + lat_std,
+                "uniform",
+            ),
+            longitude=(
+                lon - lon_std,
+                lon + lon_std,
+                "uniform",
+            ),
         )
 
         SM = SolidMotor(
