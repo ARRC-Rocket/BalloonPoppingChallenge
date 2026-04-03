@@ -122,6 +122,8 @@ class BalloonPoppingEnv(gym.Env):
         # We need the following line to seed self.np_random
         super().reset(seed=seed)
 
+        # Generate balloon release sequences for all balloons
+        self.__reset_balloon_release_sequence()
         self.__generate_balloon_flights()
 
         # Scenario 0: hello world with static balloons
@@ -158,6 +160,11 @@ class BalloonPoppingEnv(gym.Env):
 
         #  Update the balloon states
         self._balloon_states = self._balloon_flights[:, :, self.current_step]
+
+        # Update balloon status: balloons that have reached the release step and are still on the ground become released
+        released_mask = self.current_step >= self._balloon_release_at_step
+        ground_mask = self._balloon_status[:, 0] == 0
+        self._balloon_status[released_mask & ground_mask, 0] = 1
 
         if not self.rocket_launched:
             _rocket_finished = False
@@ -359,10 +366,10 @@ class BalloonPoppingEnv(gym.Env):
                     0, self._balloon_flights[:, 2, :].max() + 10
                 )
 
-            # Update balloon positions and colors based on status (red if popped)
+            # Update balloon positions and colors based on status (grey if ground, magenta if released, red if popped)
+            status_colors = {0: "grey", 1: "magenta", 2: "red"}
             colors = [
-                "red" if status == 2 else "magenta"
-                for status in self._balloon_status[:, 0]
+                status_colors[int(status)] for status in self._balloon_status[:, 0]
             ]
             self.render_balloons._offsets3d = (
                 self._balloon_states[:, 0],
@@ -407,48 +414,31 @@ class BalloonPoppingEnv(gym.Env):
                 dictionary="ECMWF",
             )
 
-    def __get_init_rocket_states(self, inclination, heading):
-        # Initialize time and state variables
-        t_initial = 0
-        x_init, y_init, z_init = 0, 0, self.environment_parameters["elevation"]
-        vx_init, vy_init, vz_init = 0, 0, 0
-        w1_init, w2_init, w3_init = 0, 0, 0
-        # Initialize attitude
-        # Precession / Heading Angle
-        psi_init = np.radians(-heading)
-        # Nutation / Attitude Angle
-        theta_init = np.radians(inclination - 90)
-        # Spin / Bank Angle
-        phi_init = 0
-
-        # 3-1-3 Euler Angles to Euler Parameters
-        e0_init, e1_init, e2_init, e3_init = euler313_to_quaternions(
-            phi_init, theta_init, psi_init
-        )
-        # Store initial conditions
-        self.initial_solution = [
-            t_initial,
-            x_init,
-            y_init,
-            z_init,
-            vx_init,
-            vy_init,
-            vz_init,
-            e0_init,
-            e1_init,
-            e2_init,
-            e3_init,
-            w1_init,
-            w2_init,
-            w3_init,
-        ]
+    def __reset_balloon_release_sequence(self):
+        n = self.balloon_parameters["num"]
+        i = self.balloon_parameters["release_interval"]
+        t = self.simulation_parameters["time_step"]
+        self._balloon_release_at_step = np.arange(n) * int(i / t)
+        self._np_random.shuffle(self._balloon_release_at_step)
 
     def __generate_balloon_flights(self):
 
+        lat = self.environment_parameters["latitude"]
+        lon = self.environment_parameters["longitude"]
+        lat_std = self.balloon_parameters["stochastic"]["latitude_std"]
+        lon_std = self.balloon_parameters["stochastic"]["longitude_std"]
         stochastic_env = StochasticEnvironment(
             environment=self._rocketpy_env,
-            latitude=self.balloon_parameters["stochastic"]["latitude_std"],
-            longitude=self.balloon_parameters["stochastic"]["longitude_std"],
+            latitude=(
+                lat - lat_std,
+                lat + lat_std,
+                "uniform",
+            ),
+            longitude=(
+                lon - lon_std,
+                lon + lon_std,
+                "uniform",
+            ),
         )
 
         SM = SolidMotor(
@@ -559,7 +549,7 @@ class BalloonPoppingEnv(gym.Env):
             number_of_simulations=self.balloon_parameters["num"],
             append=False,
             include_function_data=False,
-            random_seed=self.scenario_parameters["random_seed"],
+            random_seed=self._np_random_seed,
             parallel=False,
         )
 
@@ -590,6 +580,77 @@ class BalloonPoppingEnv(gym.Env):
             ],
             axis=1,
         )
+
+        # Vectorized shift trajectories by release step
+        num_balloons, state_dims, num_timesteps = self._balloon_flights.shape
+        release_steps = np.asarray(self._balloon_release_at_step, dtype=int)
+        release_steps = np.clip(release_steps, 0, num_timesteps)
+
+        # Create source time indices for each balloon
+        time_idx = np.arange(num_timesteps)
+        source_idx = np.clip(
+            time_idx[np.newaxis, :] - release_steps[:, np.newaxis],
+            0,
+            num_timesteps - 1,
+        )
+
+        # Gather shifted trajectories using proper advanced indexing
+        # Create indices that broadcast to (num_balloons, state_dims, num_timesteps)
+        balloon_idx = np.arange(num_balloons)[:, None, None]  # (num_balloons, 1, 1)
+        state_idx = np.arange(state_dims)[None, :, None]  # (1, state_dims, 1)
+        shifted = self._balloon_flights[balloon_idx, state_idx, source_idx[:, None, :]]
+
+        # Fill pre-release timesteps with initial state
+        pre_release_mask = (
+            time_idx < release_steps[:, np.newaxis]
+        )  # (num_balloons, num_timesteps)
+        initial_states = self._balloon_flights[
+            :, :, 0:1
+        ]  # (num_balloons, state_dims, 1)
+
+        # Apply mask: for pre-release times, use initial state; otherwise use shifted
+        pre_release_mask_expanded = pre_release_mask[
+            :, np.newaxis, :
+        ]  # (num_balloons, 1, num_timesteps)
+        shifted = np.where(pre_release_mask_expanded, initial_states, shifted)
+
+        self._balloon_flights = shifted
+
+    def __get_init_rocket_states(self, inclination, heading):
+        # Initialize time and state variables
+        t_initial = 0
+        x_init, y_init, z_init = 0, 0, self.environment_parameters["elevation"]
+        vx_init, vy_init, vz_init = 0, 0, 0
+        w1_init, w2_init, w3_init = 0, 0, 0
+        # Initialize attitude
+        # Precession / Heading Angle
+        psi_init = np.radians(-heading)
+        # Nutation / Attitude Angle
+        theta_init = np.radians(inclination - 90)
+        # Spin / Bank Angle
+        phi_init = 0
+
+        # 3-1-3 Euler Angles to Euler Parameters
+        e0_init, e1_init, e2_init, e3_init = euler313_to_quaternions(
+            phi_init, theta_init, psi_init
+        )
+        # Store initial conditions
+        self.initial_solution = [
+            t_initial,
+            x_init,
+            y_init,
+            z_init,
+            vx_init,
+            vy_init,
+            vz_init,
+            e0_init,
+            e1_init,
+            e2_init,
+            e3_init,
+            w1_init,
+            w2_init,
+            w3_init,
+        ]
 
     def __init_rocket_simulation(self):
         # Rocket flight simulation initialization

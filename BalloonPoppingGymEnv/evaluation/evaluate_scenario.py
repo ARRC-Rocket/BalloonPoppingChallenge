@@ -112,7 +112,7 @@ def evaluate_scenario(eval_cfg_path):
         agent_module_path, agent_cls_name, given_parameters, agent_kwargs
     )
 
-    observation, info = env.reset()
+    observation, info = env.reset(seed=scenario_parameters["scenario"]["random_seed"])
     terminated = False
 
     while not terminated:

@@ -8,8 +8,10 @@ simulation:
   - time_step
   - max_time
 balloon:
+  - release_interval
   - num
   - radius
+  - mass
 rocket:
   tank:
     - liquid
