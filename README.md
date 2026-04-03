@@ -30,7 +30,7 @@ python .\BalloonPoppingGymEnv\evaluation\evaluate_scenario.py .\BalloonPoppingGy
 ```
 You should see a rocket popping static balloons in the sky:
 
-![screen shot of scenario 0 running](Doc/scenario_0_screenshot.png)
+![screen shot of scenario 0 running](doc/figures/scenario_0_screenshot.png)
 
 ## Gymnasium Environment Operation
 There are three stages in the operation of the Gymnasium environment: reset, stepping, and termination.
@@ -68,7 +68,7 @@ Agents for evaluation are placed in the [/agents folder](./BalloonPoppingGymEnv/
 
 The evaluation script is located in [/evaluation folder](./BalloonPoppingGymEnv/evaluation). It takes a configuration file as input, which specifies the scenario parameters and the agent to be evaluated. The script runs the specified scenario with the given agent and outputs the results.
 
-![alt text](Doc/EvaluationFlowChart.drawio.svg)
+![flow chart of evaluation process](doc/figures/EvaluationFlowChart.drawio.svg)
 
 ## Modelling Details
 - Rocket flight modelling (RocketPy)
