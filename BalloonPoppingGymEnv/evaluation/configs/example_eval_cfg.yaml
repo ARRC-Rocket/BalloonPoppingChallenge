@@ -1,10 +1,9 @@
 scenario_number: 1
-render_mode: "matplotlib"
+render_mode: "matplotlib" # "matplotlib" or null
 agent_module_path: "./BalloonPoppingGymEnv/agents/example_agent.py" # Path to python module defining agent.
 agent_cls: RollControlAgent
-agent_name: "zero_roll_control" # Identifier name for logging purposes. 
-                                # The same agent class with different inputs can lead to different behaviors,
-                                # so you should give each instantiation their own name
+agent_name:
+  "zero_roll_control" # Identifier name for logging purposes. The same agent class with different inputs can lead to different behaviors, so you should give each instantiation their own name
 agent_kwargs:
   roll_rate_target: 0
   arg2: value2
