@@ -76,6 +76,8 @@ rocket:
     - gnss_velocity_accuracy
   control:
     - control_frequency
-    - tvc_gimbal_range
+    - gimbal_range
+    - gimbal_rate_limit
     - max_roll_torque
+    - torque_rate_limit
     - throttle_range

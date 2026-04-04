@@ -1,4 +1,5 @@
 import importlib.util
+import os
 import sys
 
 import yaml
@@ -64,6 +65,46 @@ def _load_agent_class(agent_module_path, agent_cls_name):
     return AgentClass
 
 
+def load_scenario_parameters(scenario_number):
+    """Load scenario parameters from YAML files.
+
+    Parameters
+    ----------
+    scenario_number : int
+        Scenario number to load parameters for
+
+    Returns
+    -------
+    dict
+        Full scenario parameters dictionary
+    dict
+        Given parameters dictionary extracted based on specification
+    """
+    parameter_dir = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "../envs/scenario_parameters"
+    )
+
+    scenario_params_path = os.path.join(
+        parameter_dir, f"scenario_{scenario_number}_parameters.yaml"
+    )
+    with open(scenario_params_path, "r") as file:
+        scenario_parameters = yaml.safe_load(file)
+    file.close()
+
+    given_params_path = os.path.join(
+        parameter_dir, f"scenario_{scenario_number}_given_parameters.yaml"
+    )
+    with open(given_params_path, "r") as file:
+        given_parameters_spec = yaml.safe_load(file)
+    file.close()
+
+    given_parameters = _extract_nested_parameters(
+        scenario_parameters, given_parameters_spec
+    )
+
+    return scenario_parameters, given_parameters
+
+
 def evaluate_scenario(
     agent_class,
     agent_kwargs=None,
@@ -87,23 +128,8 @@ def evaluate_scenario(
         Rendering mode for the environment ('matplotlib') or None
     """
 
-    with open(
-        f"./BalloonPoppingGymEnv/envs/scenario_parameters/scenario_{scenario_number}_parameters.yaml",
-        "r",
-    ) as file:
-        scenario_parameters = yaml.safe_load(file)
-    file.close()
-
-    with open(
-        f"./BalloonPoppingGymEnv/envs/scenario_parameters/scenario_{scenario_number}_given_parameters.yaml",
-        "r",
-    ) as file:
-        given_parameters_spec = yaml.safe_load(file)
-    file.close()
-
-    given_parameters = _extract_nested_parameters(
-        scenario_parameters, given_parameters_spec
-    )
+    # Load scenario parameters
+    scenario_parameters, given_parameters = load_scenario_parameters(scenario_number)
 
     # Create environment with scenario parameters
     env = BalloonPoppingEnv(render_mode=render_mode, parameters=scenario_parameters)
