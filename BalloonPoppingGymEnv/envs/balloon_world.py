@@ -1,3 +1,5 @@
+import os
+
 import gymnasium as gym
 import matplotlib.pyplot as plt
 import numpy as np
@@ -399,16 +401,17 @@ class BalloonPoppingEnv(gym.Env):
             datum="WGS84",
             timezone="UTC",
         )
-        if self.environment_parameters["use_standard_atmosphere"]:
+        if self.environment_parameters["atmosphere_data_filename"] is None:
             self._rocketpy_env.set_atmospheric_model(type="standard_atmosphere")
         else:
-            if self.environment_parameters["atmosphere_data_path"] == "":
-                raise ValueError(
-                    "Atmosphere data path must be provided if not using standard atmosphere."
-                )
+            path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "data",
+                self.environment_parameters["atmosphere_data_filename"],
+            )
             self._rocketpy_env.set_atmospheric_model(
                 type="Ensemble",
-                file=self.environment_parameters["atmosphere_data_path"],
+                file=path,
                 dictionary="ECMWF",
             )
 

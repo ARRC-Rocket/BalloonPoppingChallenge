@@ -9,8 +9,7 @@ environment:
   latitude: 22.1749259 # (deg) latitude of the launch origin
   longitude: 120.8922531 # (deg) longitude of the launch origin
   elevation: 20.0 # (m) elevation above sea level
-  use_standard_atmosphere: true
-  atmosphere_data_path: ""
+  atmosphere_data_filename: null  # filename of the atmosphere data in the envs/data folder, or null to use standard atmosphere
 
 # Simulation timing configuration
 simulation:
