@@ -91,7 +91,7 @@ class AttitudeRateControlAgent(BaseAgent):
             launch = False
 
         if not np.isnan(observation["rocket_sensors"][:3]).any():
-            KP = [10.0, 10.0, 10.0]
+            KP = [100.0, 100.0, 100.0]
             KI = [0.0, 0.0, 5.0]
             KD = [0.0, 0.0, 0.0]
 

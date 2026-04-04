@@ -4,7 +4,7 @@ import numpy as np
 from BalloonPoppingGymEnv.agents.example_agent import AttitudeRateControlAgent
 
 scenario_number = 0
-agent_name = "no_action_agent"
+agent_name = "Attitude Rate Control Agent"
 agent_kwargs = {"launch_time": 1.0, "rate_targets": [0.0, 0.0, 0.1]}
 
 def run_for_development():
@@ -38,9 +38,9 @@ def run_for_development():
         print(f"simulation_time: {observation['simulation_time']:.2f} sec, reward: {reward:.2f}", end='\r')
 
     plt.subplot(2, 1, 1)
-    plt.plot(time, angular_rates[0], 'r.', label='x_rate')
-    plt.plot(time, angular_rates[1], 'g.', label='y_rate')
-    plt.plot(time, angular_rates[2], 'b.', label='z_rate')
+    plt.plot(time, angular_rates[0], 'r-', label='x_rate')
+    plt.plot(time, angular_rates[1], 'g-', label='y_rate')
+    plt.plot(time, angular_rates[2], 'b-', label='z_rate')
     plt.xlabel('Time (s)')
     plt.ylabel('Angular Rates (rad/s)')
     plt.xlim(0, 30)
@@ -64,6 +64,8 @@ def run_for_development():
 
     print(f"Scenario {scenario_number} evaluation completed with agent '{agent_name}'.")
     print(f"Final reward: {reward}")
+
+    # env._rocket_flight.all_info() # Uncomment to print all info from RocketPy
 
 def run_for_evaluation():
     from BalloonPoppingGymEnv.evaluation.evaluate import evaluate_scenario
