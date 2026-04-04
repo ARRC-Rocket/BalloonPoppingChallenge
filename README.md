@@ -22,15 +22,41 @@ git pull origin main
 git submodule update --remote --merge
 ```
 
-## Evaluation example
+## Examples
 
-```shell
-cd BalloonPoppingChallenge
-python .\BalloonPoppingGymEnv\evaluation\evaluate_scenario.py .\BalloonPoppingGymEnv\evaluation\configs\example_eval_cfg.yaml
-```
-You should see a rocket popping static balloons in the sky:
+1. Evaluate agent:
+    - Develop the agent in [/agents folder](./BalloonPoppingGymEnv/agents) by inheriting from [BaseAgent](./BalloonPoppingGymEnv/agents/base_agent.py) and implementing the `get_action` method.
+    - Update the evaluation configuration file in [/evaluation/configs folder](./BalloonPoppingGymEnv/evaluation/configs) to specify the scenario parameters and the agent to be evaluated.
+    - Run:
+        ```shell
+        cd BalloonPoppingChallenge
+        python .\BalloonPoppingGymEnv\evaluation\evaluate.py .\BalloonPoppingGymEnv\evaluation\configs\example_eval_cfg.yaml
+        ```
+    - You should see a rocket popping static balloons in the sky:
+        ![screen shot of scenario 0 running](doc/figures/scenario_0_screenshot.png)
 
-![screen shot of scenario 0 running](doc/figures/scenario_0_screenshot.png)
+2. Example code for development and debugging:
+    - Run the example script:
+        ```shell
+        cd BalloonPoppingChallenge
+        python .\doc\examples\run_env_agent.py
+        ```
+    - This will run the specified scenario with the example agent and print the final reward. You can modify the agent, scenario parameters, and other settings in the script for development and debugging purposes.
+
+## Modelling Details
+- Rocket flight modelling (RocketPy):
+    - The details can be found in the [RocketPy Reference](https://docs.rocketpy.org/en/latest/index.html)
+    - The coordinates are shown in the figure below:
+    ![Rocket coordinate frames](doc/figures/Coordinates.drawio.svg)
+- Balloon popping specific modelling:
+    - Balloons are modeled as spheres with a certain radius and mass.
+    - Balloon flights are simulated using [Monte-Carlo simulation](./ActiveRocketPy/rocketpy/simulation/monte_carlo.py) method provided by ActiveRocketPy. To use the [Flight](./ActiveRocketPy/rocketpy/simulation/flight.py) class of ActiveRocketPy, a small solid motor will push the balloon out-of rail. The balloon will then fly freely under the influence of gravity, buoyancy, wind, and atmospheric drag.
+    - The flight of each balloon is not affected by the rocket or other balloons.
+    - A balloon is considered popped if the distance between the path of the rocket (center of dry mass) and the center of balloon within a timestep is less than the radius of the balloon.
+    - Balloons release will be determined depends on the scenario parameters.
+    - There will be a single launch, and the aim is to pop as many balloons as possible.
+    - Launch time, inclination, and heading are determined by the agent.
+    - There will be disturbances, e.g., sensor noise, wind in the environment.
 
 ## Gymnasium Environment Operation
 There are three stages in the operation of the Gymnasium environment: reset, stepping, and termination.
@@ -71,26 +97,11 @@ The actions, observations, info, rewards in this environment are:
 ## Agent Development
 Agents for evaluation are placed in the [/agents folder](./BalloonPoppingGymEnv/agents). They should be implemented as a class that inherits from [BaseAgent](./BalloonPoppingGymEnv/agents/base_agent.py) and implements the `get_action` method. The agent can access the scenario parameters through `self.given_parameters`, as defined in `scenario_given_parameters.yaml` files in [/scenario_parameters folder](./BalloonPoppingGymEnv/envs/scenario_parameters/). Observations are passed throught the `get_action` method. The agent should output an action dictionary that matches the action space defined in the environment.
 
-## Evaluation
+## Evaluation details
 
 The evaluation script is located in [/evaluation folder](./BalloonPoppingGymEnv/evaluation). It takes a configuration file as input, which specifies the scenario parameters and the agent to be evaluated. The script runs the specified scenario with the given agent and outputs the results.
 
 ![flow chart of evaluation process](doc/figures/EvaluationFlowChart.drawio.svg)
-
-## Modelling Details
-- Rocket flight modelling (RocketPy)
-    - The details can be found in the [RocketPy Reference](https://docs.rocketpy.org/en/latest/index.html)
-    - The coordinates are shown in the figure below:
-    ![Rocket coordinate frames](doc/figures/Coordinates.drawio.svg)
-- Balloon popping specific modelling
-    - Balloons are modeled as spheres with a certain radius and mass.
-    - Balloon flights are simulated using [Monte-Carlo simulation](./ActiveRocketPy/rocketpy/simulation/monte_carlo.py) method provided by ActiveRocketPy. To use the [Flight](./ActiveRocketPy/rocketpy/simulation/flight.py) class of ActiveRocketPy, a small solid motor will push the balloon out-of rail. The balloon will then fly freely under the influence of gravity, buoyancy, wind, and atmospheric drag.
-    - The flight of each balloon is not affected by the rocket or other balloons.
-    - A balloon is considered popped if the distance between the path of the rocket (center of dry mass) and the center of balloon within a timestep is less than the radius of the balloon.
-    - Balloons release will be determined depends on the scenario parameters.
-    - There will be a single launch, and the aim is to pop as many balloons as possible.
-    - Launch time, inclination, and heading are determined by the agent.
-    - There will be disturbances, e.g., sensor noise, wind in the environment.
 
 ## Reference
 - [RocketPy GitHub](https://github.com/RocketPy/RocketPy)
