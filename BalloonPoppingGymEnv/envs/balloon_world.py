@@ -74,10 +74,8 @@ class BalloonPoppingEnv(gym.Env):
                     dtype=np.float64,
                 ),
                 "tvc": spaces.Box(
-                    low=-self.rocket_parameters["control"]["tvc_gimbal_range"]
-                    * np.ones(2),
-                    high=self.rocket_parameters["control"]["tvc_gimbal_range"]
-                    * np.ones(2),
+                    low=-self.rocket_parameters["control"]["gimbal_range"] * np.ones(2),
+                    high=self.rocket_parameters["control"]["gimbal_range"] * np.ones(2),
                     dtype=np.float64,
                 ),
                 "throttle": spaces.Box(
@@ -511,8 +509,7 @@ class BalloonPoppingEnv(gym.Env):
             heading=180,
             rail_length=0.1,
             max_time=self.simulation_parameters["max_time"],
-            # max_time_step=0.01,
-            # min_time_step=0.01,
+            # ode_solver="RK45",
             verbose=True,
             run_simulation=False,
         )
@@ -781,7 +778,8 @@ class BalloonPoppingEnv(gym.Env):
             )
 
         rocket.add_tvc(
-            gimbal_range=control_cfg["tvc_gimbal_range"],
+            gimbal_range=control_cfg["gimbal_range"],
+            gimbal_rate_limit=control_cfg["gimbal_rate_limit"],
             sampling_rate=control_cfg["control_frequency"],
             controller_function=tvc_controller_function,
             return_controller=False,
@@ -804,6 +802,7 @@ class BalloonPoppingEnv(gym.Env):
 
         rocket.add_roll_control(
             max_roll_torque=control_cfg["max_roll_torque"],
+            torque_rate_limit=control_cfg["torque_rate_limit"],
             sampling_rate=control_cfg["control_frequency"],
             controller_function=roll_controller_function,
             return_controller=False,
@@ -818,5 +817,6 @@ class BalloonPoppingEnv(gym.Env):
             time_overshoot=False,
             verbose=False,
             run_simulation=False,
-            ode_solver="BDF",  # BDF for stiff systems
+            rtol=1e-4,
+            # ode_solver="RK45",
         )

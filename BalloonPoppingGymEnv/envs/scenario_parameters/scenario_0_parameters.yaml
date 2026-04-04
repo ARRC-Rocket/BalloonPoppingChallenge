@@ -101,6 +101,8 @@ rocket:
     gnss_velocity_accuracy: 0.0
   control:
     control_frequency: 100
-    tvc_gimbal_range: 15
+    gimbal_range: 15
+    gimbal_rate_limit: 30
     max_roll_torque: 10
+    torque_rate_limit: 20
     throttle_range: [0.0, 1.0]
