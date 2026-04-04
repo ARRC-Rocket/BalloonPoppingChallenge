@@ -815,8 +815,8 @@ class BalloonPoppingEnv(gym.Env):
             rail_length=0.01,  # No rail since we directly set initial conditions to simulate launch
             initial_solution=self.initial_solution,
             max_time=self.simulation_parameters["max_time"],
-            min_time_step=self.simulation_parameters["time_step"] / 10,
             time_overshoot=False,
-            verbose=True,
+            verbose=False,
             run_simulation=False,
+            ode_solver="BDF",  # BDF for stiff systems
         )
