@@ -22,15 +22,41 @@ git pull origin main
 git submodule update --remote --merge
 ```
 
-## Evaluation example
+## Examples
 
-```shell
-cd BalloonPoppingChallenge
-python .\BalloonPoppingGymEnv\evaluation\evaluate_scenario.py .\BalloonPoppingGymEnv\evaluation\configs\example_eval_cfg.yaml
-```
-You should see a rocket popping static balloons in the sky:
+1. Evaluate agent:
+    - Develop the agent in [/agents folder](./BalloonPoppingGymEnv/agents) by inheriting from [BaseAgent](./BalloonPoppingGymEnv/agents/base_agent.py) and implementing the `get_action` method.
+    - Update the evaluation configuration file in [/evaluation/configs folder](./BalloonPoppingGymEnv/evaluation/configs) to specify the scenario parameters and the agent to be evaluated.
+    - Run:
+        ```shell
+        cd BalloonPoppingChallenge
+        python .\BalloonPoppingGymEnv\evaluation\evaluate.py .\BalloonPoppingGymEnv\evaluation\configs\example_eval_cfg.yaml
+        ```
+    - You should see a rocket popping static balloons in the sky:
+        ![screen shot of scenario 0 running](doc/figures/scenario_0_screenshot.png)
 
-![screen shot of scenario 0 running](doc/figures/scenario_0_screenshot.png)
+2. Example code for development and debugging:
+    - Run the example script:
+        ```shell
+        cd BalloonPoppingChallenge
+        python .\doc\examples\run_env_agent.py
+        ```
+    - This will run the specified scenario with the example agent and print the final reward. You can modify the agent, scenario parameters, and other settings in the script for development and debugging purposes.
+
+## Modelling Details
+- Rocket flight modelling (RocketPy):
+    - The details can be found in the [RocketPy Reference](https://docs.rocketpy.org/en/latest/index.html)
+    - The coordinates are shown in the figure below:
+    ![Rocket coordinate frames](doc/figures/Coordinates.drawio.svg)
+- Balloon popping specific modelling:
+    - Balloons are modeled as spheres with a certain radius and mass.
+    - Balloon flights are simulated using [Monte-Carlo simulation](./ActiveRocketPy/rocketpy/simulation/monte_carlo.py) method provided by ActiveRocketPy. To use the [Flight](./ActiveRocketPy/rocketpy/simulation/flight.py) class of ActiveRocketPy, a small solid motor will push the balloon out-of rail. The balloon will then fly freely under the influence of gravity, buoyancy, wind, and atmospheric drag.
+    - The flight of each balloon is not affected by the rocket or other balloons.
+    - A balloon is considered popped if the distance between the path of the rocket (center of dry mass) and the center of balloon within a timestep is less than the radius of the balloon.
+    - Balloons release will be determined depends on the scenario parameters.
+    - There will be a single launch, and the aim is to pop as many balloons as possible.
+    - Launch time, inclination, and heading are determined by the agent.
+    - There will be disturbances, e.g., sensor noise, wind in the environment.
 
 ## Gymnasium Environment Operation
 There are three stages in the operation of the Gymnasium environment: reset, stepping, and termination.
@@ -43,45 +69,39 @@ There are three stages in the operation of the Gymnasium environment: reset, ste
 The actions, observations, info, rewards in this environment are:
 - actions:
     - `launch`: a binary command to launch the rocket.
-    - `launch_inclination_heading`: a 2-element array [inclination, heading] representing the launch inclination (0-90 degrees) and heading angles (0-360 degrees from north).
-    - `tvc`: a 2-element array [TVC_x, TVC_y] representing the thrust vector control (TVC) gimbal angles in degrees.
+    - `launch_inclination_heading`: a 2-element array [inclination, heading] representing the launch inclination (0-90 degrees from horizontal) and heading angles (0-360 degrees from north).
+    - `tvc`: a 2-element array [TVC_x, TVC_y] representing the thrust vector control (TVC) gimbal angles (deg). Polarity: positive gimbal angles provide positive torques.
     - `throttle`: a scalar representing the throttle ratio between 0 and 1.
     - `roll`: a scalar representing the roll torque command in N-m.
 - observations:
     - `simulation_time`: the current simulation time in seconds.
     - `balloon_status`: a n-element array representing the status of each balloon (0: on the ground, 1: released, 2: popped). n is the number of balloons in the scenario.
-    - `balloon_states`: a n x 6 array representing the position (x, y, z) and velocity (vx, vy, vz) of each balloon.
-    - `rocket_sensors`: a 12-element array representing the rocket's sensor measurements (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ). 
+    - `balloon_states`: a n x 6 array representing the position (posX, posY, posZ) and velocity (velX, velY, velZ) of each balloon.
+        - Position is in the launch frame (relative to launch origin) in meters.
+        - Velocity is in the launch frame (relative to launch origin) in m/s.
+    - `rocket_sensors`: a 12-element array representing the rocket's sensor measurements (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ). Orientation of inertial sensors matches body frame.
         - Gyroscopes measure the angular velocity (rad/s) in the rocket body frame.
         - Accelerometers measure the linear acceleration (m/s²) in the rocket body frame.
-        - GNSS sensors measure the position (m) and velocity (m/s) in the launch frame (relative to launch position).
+        - GNSS sensors measure the position (m) and velocity (m/s) in the launch frame (relative to launch origin).
     - Note that the rocket's true states (e.g., attitude, angular velocity) are not directly observed by the agent, and the agent needs to infer them from the sensor measurements.
 - info:
-    - `rocket_states`: a 13-element array representing the rocket's true states (posX, posY, posZ, velX, velY, velZ, e0, e1, e2, e3, w1, w2, w3). These states are not observed and should not be used by the agent but can be used for development and debugging.
+    - `rocket_states`: a 13-element array representing the rocket's true states. These states are not observed and should not be used by the agent but can be used for development and debugging. The states are [posX, posY, posZ, velX, velY, velZ, e0, e1, e2, e3, wX, wY, wZ]:
+        - pos: position in the launch frame (relative to launch origin) in meters.
+        - vel: velocity in the launch frame (relative to launch origin) in m/s.
+        - e: quaternion representing the attitude of the rocket (e0, e1, e2, e3) relative to the launch frame.
+        - w: angular velocity in the rocket body frame in rad/s.
+
 - rewards:
     - The reward is calculated based on the number of balloons popped at each time step.
 
 ## Agent Development
 Agents for evaluation are placed in the [/agents folder](./BalloonPoppingGymEnv/agents). They should be implemented as a class that inherits from [BaseAgent](./BalloonPoppingGymEnv/agents/base_agent.py) and implements the `get_action` method. The agent can access the scenario parameters through `self.given_parameters`, as defined in `scenario_given_parameters.yaml` files in [/scenario_parameters folder](./BalloonPoppingGymEnv/envs/scenario_parameters/). Observations are passed throught the `get_action` method. The agent should output an action dictionary that matches the action space defined in the environment.
 
-## Evaluation
+## Evaluation details
 
 The evaluation script is located in [/evaluation folder](./BalloonPoppingGymEnv/evaluation). It takes a configuration file as input, which specifies the scenario parameters and the agent to be evaluated. The script runs the specified scenario with the given agent and outputs the results.
 
 ![flow chart of evaluation process](doc/figures/EvaluationFlowChart.drawio.svg)
-
-## Modelling Details
-- Rocket flight modelling (RocketPy)
-    - The details can be found in the [RocketPy Reference](https://docs.rocketpy.org/en/latest/index.html)
-- Balloon popping specific modelling
-    - Balloons are modeled as spheres with a certain radius and mass.
-    - Balloon flights are simulated using [Monte-Carlo simulation](./ActiveRocketPy/rocketpy/simulation/monte_carlo.py) method provided by ActiveRocketPy. To use the [Flight](./ActiveRocketPy/rocketpy/simulation/flight.py) class of ActiveRocketPy, a small solid motor will push the balloon out-of rail. The balloon will then fly freely under the influence of gravity, buoyancy, wind, and atmospheric drag.
-    - The flight of each balloon is not affected by the rocket or other balloons.
-    - A balloon is considered popped if the distance between the path of the rocket and the balloon within a timestep is less than the radius of the balloon.
-    - Balloons release will be determined depends on the scenario parameters.
-    - There will be a single launch, and the aim is to pop as many balloons as possible.
-    - Launch time, inclination, and heading are determined by the agent.
-    - There will be disturbances, e.g., sensor noise, wind in the environment.
 
 ## Reference
 - [RocketPy GitHub](https://github.com/RocketPy/RocketPy)
