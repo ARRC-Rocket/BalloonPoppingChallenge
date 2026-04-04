@@ -509,7 +509,6 @@ class BalloonPoppingEnv(gym.Env):
             heading=180,
             rail_length=0.1,
             max_time=self.simulation_parameters["max_time"],
-            # ode_solver="RK45",
             verbose=True,
             run_simulation=False,
         )
@@ -818,5 +817,4 @@ class BalloonPoppingEnv(gym.Env):
             verbose=False,
             run_simulation=False,
             rtol=1e-4,
-            # ode_solver="RK45",
         )
