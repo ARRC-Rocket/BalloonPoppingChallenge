@@ -779,7 +779,7 @@ class BalloonPoppingEnv(gym.Env):
         rocket.add_tvc(
             gimbal_range=control_cfg["gimbal_range"],
             gimbal_rate_limit=control_cfg["gimbal_rate_limit"],
-            sampling_rate=control_cfg["control_frequency"],
+            sampling_rate=1 / self.simulation_parameters["time_step"],
             controller_function=tvc_controller_function,
             return_controller=False,
         )
@@ -802,7 +802,7 @@ class BalloonPoppingEnv(gym.Env):
         rocket.add_roll_control(
             max_roll_torque=control_cfg["max_roll_torque"],
             torque_rate_limit=control_cfg["torque_rate_limit"],
-            sampling_rate=control_cfg["control_frequency"],
+            sampling_rate=1 / self.simulation_parameters["time_step"],
             controller_function=roll_controller_function,
             return_controller=False,
         )
