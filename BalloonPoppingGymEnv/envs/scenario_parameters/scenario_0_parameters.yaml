@@ -6,103 +6,101 @@ scenario:
 # Launch site and atmosphere setup
 environment:
   date: [2025, 7, 26, 0]
-  latitude: 22.1749259
-  longitude: 120.8922531
-  elevation: 20.0
-  use_standard_atmosphere: true
-  atmosphere_data_path: ""
+  latitude: 22.1749259 # (deg) latitude of the launch origin
+  longitude: 120.8922531 # (deg) longitude of the launch origin
+  elevation: 20.0 # (m) elevation above sea level
+  atmosphere_data_filename: null  # filename of the atmosphere data in the envs/data folder, or null to use standard atmosphere
 
 # Simulation timing configuration
 simulation:
-  time_step: 0.01
-  max_time: 100
+  time_step: 0.01 # (sec) time step for Gym environment, ActiveRocketPy controller, and balloon simulation
+  max_time: 100 # (sec) maximum simulation time of the scenario
 
 # Balloon model and uncertainty parameters
 balloon:
   release_interval: 1 # no actual effect in scenario 0
-  num: 10
-  radius: 1.5
-  mass: 0.8
-  inertia: [1, 1, 1]
+  num: 10 # number of balloons
+  radius: 1.5 # (m) radius of the balloon
+  mass: 0.8 # (kg) mass of the balloon
+  inertia: [1, 1, 1] # (kg*m^2) inertia of the balloon
   aero_coefficients:
     cL: 0.0
     cQ: 0.0
     cD: 1.0
     moment_damping: -0.01
-  stochastic:
-    latitude_std: 0.001
-    longitude_std: 0.001
-    mass_std: 0.2
-    volume_std: 0.5
-    inertia_std: 0.1
+  stochastic: # monte carlo stochastic parameters for generating balloons
+    latitude_std: 0.001 # (deg) standard deviation of latitude
+    longitude_std: 0.001 # (deg) standard deviation of longitude
+    mass_std: 0.2 # (kg) standard deviation of mass
+    volume_std: 0.5 # (m^3) standard deviation of volume
+    inertia_std: 0.1 # (kg*m^2) standard deviation of inertia
 
 # Rocket model parameters
 rocket:
   tank:
     liquid: HTP
-    liquid_density: 1390
+    liquid_density: 1390 # (kg/m^3) density of the liquid oxidizer
     gas: N2
-    gas_density: 68
-    radius: 0.133
-    height: 0.83
-    flux_time: 30
-    initial_liquid_mass: 13.9
-    initial_gas_mass: 2.13
-    liquid_mass_flow_rate_out: 0.425
+    gas_density: 68 # (kg/m^3) density of the gas
+    radius: 0.133 # (m) radius of the tank
+    height: 0.83 # (m) height of the tank
+    flux_time: 30 # (sec) flux time for the liquid oxidizer
+    initial_liquid_mass: 13.9 # (kg) initial mass of the liquid oxidizer
+    initial_gas_mass: 2.13 # (kg) initial mass of the gas
+    liquid_mass_flow_rate_out: 0.425 # (kg/s) mass flow rate of the liquid out of the tank at full thrust
   motor:
-    thrust_source: 1080
-    dry_mass: 0
-    dry_inertia: [0, 0, 0]
-    center_of_dry_mass_position: 0.15
-    burn_time: 30
-    grain_number: 1
-    grain_separation: 0
-    grain_outer_radius: 0.0843
-    grain_initial_inner_radius: 0.0295
-    grain_initial_height: 0.2757
-    grain_density: 900
-    nozzle_radius: 0.04425
-    throat_radius: 0.023
-    nozzle_position: 0
-    grains_center_of_mass_position: 0.13785
-    motor_position: -1.5925
+    thrust_source: 1080 # (N) thrust at full throttle
+    dry_mass: 0 # (kg) mass of the motor without fuel
+    dry_inertia: [0, 0, 0] # (kg*m^2) inertia of the motor without fuel
+    center_of_dry_mass_position: 0.15 # (m) position of the center of mass of the motor without fuel
+    burn_time: 30 # (sec) burn time of the motor
+    grain_number: 1 # number of grains in the motor
+    grain_separation: 0 # (m) separation between grains
+    grain_outer_radius: 0.0843 # (m) outer radius of the grain
+    grain_initial_inner_radius: 0.0295 # (m) initial inner radius of the grain
+    grain_initial_height: 0.2757 # (m) initial height of the grain
+    grain_density: 900 # (kg/m^3) density of the grain
+    nozzle_radius: 0.04425 # (m) radius of the nozzle
+    throat_radius: 0.023 # (m) radius of the throat
+    nozzle_position: 0 # (m) position of the nozzle (Origin of motor frame)
+    grains_center_of_mass_position: 0.13785 # (m) position of the center of mass of the grains (relative to the motor frame)
+    motor_position: -1.5925 # (m) position of the motor (relative to the rocket frame)
   rocket_body:
-    radius: 0.22
-    mass: 80
-    inertia: [26.54, 26.38, 1.6312]
-    center_of_mass_without_motor: -0.88
-    power_off_drag: 0.25
-    power_on_drag: 0.25
-    volume: null
+    radius: 0.22 # (m) radius of the rocket body
+    mass: 80 # (kg) mass of the rocket body without motor and fuel
+    inertia: [26.54, 26.38, 1.6312] # (kg*m^2) inertia of the rocket body without motor and fuel
+    center_of_mass_without_motor: -0.88 # (m) position of the center of mass without motor and fuel (relative to the rocket frame)
+    power_off_drag: 0.25 # drag coefficient when the rocket is powered off
+    power_on_drag: 0.25 # drag coefficient when the rocket is powered on
+    volume: null # (m^3) volume of the rocket body, used for calculating buoyancy
   nose:
-    length: 1
-    kind: vonKarman
-    position: 0.5
+    length: 1 # (m) length of the nose cone
+    kind: vonKarman # type of the nose cone
+    position: 0.5 # (m) position of the nose cone (relative to the rocket frame)
   fins:
-    useFins: true
-    n: 4
-    span: 0.4
-    root_chord: 0.5
-    tip_chord: 0.2
-    position: -1.0
+    useFins: true # whether to use fins in the simulation
+    n: 4 # number of fins
+    span: 0.4 # (m) span of the fins
+    root_chord: 0.5 # (m) root chord of the fins
+    tip_chord: 0.2 # (m) tip chord of the fins
+    position: -1.0 # (m) position of the fins (relative to the rocket frame)
   sensors:
-    sampling_rate: 100
-    gyro_position: -0.9
-    gyro_noise_density: 0.0
-    gyro_random_walk_density: 0.0
-    gyro_constant_bias: 0.0
-    accelerometer_position: -0.9
-    accelerometer_noise_density: 0.0
-    accelerometer_random_walk_density: 0.0
-    accelerometer_constant_bias: 0.0
-    gnss_position: 0
-    gnss_position_accuracy: 0.0
-    gnss_altitude_accuracy: 0.0
-    gnss_velocity_accuracy: 0.0
+    sampling_rate: 100 # (Hz) sampling rate of the sensors
+    gyro_position: -0.9 # (m) position of the gyroscope (relative to the rocket frame)
+    gyro_noise_density: 0.0 # (rad/s)/√Hz noise density of the gyroscope
+    gyro_random_walk_density: 0.0 # (rad/s^2)/√Hz random walk density of the gyroscope
+    gyro_constant_bias: 0.0 # (rad/s) constant bias of the gyroscope
+    accelerometer_position: -0.9 # (m) position of the accelerometer (relative to the rocket frame)
+    accelerometer_noise_density: 0.0 # (m/s^2)/√Hz noise density of the accelerometer
+    accelerometer_random_walk_density: 0.0 # (m/s^3)/√Hz random walk density of the accelerometer
+    accelerometer_constant_bias: 0.0 # (m/s^2) constant bias of the accelerometer
+    gnss_position: 0 # (m) position of the GNSS receiver (relative to the rocket frame)
+    gnss_position_accuracy: 0.0 # (m) position accuracy of the GNSS receiver
+    gnss_altitude_accuracy: 0.0 # (m) altitude accuracy of the GNSS receiver
+    gnss_velocity_accuracy: 0.0 # (m/s) velocity accuracy of the GNSS receiver
   control:
-    control_frequency: 100
-    gimbal_range: 15
-    gimbal_rate_limit: 30
-    max_roll_torque: 10
-    torque_rate_limit: 20
-    throttle_range: [0.0, 1.0]
+    gimbal_range: 15 # (deg) maximum gimbal angle in any direction
+    gimbal_rate_limit: 30 # (deg/s) maximum gimbal rate
+    max_roll_torque: 10 # (N*m) maximum roll torque
+    torque_rate_limit: 20 # (N*m/s) maximum roll torque rate
+    throttle_range: [0.0, 1.0] # range of the throttle (0 to 1)

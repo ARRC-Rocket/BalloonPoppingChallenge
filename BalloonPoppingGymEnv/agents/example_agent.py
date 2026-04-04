@@ -58,7 +58,7 @@ class RollControlAgent(BaseAgent):
 
         return {
             "launch": launch,
-            "launch_inclination_heading": np.array([90, 180]),
+            "launch_inclination_heading": np.array([90, 0]),
             "tvc": np.array([0, 0]),
             "roll": roll_torque_cmd,
             "throttle": np.array([1]),
@@ -118,7 +118,7 @@ class AttitudeRateControlAgent(BaseAgent):
 
         return {
             "launch": launch,
-            "launch_inclination_heading": np.array([90, 180]),
+            "launch_inclination_heading": np.array([90, 0]),
             "tvc": np.array([torque_cmd[0], torque_cmd[1]]),
             "roll": torque_cmd[2],
             "throttle": np.array([1]),
