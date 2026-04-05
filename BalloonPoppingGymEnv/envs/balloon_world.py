@@ -1,3 +1,4 @@
+import copy
 import os
 
 import gymnasium as gym
@@ -423,13 +424,14 @@ class BalloonPoppingEnv(gym.Env):
         self._np_random.shuffle(self._balloon_release_at_step)
 
     def __generate_balloon_flights(self):
+        monte_carlo_environment = copy.deepcopy(self._rocketpy_env)
 
         lat = self.environment_parameters["latitude"]
         lon = self.environment_parameters["longitude"]
         lat_std = self.balloon_parameters["stochastic"]["latitude_std"]
         lon_std = self.balloon_parameters["stochastic"]["longitude_std"]
         stochastic_env = StochasticEnvironment(
-            environment=self._rocketpy_env,
+            environment=monte_carlo_environment,
             latitude=(
                 lat - lat_std,
                 lat + lat_std,
@@ -507,7 +509,7 @@ class BalloonPoppingEnv(gym.Env):
 
         flight = Flight(
             rocket=Balloon,
-            environment=self._rocketpy_env,
+            environment=monte_carlo_environment,
             inclination=90,
             heading=180,
             rail_length=0.1,
@@ -689,7 +691,10 @@ class BalloonPoppingEnv(gym.Env):
             dry_mass=motor_cfg["dry_mass"],
             dry_inertia=tuple(motor_cfg["dry_inertia"]),
             center_of_dry_mass_position=motor_cfg["center_of_dry_mass_position"],
-            burn_time=(self.initial_solution[0], motor_cfg["burn_time"] + self.initial_solution[0]),
+            burn_time=(
+                self.initial_solution[0],
+                motor_cfg["burn_time"] + self.initial_solution[0],
+            ),
             reshape_thrust_curve=False,
             grain_number=motor_cfg["grain_number"],
             grain_separation=motor_cfg["grain_separation"],
