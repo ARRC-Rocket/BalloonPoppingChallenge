@@ -668,7 +668,10 @@ class BalloonPoppingEnv(gym.Env):
         oxidizer_tank = MassFlowRateBasedTank(
             name="oxidizer_tank",
             geometry=tank_shape,
-            flux_time=tank_cfg["flux_time"],
+            flux_time=(
+                self.initial_solution[0],
+                self.initial_solution[0] + tank_cfg["flux_time"],
+            ),
             initial_liquid_mass=tank_cfg["initial_liquid_mass"],
             initial_gas_mass=tank_cfg["initial_gas_mass"],
             liquid_mass_flow_rate_in=0,
@@ -686,7 +689,7 @@ class BalloonPoppingEnv(gym.Env):
             dry_mass=motor_cfg["dry_mass"],
             dry_inertia=tuple(motor_cfg["dry_inertia"]),
             center_of_dry_mass_position=motor_cfg["center_of_dry_mass_position"],
-            burn_time=motor_cfg["burn_time"],
+            burn_time=(self.initial_solution[0], motor_cfg["burn_time"] + self.initial_solution[0]),
             reshape_thrust_curve=False,
             grain_number=motor_cfg["grain_number"],
             grain_separation=motor_cfg["grain_separation"],
