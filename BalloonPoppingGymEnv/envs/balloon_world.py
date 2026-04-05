@@ -703,8 +703,7 @@ class BalloonPoppingEnv(gym.Env):
         )
 
         # Add tank to motor
-        tank_position = -tank_cfg["height"] / 2 - motor_cfg["motor_position"]
-        hybrid_motor.add_tank(tank=oxidizer_tank, position=tank_position)
+        hybrid_motor.add_tank(tank=oxidizer_tank, position=tank_cfg["tank_position"])
 
         # Create rocket body from parameters
         rocket_cfg = self.rocket_parameters["rocket_body"]

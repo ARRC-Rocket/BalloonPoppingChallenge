@@ -48,6 +48,7 @@ rocket:
     initial_liquid_mass: 13.9 # (kg) initial mass of the liquid oxidizer
     initial_gas_mass: 2.13 # (kg) initial mass of the gas
     liquid_mass_flow_rate_out: 0.425 # (kg/s) mass flow rate of the liquid oxidizer out of the tank at full thrust
+    tank_position: 1.4 # (m) position of the center of the tank (relative to the motor frame)
   motor:
     thrust_source: 1080 # (N) thrust at full throttle
     dry_mass: 0 # (kg) mass of the motor without fuel
@@ -62,35 +63,35 @@ rocket:
     grain_density: 900 # (kg/m^3) density of the grain
     nozzle_radius: 0.04425 # (m) radius of the nozzle
     throat_radius: 0.023 # (m) radius of the throat
-    nozzle_position: 0 # (m) position of the nozzle (Origin of motor frame)
+    nozzle_position: 0 # (m) position of the nozzle (relative to the motor frame)
     grains_center_of_mass_position: 0.13785 # (m) position of the center of mass of the grains (relative to the motor frame)
-    motor_position: -1.5925 # (m) position of the motor (relative to the rocket frame)
+    motor_position: -0.8 # (m) position of the motor frame origin (relative to the rocket frame)
   rocket_body:
     radius: 0.22 # (m) radius of the rocket body
     mass: 80 # (kg) mass of the rocket body without motor and fuel
     inertia: [26.54, 26.38, 1.6312] # (kg*m^2) inertia of the rocket body without motor and fuel
-    center_of_mass_without_motor: -0.88 # (m) position of the center of mass without motor and fuel (relative to the rocket frame)
+    center_of_mass_without_motor: 0 # (m) position of the center of mass without motor and fuel (relative to the rocket frame)
     power_off_drag: 0.25 # drag coefficient when the rocket is powered off
     power_on_drag: 0.25 # drag coefficient when the rocket is powered on
     volume: null # (m^3) volume of the rocket body, used for calculating buoyancy
   nose:
     length: 1 # (m) length of the nose cone
     kind: vonKarman # type of the nose cone
-    position: 0.5 # (m) position of the nose cone (relative to the rocket frame)
+    position: 1.5 # (m) position of the nose cone tip (relative to the rocket frame)
   fins:
     useFins: true
     n: 4
     span: 0.4 # (m) span of the fins
     root_chord: 0.5 # (m) root chord of the fins
     tip_chord: 0.2 # (m) tip chord of the fins
-    position: -1.0 # (m) position of the fins (relative to the rocket frame)
+    position: -0.3 # (m) position of the fins (relative to the rocket frame)
   sensors:
     sampling_rate: 100
-    gyro_position: -0.9 # (m) position of the gyroscope (relative to the rocket frame)
+    gyro_position: 0 # (m) position of the gyroscope (relative to the rocket frame)
     gyro_noise_density: 0.0 # (rad/s)/√Hz noise density of the gyroscope
     gyro_random_walk_density: 0.0 # (rad/s^2)/√Hz random walk density of the gyroscope
     gyro_constant_bias: 0.0 # (rad/s) constant bias of the gyroscope
-    accelerometer_position: -0.9 # (m) position of the accelerometer (relative to the rocket frame)
+    accelerometer_position: 0 # (m) position of the accelerometer (relative to the rocket frame)
     accelerometer_noise_density: 0.0 # (m/s^2)/√Hz noise density of the accelerometer
     accelerometer_random_walk_density: 0.0 # (m/s^3)/√Hz random walk density of the accelerometer
     accelerometer_constant_bias: 0.0 # (m/s^2) constant bias of the accelerometer
