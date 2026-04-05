@@ -150,7 +150,7 @@ class NavigationAgent(BaseAgent):
             self.inclination_heading[0], self.inclination_heading[1]
         )
         # State vector: [x, y, z, vx, vy, vz, e0, e1, e2, e3]
-        self.states = [
+        self.states = np.array([
             0,  # x position
             0,  # y position
             self.given_parameters["environment"]["elevation"],  # z position
@@ -161,7 +161,7 @@ class NavigationAgent(BaseAgent):
             e1,  # quaternion e1
             e2,  # quaternion e2
             e3,  # quaternion e3
-        ]
+        ])
 
         self.gyro_prev = np.array([0.0, 0.0, 0.0])
         self.vel_prev = np.array([0.0, 0.0, 0.0])
@@ -181,8 +181,8 @@ class NavigationAgent(BaseAgent):
 
         if not np.isnan(observation["rocket_sensors"][:3]).any():
             # start navigation after launch
-            gyro = observation["rocket_sensors"][:3] - self.given_parameters["rocket"]["sensors"]["gyro_bias"]
-            accel = observation["rocket_sensors"][3:6] - self.given_parameters["rocket"]["sensors"]["accel_bias"]
+            gyro = observation["rocket_sensors"][:3] - self.given_parameters["rocket"]["sensors"]["gyro_constant_bias"]
+            accel = observation["rocket_sensors"][3:6] - self.given_parameters["rocket"]["sensors"]["accelerometer_constant_bias"]
 
             # Step 1: Update attitude
             gyro_increment = (gyro + self.gyro_prev) * (1 / self.sensor_frequency) / 2
@@ -198,17 +198,17 @@ class NavigationAgent(BaseAgent):
             new_e3 = e0 * dz + e1 * dy - e2 * dx + e3 * dw
 
             norm = np.sqrt(new_e0**2 + new_e1**2 + new_e2**2 + new_e3**2)
-            self.states[6:10] = [new_e0 / norm, new_e1 / norm, new_e2 / norm, new_e3 / norm]
+            self.states[6:10] = np.array([new_e0 / norm, new_e1 / norm, new_e2 / norm, new_e3 / norm])
 
             # Step 2: Update velocity and position
             # Rotate body-frame accel to local frame via q ⊗ v_pure ⊗ q* (Rodrigues form)
             q_vec = np.array(self.states[7:10])  # [e1, e2, e3]
             t = 2.0 * np.cross(q_vec, accel)
-            accel_lframe = accel + self.states[6] * t + np.cross(q_vec, t) + self.gravity
+            accel_lframe = accel + self.states[6] * t + np.cross(q_vec, t) - self.gravity
             accel_increment = (accel_lframe + self.accel_prev) * (1 / self.sensor_frequency) / 2
-            self.states[3:6] = [self.states[i + 3] + accel_increment[i] for i in range(3)]
+            self.states[3:6] = np.array([self.states[i + 3] + accel_increment[i] for i in range(3)])
             vel_increment = (self.states[3:6] + self.vel_prev) * (1 / self.sensor_frequency) / 2
-            self.states[0:3] = [self.states[i] + vel_increment[i] for i in range(3)]
+            self.states[0:3] = np.array([self.states[i] + vel_increment[i] for i in range(3)])
 
             self.gyro_prev = gyro
             self.vel_prev = self.states[3:6]

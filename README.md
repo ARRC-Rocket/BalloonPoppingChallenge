@@ -43,6 +43,14 @@ git submodule update --remote --merge
         ```
     - This will run the specified scenario with the example agent and print the final reward. You can modify the agent, scenario parameters, and other settings in the script for development and debugging purposes.
 
+3. Example code for state estimation:
+    - Run the example script:
+        ```shell
+        cd BalloonPoppingChallenge
+        python .\doc\examples\test_navigation_agent.py
+        ```
+    - This will run the specified scenario with the example navigation agent. The comparison between the estimated and ground truth attitude and velocity is plotted.
+
 ## Modelling Details
 - Rocket flight modelling (RocketPy):
     - The details can be found in the [RocketPy Reference](https://docs.rocketpy.org/en/latest/index.html)
