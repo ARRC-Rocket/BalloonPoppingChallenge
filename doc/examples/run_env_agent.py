@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-from BalloonPoppingGymEnv.agents.example_agent import AttitudeRateControlAgent
+from BalloonPoppingGymEnv.agents.example_agents import AttitudeRateControlAgent
 
 scenario_number = 0
 agent_name = "Attitude Rate Control Agent"

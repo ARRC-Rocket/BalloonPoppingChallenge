@@ -43,6 +43,14 @@ git submodule update --remote --merge
         ```
     - This will run the specified scenario with the example agent and print the final reward. You can modify the agent, scenario parameters, and other settings in the script for development and debugging purposes.
 
+3. Example code for state estimation:
+    - Run the example script:
+        ```shell
+        cd BalloonPoppingChallenge
+        python .\doc\examples\test_navigation_agent.py
+        ```
+    - This will run the specified scenario with the example navigation agent. The comparison between the estimated and ground truth attitude and velocity is plotted.
+
 ## Modelling Details
 - Rocket flight modelling (RocketPy):
     - The details can be found in the [RocketPy Reference](https://docs.rocketpy.org/en/latest/index.html)
@@ -79,9 +87,9 @@ The actions, observations, info, rewards in this environment are:
     - `balloon_states`: a n x 6 array representing the position (posX, posY, posZ) and velocity (velX, velY, velZ) of each balloon.
         - Position is in the launch frame (relative to launch origin) in meters.
         - Velocity is in the launch frame (relative to launch origin) in m/s.
-    - `rocket_sensors`: a 12-element array representing the rocket's sensor measurements (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ). Orientation of inertial sensors matches body frame.
+    - `rocket_sensors`: a 12-element array representing the rocket's sensor measurements (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ). Orientation of inertial sensors matches body frame. The measurements will be nan before launch action.
         - Gyroscopes measure the angular velocity (rad/s) in the rocket body frame.
-        - Accelerometers measure the linear acceleration (m/s²) in the rocket body frame.
+        - Accelerometers measure the linear acceleration (m/s²) in the rocket body frame. Gravity is included in the accelerometer measurements.
         - GNSS sensors measure the position (m) and velocity (m/s) in the launch frame (relative to launch origin).
     - Note that the rocket's true states (e.g., attitude, angular velocity) are not directly observed by the agent, and the agent needs to infer them from the sensor measurements.
 - info:

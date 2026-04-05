@@ -95,7 +95,7 @@ class BalloonPoppingEnv(gym.Env):
             }
         )
 
-        # Create environment for balloon flights and rocket simulation
+        # Create ActiveRocketPy environment for balloon flights and rocket simulation
         self.__create_environment()
 
         # Graphics-related attributes
@@ -146,10 +146,14 @@ class BalloonPoppingEnv(gym.Env):
         self.num_timesteps = self._balloon_flights.shape[2]
         self._balloon_states = self._balloon_flights[:, :, self.current_step]
         self._rocket_sensors = np.full(12, np.nan)
+        self._rocket_states = np.full(13, np.nan)
 
         observation = self._get_obs()
         info = self._get_info()
 
+        self.render_canvas = None
+        self.render_balloons = None
+        self.render_rocket = None
         self._render_frame()
 
         return observation, info
@@ -623,18 +627,10 @@ class BalloonPoppingEnv(gym.Env):
         x_init, y_init, z_init = 0, 0, self.environment_parameters["elevation"]
         vx_init, vy_init, vz_init = 0, 0, 0
         w1_init, w2_init, w3_init = 0, 0, 0
-        # Initialize attitude
-        # Precession / Heading Angle
-        psi_init = np.radians(-heading)
-        # Nutation / Attitude Angle
-        theta_init = np.radians(inclination - 90)
-        # Spin / Bank Angle
-        phi_init = 0
 
-        # 3-1-3 Euler Angles to Euler Parameters
-        e0_init, e1_init, e2_init, e3_init = euler313_to_quaternions(
-            phi_init, theta_init, psi_init
-        )
+        # Initialize attitude
+        e0_init, e1_init, e2_init, e3_init = get_initial_attitude(inclination, heading)
+
         # Store initial conditions
         self.initial_solution = [
             t_initial,
@@ -761,6 +757,7 @@ class BalloonPoppingEnv(gym.Env):
             noise_density=sensors_cfg["accelerometer_noise_density"],
             random_walk_density=sensors_cfg["accelerometer_random_walk_density"],
             constant_bias=sensors_cfg["accelerometer_constant_bias"],
+            consider_gravity=True,
         )
         gnss = GnssReceiver(
             sampling_rate=sensors_cfg["sampling_rate"],
@@ -828,3 +825,19 @@ class BalloonPoppingEnv(gym.Env):
             run_simulation=False,
             rtol=1e-4,
         )
+
+
+# Helper function to convert inclination and heading to initial attitude quaternions
+def get_initial_attitude(inclination, heading):
+    # Precession / Heading Angle
+    psi_init = np.radians(-heading)
+    # Nutation / Attitude Angle
+    theta_init = np.radians(inclination - 90)
+    # Spin / Bank Angle
+    phi_init = 0
+
+    # 3-1-3 Euler Angles to Euler Parameters
+    e0_init, e1_init, e2_init, e3_init = euler313_to_quaternions(
+        phi_init, theta_init, psi_init
+    )
+    return e0_init, e1_init, e2_init, e3_init
