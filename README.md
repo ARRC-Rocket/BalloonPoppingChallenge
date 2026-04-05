@@ -81,7 +81,7 @@ The actions, observations, info, rewards in this environment are:
         - Velocity is in the launch frame (relative to launch origin) in m/s.
     - `rocket_sensors`: a 12-element array representing the rocket's sensor measurements (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ). Orientation of inertial sensors matches body frame.
         - Gyroscopes measure the angular velocity (rad/s) in the rocket body frame.
-        - Accelerometers measure the linear acceleration (m/s²) in the rocket body frame.
+        - Accelerometers measure the linear acceleration (m/s²) in the rocket body frame. Gravity is included in the accelerometer measurements.
         - GNSS sensors measure the position (m) and velocity (m/s) in the launch frame (relative to launch origin).
     - Note that the rocket's true states (e.g., attitude, angular velocity) are not directly observed by the agent, and the agent needs to infer them from the sensor measurements.
 - info:

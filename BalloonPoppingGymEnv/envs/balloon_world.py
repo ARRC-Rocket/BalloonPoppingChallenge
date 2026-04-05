@@ -757,6 +757,7 @@ class BalloonPoppingEnv(gym.Env):
             noise_density=sensors_cfg["accelerometer_noise_density"],
             random_walk_density=sensors_cfg["accelerometer_random_walk_density"],
             constant_bias=sensors_cfg["accelerometer_constant_bias"],
+            consider_gravity=True,
         )
         gnss = GnssReceiver(
             sampling_rate=sensors_cfg["sampling_rate"],
