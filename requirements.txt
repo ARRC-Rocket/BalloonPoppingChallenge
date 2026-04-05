@@ -1,2 +1,2 @@
-./ActiveRocketPy
+./ActiveRocketPy[all]
 -e .
