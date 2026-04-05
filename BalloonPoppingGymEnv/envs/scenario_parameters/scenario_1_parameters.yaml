@@ -5,11 +5,11 @@ scenario:
 
 # Launch site and atmosphere setup
 environment:
-  date: [2025, 7, 26, 0]
+  date: [2025, 7, 25, 8]
   latitude: 22.1749259 # (deg) latitude of the launch origin
   longitude: 120.8922531 # (deg) longitude of the launch origin
   elevation: 20.0 # (m) elevation above sea level
-  atmosphere_data_filename: null # filename of the atmosphere data in the envs/data folder, or null to use standard atmosphere
+  atmosphere_data_filename: TW_Cup_250726_NetCDF4_Ensemble.nc # filename of the atmosphere data in the envs/data folder, or null to use standard atmosphere
 
 # Simulation timing configuration
 simulation:
@@ -19,7 +19,7 @@ simulation:
 # Balloon model and uncertainty parameters
 balloon:
   release_interval: 1 # (sec) time interval between balloon releases
-  num: 20 # number of balloons
+  num: 100 # number of balloons
   radius: 1.5 # (m) radius of the balloon
   mass: 0.8 # (kg) mass of the balloon
   inertia: [1, 1, 1] # (kg*m^2) inertia of the balloon
