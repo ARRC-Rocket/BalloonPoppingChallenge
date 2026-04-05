@@ -87,7 +87,7 @@ The actions, observations, info, rewards in this environment are:
     - `balloon_states`: a n x 6 array representing the position (posX, posY, posZ) and velocity (velX, velY, velZ) of each balloon.
         - Position is in the launch frame (relative to launch origin) in meters.
         - Velocity is in the launch frame (relative to launch origin) in m/s.
-    - `rocket_sensors`: a 12-element array representing the rocket's sensor measurements (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ). Orientation of inertial sensors matches body frame.
+    - `rocket_sensors`: a 12-element array representing the rocket's sensor measurements (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ). Orientation of inertial sensors matches body frame. The measurements will be nan before launch action.
         - Gyroscopes measure the angular velocity (rad/s) in the rocket body frame.
         - Accelerometers measure the linear acceleration (m/s²) in the rocket body frame. Gravity is included in the accelerometer measurements.
         - GNSS sensors measure the position (m) and velocity (m/s) in the launch frame (relative to launch origin).
