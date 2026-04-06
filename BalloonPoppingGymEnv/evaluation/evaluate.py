@@ -152,7 +152,7 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         raise ValueError(
             "Configuration file path is required. "
-            "Usage: python evaluate_scenario.py <path_to_eval_config.yaml>"
+            "Usage: python evaluate.py <path_to_eval_config.yaml>"
         )
 
     eval_cfg_path = sys.argv[1]
