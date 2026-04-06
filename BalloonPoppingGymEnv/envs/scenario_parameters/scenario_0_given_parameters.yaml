@@ -24,6 +24,7 @@ rocket:
     - initial_liquid_mass
     - initial_gas_mass
     - liquid_mass_flow_rate_out
+    - tank_position
   motor:
     - thrust_source
     - dry_mass
