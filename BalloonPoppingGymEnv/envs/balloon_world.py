@@ -75,7 +75,7 @@ class BalloonPoppingEnv(gym.Env):
         # tvc, roll, and throttling actions
         self.action_space = spaces.Dict(
             {
-                "launch": spaces.MultiBinary(1),
+                "launch": spaces.Box(low=0, high=1, shape=(), dtype=bool),
                 "launch_inclination_heading": spaces.Box(
                     low=np.array([0, 0]),
                     high=np.array([90, 360]),
@@ -90,12 +90,13 @@ class BalloonPoppingEnv(gym.Env):
                 "throttle": spaces.Box(
                     low=self.rocket_parameters["control"]["throttle_range"][0],
                     high=self.rocket_parameters["control"]["throttle_range"][1],
-                    shape=(1,),
+                    shape=(),
                     dtype=np.float64,
                 ),
                 "roll": spaces.Box(
                     low=-self.rocket_parameters["control"]["max_roll_torque"],
                     high=self.rocket_parameters["control"]["max_roll_torque"],
+                    shape=(),
                     dtype=np.float64,
                 ),
             }
@@ -135,7 +136,9 @@ class BalloonPoppingEnv(gym.Env):
 
         # Scenario 0: hello world with static balloons
         if self.scenario_parameters["number"] == 0:
-            self._balloon_status = np.ones((self.balloon_parameters["num"], 1), dtype=int)
+            self._balloon_status = np.ones(
+                (self.balloon_parameters["num"], 1), dtype=int
+            )
             num_balloons = self._balloon_flights.shape[0]
 
             # Spaced 40 m apart
@@ -145,7 +148,9 @@ class BalloonPoppingEnv(gym.Env):
             # z = constant per balloon
             self._balloon_flights[:, 2, :] = z_values[:, None]
         else:
-            self._balloon_status = np.zeros((self.balloon_parameters["num"], 1), dtype=int)
+            self._balloon_status = np.zeros(
+                (self.balloon_parameters["num"], 1), dtype=int
+            )
 
         self.rocket_launched = False
         self.current_step = 0
