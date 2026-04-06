@@ -214,6 +214,8 @@ class BalloonPoppingEnv(gym.Env):
         _timeout = self.current_step >= self.num_timesteps - 1
         if _timeout:
             print(f"Terminated: Reached max time")
+            self._rocket_flight.post_process_simulation()
+            self._rocket_flight.initialize_prints_plots()
         elif _rocket_finished:
             print(f"Terminated: Rocket flight finished")
         terminated = _timeout or _rocket_finished
