@@ -1,6 +1,6 @@
 """
 This example shows how to define agents so that they can be systematically run
-in a specific environment (important for agent evaluation purpuses)
+in a specific environment (important for agent evaluation purposes)
 
 """
 
@@ -180,7 +180,11 @@ class NavigationAgent(BaseAgent):
             gyro_increment = (gyro + self.gyro_prev) * (1 / self.sensor_frequency) / 2
             angle = np.linalg.norm(gyro_increment)
             dw = np.cos(angle / 2)
-            dx, dy, dz = np.sin(angle / 2) * gyro_increment / angle
+            dx, dy, dz = (
+                np.sin(angle / 2) * gyro_increment / angle
+                if angle > 1e-12
+                else np.array([0.0, 0.0, 0.0])
+            )
 
             e0, e1, e2, e3 = self.states[6:10]
             # Hamilton right-multiplication: q_new = q_old ⊗ q_delta
