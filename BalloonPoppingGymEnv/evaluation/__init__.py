@@ -2,4 +2,4 @@
 
 from .evaluate import evaluate_scenario
 
-__all__ = ["evaluate"]
+__all__ = ["evaluate_scenario"]
