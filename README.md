@@ -51,6 +51,10 @@ git submodule update --remote --merge
         ```
     - This will run the specified scenario with the example navigation agent. The comparison between the estimated and ground truth attitude and velocity is plotted.
 
+4. Colab notebook example:
+    - Open the [evaluate_scenario_colab.ipynb](./doc/examples/evaluate_scenario_colab.ipynb) notebook in Google Colab.
+    - Follow the instructions in the notebook to run the evaluation in the cloud.
+
 ## Modelling Details
 - Rocket flight modelling (RocketPy):
     - The details can be found in the [RocketPy Reference](https://docs.rocketpy.org/en/latest/index.html)
