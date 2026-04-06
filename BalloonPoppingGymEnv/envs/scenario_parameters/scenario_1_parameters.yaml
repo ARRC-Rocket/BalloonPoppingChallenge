@@ -14,12 +14,12 @@ environment:
 # Simulation timing configuration
 simulation:
   time_step: 0.01 # (sec) time step for Gym environment, ActiveRocketPy controller, and balloon simulation
-  max_time: 100 # (sec) maximum simulation time of the scenario
+  max_time: 150 # (sec) maximum simulation time of the scenario
 
 # Balloon model and uncertainty parameters
 balloon:
-  release_interval: 1 # (sec) time interval between balloon releases
-  num: 50 # number of balloons
+  release_interval: 0.5 # (sec) time interval between balloon releases
+  num: 100 # number of balloons
   radius: 1.5 # (m) radius of the balloon
   mass: 0.8 # (kg) mass of the balloon
   inertia: [1, 1, 1] # (kg*m^2) inertia of the balloon
