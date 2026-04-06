@@ -10,15 +10,12 @@ from BalloonPoppingGymEnv.agents.base_agent import BaseAgent
 from BalloonPoppingGymEnv.envs.balloon_world import get_initial_attitude
 
 
-class RollControlAgent(BaseAgent):
-    """An agent that controls roll using a PID controller and launches at t=1s"""
+class SineCommandAgent(BaseAgent):
+    """An open loop agent that sends sine commands for all control actions"""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args)
-        # Initialize an array to store roll rate errors for PID control
-        self.roll_rate_errors = np.array([])
-        # Default target roll rate is 0 rad/s
-        self.roll_rate_target = kwargs.get("roll_rate_target", 0.0)
+        self.launch_time = kwargs.get("launch_time", 1.0)
 
     def get_action(self, observation):
         """compute agent's action given observation
@@ -26,43 +23,26 @@ class RollControlAgent(BaseAgent):
         This function is necessary to define as it overrides
         an abstract method
         """
-        sensor_frequency = self.given_parameters["rocket"]["sensors"]["sampling_rate"]
 
-        if observation["simulation_time"] >= 1.0:
+        t = observation["simulation_time"]
+
+        if t >= self.launch_time:
             launch = True
         else:
             launch = False
 
-        if not np.isnan(observation["rocket_sensors"][:3]).any():
-            KP = 50.0
-            KI = 1.0
-            KD = 0.0
-
-            self.roll_rate_errors = np.append(
-                self.roll_rate_errors,
-                self.roll_rate_target - observation["rocket_sensors"][2],
-            )
-            roll_rate_error_integral = np.sum(self.roll_rate_errors) / sensor_frequency
-            roll_rate_error_derivative = (
-                (self.roll_rate_errors[-1] - self.roll_rate_errors[-2])
-                * sensor_frequency
-                if len(self.roll_rate_errors) > 1
-                else 0
-            )
-            roll_torque_cmd = (
-                KP * self.roll_rate_errors[-1]
-                + KI * roll_rate_error_integral
-                + KD * roll_rate_error_derivative
-            )
-        else:
-            roll_torque_cmd = 0.0
+        t = t - self.launch_time  # shift time so that sine commands start at launch
+        tvc_x_cmd = 0.01 * np.sin(2 * np.pi * 0.5 * t)
+        tvc_y_cmd = 0.01 * np.sin(2 * np.pi * 0.5 * t + np.pi / 2)
+        roll_torque_cmd = 0.01 * np.sin(2 * np.pi * 0.5 * t)
+        throttle_cmd = 0.9 + 0.1 * np.sin(2 * np.pi * 0.5 * t)
 
         return {
             "launch": launch,
             "launch_inclination_heading": np.array([90, 0]),
-            "tvc": np.array([0, 0]),
+            "tvc": np.array([tvc_x_cmd, tvc_y_cmd]),
             "roll": roll_torque_cmd,
-            "throttle": np.array([1]),
+            "throttle": throttle_cmd,
         }
 
 
@@ -122,7 +102,7 @@ class AttitudeRateControlAgent(BaseAgent):
             "launch_inclination_heading": np.array([90, 0]),
             "tvc": np.array([torque_cmd[0], torque_cmd[1]]),
             "roll": torque_cmd[2],
-            "throttle": 0.95
+            "throttle": 1.0,
         }
 
 
@@ -243,5 +223,5 @@ class NavigationAgent(BaseAgent):
             "launch_inclination_heading": self.inclination_heading,
             "tvc": np.array([0.0, 0.0]),
             "roll": 0.0,
-            "throttle": np.array([1]),
+            "throttle": 1.0,
         }

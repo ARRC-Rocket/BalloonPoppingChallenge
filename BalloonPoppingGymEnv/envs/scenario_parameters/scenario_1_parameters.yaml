@@ -68,7 +68,7 @@ rocket:
     motor_position: -0.8 # (m) position of the motor frame origin (relative to the rocket frame)
   rocket_body:
     radius: 0.22 # (m) radius of the rocket body
-    mass: 80 # (kg) mass of the rocket body without motor and fuel
+    mass: 70 # (kg) mass of the rocket body without motor and fuel
     inertia: [26.54, 26.38, 1.6312] # (kg*m^2) inertia of the rocket body without motor and fuel
     center_of_mass_without_motor: 0 # (m) position of the center of mass without motor and fuel (relative to the rocket frame)
     power_off_drag: 0.25 # drag coefficient when the rocket is powered off

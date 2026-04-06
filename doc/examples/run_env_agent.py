@@ -1,11 +1,11 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-from BalloonPoppingGymEnv.agents.example_agents import AttitudeRateControlAgent
+from BalloonPoppingGymEnv.agents.example_agents import SineCommandAgent
 
 scenario_number = 0
-agent_name = "Attitude Rate Control Agent"
-agent_kwargs = {"launch_time": 1.0, "rate_targets": [0.0, 0.0, 0.1]}
+agent_name = "Sine Command Agent"
+agent_kwargs = {"launch_time": 1.0}
 
 def run_for_development():
     from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
@@ -18,7 +18,7 @@ def run_for_development():
     env = BalloonPoppingEnv(render_mode=None, parameters=scenario_parameters)
 
     # Instantiate agent with given parameters and any additional user kwargs
-    agent = AttitudeRateControlAgent(given_parameters, **agent_kwargs)
+    agent = SineCommandAgent(given_parameters, **agent_kwargs)
 
     # use seed=None to randomize environment
     observation, info = env.reset(seed=scenario_parameters["scenario"]["random_seed"])
@@ -73,7 +73,7 @@ def run_for_evaluation():
     # Load agent class dynamically from specified module path.
     # Equivalent to run command: python evaluate.py <path_to_eval_config.yaml>
     evaluate_scenario(
-        AttitudeRateControlAgent,
+        SineCommandAgent,
         agent_kwargs=agent_kwargs,
         agent_name=agent_name,
         scenario_number=scenario_number,
