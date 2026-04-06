@@ -55,7 +55,7 @@ class AttitudeRateControlAgent(BaseAgent):
         # Shape: (3, n_timesteps) where each row tracks one axis over time
         self.rate_errors = np.zeros((3, 1))
         # Default target are 0 rad/s
-        self.rate_targets = kwargs.get("rate_targets", [0.0, 0.0, 0.0])
+        self.rate_targets = np.array(kwargs.get("rate_targets", [0.0, 0.0, 0.0]))
         self.launch_time = kwargs.get("launch_time", 1.0)
 
     def get_action(self, observation):
@@ -72,9 +72,9 @@ class AttitudeRateControlAgent(BaseAgent):
             launch = False
 
         if not np.isnan(observation["rocket_sensors"][:3]).any():
-            KP = [100.0, 100.0, 100.0]
-            KI = [0.0, 0.0, 5.0]
-            KD = [0.0, 0.0, 0.0]
+            KP = np.array([100.0, 100.0, 100.0])
+            KI = np.array([0.0, 0.0, 5.0])
+            KD = np.array([0.0, 0.0, 0.0])
 
             self.rate_errors = np.append(
                 self.rate_errors,
