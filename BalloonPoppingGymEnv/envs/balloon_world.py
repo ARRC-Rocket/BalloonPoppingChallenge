@@ -200,18 +200,21 @@ class BalloonPoppingEnv(gym.Env):
             self._detect_pops(previous_balloon_positions, previous_rocket_position)
 
         # An episode is done iff reaches max time or end of trajectory
-        terminated = (self.current_step >= self.num_timesteps - 1) or _rocket_finished
+        _timeout = self.current_step >= self.num_timesteps - 1
+        if _timeout:
+            print(f"Terminated: Reached max time")
+        elif _rocket_finished:
+            print(f"Terminated: Rocket flight finished")
+        terminated = _timeout or _rocket_finished
+
         reward = np.sum(self._balloon_status[:, 0] == 2)
         observation = self._get_obs()
         info = self._get_info()
 
-        if (
-            np.remainder(
-                self.current_step, 0.1 / self.simulation_parameters["time_step"]
-            )
-            == 0
-            or terminated
-        ):
+        _remainder = np.remainder(
+            self.current_step, 0.1 / self.simulation_parameters["time_step"]
+        )  # print every 0.1 sec
+        if _remainder == 0 or terminated:
             self._render_frame()
 
         return observation, reward, terminated, False, info
