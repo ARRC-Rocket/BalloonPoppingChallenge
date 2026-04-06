@@ -39,7 +39,7 @@ class BalloonPoppingEnv(gym.Env):
         self.rocket_parameters = parameters["rocket"]
 
         # [balloon_num, status] status: 0-ground; 1-released; 2-popped
-        self._balloon_status = np.array(np.zeros((self.balloon_parameters["num"], 1)))
+        self._balloon_status = np.zeros((self.balloon_parameters["num"], 1), dtype=int)
         # [balloon_num, (x, y, z, vx, vy, vz)]
         self._balloon_states = np.array(np.zeros((self.balloon_parameters["num"], 6)))
         # (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ)
@@ -50,8 +50,14 @@ class BalloonPoppingEnv(gym.Env):
         # Observations include balloon and rocket states
         self.observation_space = spaces.Dict(
             {
+                "simulation_time": spaces.Box(
+                    low=-np.inf,
+                    high=np.inf,
+                    shape=(),
+                    dtype=np.float64,
+                ),
                 "balloon_status": spaces.MultiDiscrete(
-                    3 * np.ones((self.balloon_parameters["num"], 1))
+                    3 * np.ones((self.balloon_parameters["num"], 1), dtype=int)
                 ),
                 "balloon_states": spaces.Box(
                     low=-np.inf * np.ones((self.balloon_parameters["num"], 6)),
@@ -129,7 +135,7 @@ class BalloonPoppingEnv(gym.Env):
 
         # Scenario 0: hello world with static balloons
         if self.scenario_parameters["number"] == 0:
-            self._balloon_status = np.ones((self.balloon_parameters["num"], 1))
+            self._balloon_status = np.ones((self.balloon_parameters["num"], 1), dtype=int)
             num_balloons = self._balloon_flights.shape[0]
 
             # Spaced 40 m apart
@@ -139,7 +145,7 @@ class BalloonPoppingEnv(gym.Env):
             # z = constant per balloon
             self._balloon_flights[:, 2, :] = z_values[:, None]
         else:
-            self._balloon_status = np.zeros((self.balloon_parameters["num"], 1))
+            self._balloon_status = np.zeros((self.balloon_parameters["num"], 1), dtype=int)
 
         self.rocket_launched = False
         self.current_step = 0
@@ -491,7 +497,7 @@ class BalloonPoppingEnv(gym.Env):
 
         Balloon = Rocket(
             volume=4 / 3 * np.pi * self.balloon_parameters["radius"] ** 3,
-            radius=0.05,
+            radius=0.05,  # was designed for rocket, not balloon, hard code a value
             mass=self.balloon_parameters["mass"],
             inertia=self.balloon_parameters["inertia"],
             center_of_mass_without_motor=0.2,
