@@ -80,3 +80,4 @@ rocket:
     - max_roll_torque
     - torque_rate_limit
     - throttle_range
+    - throttle_rate_limit

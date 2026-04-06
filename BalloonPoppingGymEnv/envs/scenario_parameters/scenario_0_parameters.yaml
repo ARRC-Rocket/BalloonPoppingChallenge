@@ -101,7 +101,8 @@ rocket:
     gnss_velocity_accuracy: 0.0 # (m/s) velocity accuracy of the GNSS receiver
   control:
     gimbal_range: 15 # (deg) maximum gimbal angle in any direction
-    gimbal_rate_limit: 30 # (deg/s) maximum gimbal rate
+    gimbal_rate_limit: 60 # (deg/s) maximum gimbal rate
     max_roll_torque: 10 # (N*m) maximum roll torque
     torque_rate_limit: 20 # (N*m/s) maximum roll torque rate
     throttle_range: [0.0, 1.0] # range of the throttle (0 to 1)
+    throttle_rate_limit: 2.0 # (1/s) maximum throttle rate

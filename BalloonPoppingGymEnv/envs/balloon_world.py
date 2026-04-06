@@ -187,6 +187,7 @@ class BalloonPoppingEnv(gym.Env):
             self._rocket_flight.rocket.roll_control.roll_torque = action["roll"]
             self._rocket_flight.rocket.tvc.gimbal_angle_x = action["tvc"][0]
             self._rocket_flight.rocket.tvc.gimbal_angle_y = action["tvc"][1]
+            self._rocket_flight.rocket.throttle_control.throttle = action["throttle"]
             self._rocket_flight.step_simulation()
             _sensor = self._rocket_flight.sensors
             self._rocket_sensors[:3] = _sensor[0].measurement  # gyro
@@ -811,6 +812,29 @@ class BalloonPoppingEnv(gym.Env):
             torque_rate_limit=control_cfg["torque_rate_limit"],
             sampling_rate=1 / self.simulation_parameters["time_step"],
             controller_function=roll_controller_function,
+            return_controller=False,
+        )
+
+        def throttle_controller_function(
+            time,
+            sampling_rate,
+            state,
+            state_history,
+            observed_variables,
+            throttle_control,
+            sensors,
+        ):
+            # log throttle
+            return (
+                time,
+                throttle_control.throttle,
+            )
+
+        rocket.add_throttle_control(
+            throttle_range=control_cfg["throttle_range"],
+            throttle_rate_limit=control_cfg["throttle_rate_limit"],
+            sampling_rate=1 / self.simulation_parameters["time_step"],
+            controller_function=throttle_controller_function,
             return_controller=False,
         )
 
