@@ -87,15 +87,15 @@ rocket:
     position: -0.3 # (m) position of the fins (relative to the rocket frame)
   sensors:
     sampling_rate: 100 # (Hz) sampling rate of the sensors
-    gyro_position: 0 # (m) position of the gyroscope (relative to the rocket frame)
+    gyro_position: 0 # (m) z-position of the gyroscope in body frame relative to the center of dry mass
     gyro_noise_density: 0.0 # (rad/s)/√Hz noise density of the gyroscope
     gyro_random_walk_density: 0.0 # (rad/s^2)/√Hz random walk density of the gyroscope
     gyro_constant_bias: 0.0 # (rad/s) constant bias of the gyroscope
-    accelerometer_position: 0 # (m) position of the accelerometer (relative to the rocket frame)
+    accelerometer_position: 0 # (m) z-position of the accelerometer in body frame relative to the center of dry mass
     accelerometer_noise_density: 0.0 # (m/s^2)/√Hz noise density of the accelerometer
     accelerometer_random_walk_density: 0.0 # (m/s^3)/√Hz random walk density of the accelerometer
     accelerometer_constant_bias: 0.0 # (m/s^2) constant bias of the accelerometer
-    gnss_position: 0 # (m) position of the GNSS receiver (relative to the rocket frame)
+    gnss_position: 0 # (m) z-position of the GNSS receiver in body frame relative to the center of dry mass
     gnss_position_accuracy: 0.0 # (m) position accuracy of the GNSS receiver
     gnss_altitude_accuracy: 0.0 # (m) altitude accuracy of the GNSS receiver
     gnss_velocity_accuracy: 0.0 # (m/s) velocity accuracy of the GNSS receiver

@@ -57,10 +57,10 @@ git submodule update --remote --merge
     - The coordinates are shown in the figure below:
     ![Rocket coordinate frames](doc/figures/Coordinates.drawio.svg)
 - Balloon popping specific modelling:
-    - Balloons are modeled as spheres with a certain radius and mass.
-    - Balloon flights are simulated using [Monte-Carlo simulation](./ActiveRocketPy/rocketpy/simulation/monte_carlo.py) method provided by ActiveRocketPy. To use the [Flight](./ActiveRocketPy/rocketpy/simulation/flight.py) class of ActiveRocketPy, a small solid motor will push the balloon out-of rail. The balloon will then fly freely under the influence of gravity, buoyancy, wind, and atmospheric drag.
+    - Balloons are modeled as rigid spheres with a certain radius and mass.
+    - Balloon flights are simulated using [Monte-Carlo simulation](./ActiveRocketPy/rocketpy/simulation/monte_carlo.py) method provided by ActiveRocketPy. The stochastic parameters are listed in the parameter files. A small solid motor will push the balloon out-of rail to start simulation of [Flight](./ActiveRocketPy/rocketpy/simulation/flight.py) class in ActiveRocketPy. The balloon will then fly freely under the influence of gravity, buoyancy, wind, and atmospheric drag.
     - The flight of each balloon is not affected by the rocket or other balloons.
-    - A balloon is considered popped if the distance between the path of the rocket (center of dry mass) and the center of balloon within a timestep is less than the radius of the balloon.
+    - A balloon is considered popped if the distance between the path of the rocket (center of dry mass) and the center of balloon within a timestep is less than the radius of the balloon (radius as given in the parameter file, not the stochastic value for monte-carlo simulation).
     - Balloons release will be determined depends on the scenario parameters.
     - There will be a single launch, and the aim is to pop as many balloons as possible.
     - Launch time, inclination, and heading are determined by the agent.
@@ -85,8 +85,8 @@ The actions, observations, info, rewards in this environment are:
     - `simulation_time`: the current simulation time in seconds.
     - `balloon_status`: a n-element array representing the status of each balloon (0: on the ground, 1: released, 2: popped). n is the number of balloons in the scenario.
     - `balloon_states`: a n x 6 array representing the position (posX, posY, posZ) and velocity (velX, velY, velZ) of each balloon.
-        - Position is in the launch frame (relative to launch origin) in meters.
-        - Velocity is in the launch frame (relative to launch origin) in m/s.
+        - Position is the center of the balloon in the launch frame (relative to launch origin) in meters.
+        - Velocity is the center of the balloon in the launch frame (relative to launch origin) in m/s.
     - `rocket_sensors`: a 12-element array representing the rocket's sensor measurements (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ). Orientation of inertial sensors matches body frame. The measurements will be nan before launch action.
         - Gyroscopes measure the angular velocity (rad/s) in the rocket body frame.
         - Accelerometers measure the linear acceleration (m/s²) in the rocket body frame. Gravity is included in the accelerometer measurements.
@@ -94,19 +94,21 @@ The actions, observations, info, rewards in this environment are:
     - Note that the rocket's true states (e.g., attitude, angular velocity) are not directly observed by the agent, and the agent needs to infer them from the sensor measurements.
 - info:
     - `rocket_states`: a 13-element array representing the rocket's true states. These states are not observed and should not be used by the agent but can be used for development and debugging. The states are [posX, posY, posZ, velX, velY, velZ, e0, e1, e2, e3, wX, wY, wZ]:
-        - pos: position in the launch frame (relative to launch origin) in meters.
-        - vel: velocity in the launch frame (relative to launch origin) in m/s.
+        - pos: center of dry mass position (m) in the launch frame (relative to launch origin).
+        - vel: center of dry mass velocity (m/s) in the launch frame (relative to launch origin).
         - e: quaternion representing the attitude of the rocket (e0, e1, e2, e3) relative to the launch frame.
-        - w: angular velocity in the rocket body frame in rad/s.
+        - w: angular velocity (rad/s) in the rocket body frame.
 
 - rewards:
-    - The reward is calculated based on the number of balloons popped at each time step.
+    - The reward is calculated based on the total number of balloons popped at each time step.
+
+## Known Issues
+- The mass properties are pre-calculated before flight according to max flow rate and burn time. Throttle commands does not affect the change of the mass properties in-flight. It is equivalent to throttling the Isp of rocket engine while the flow rate remains constant. The engine is cutted of when burn time is reached
 
 ## Agent Development
 Agents for evaluation are placed in the [/agents folder](./BalloonPoppingGymEnv/agents). They should be implemented as a class that inherits from [BaseAgent](./BalloonPoppingGymEnv/agents/base_agent.py) and implements the `get_action` method. The agent can access the scenario parameters through `self.given_parameters`, as defined in `scenario_given_parameters.yaml` files in [/scenario_parameters folder](./BalloonPoppingGymEnv/envs/scenario_parameters/). Observations are passed throught the `get_action` method. The agent should output an action dictionary that matches the action space defined in the environment.
 
 ## Evaluation details
-
 The evaluation script is located in [/evaluation folder](./BalloonPoppingGymEnv/evaluation). It takes a configuration file as input, which specifies the scenario parameters and the agent to be evaluated. The script runs the specified scenario with the given agent and outputs the results.
 
 ![flow chart of evaluation process](doc/figures/EvaluationFlowChart.drawio.svg)
@@ -145,24 +147,26 @@ Keywords: GNC, autonomous rocket, optimization, path-finding.
 ### Competition Rules
 
 - The participant will develop agents in [/agents folder](./BalloonPoppingGymEnv/agents/) to control a rocket.
-- The agent should only take the observations provided by the environment and output control commands (e.g., launch, roll, throttle and TVC commands) at each time step. The agent should not have access to any other information about the environment or the simulator.
-- Other than the agent, all other components of the simulator are fixed and provided by the organizer. Participants are not allowed to modify any other part of the codebase.
+- The agent will be initialized with the given paramter of each scenario.
+- At each time step, the agent should only take the observations provided by the environment to output control commands (e.g., launch, roll, throttle and TVC commands). The agent should not have access to any other information about the environment or the simulator.
+- Other than the agent, all other components of the simulator are fixed and provided by the organizer. Participants are not allowed to modify any other part of the codebase for the evaluation.
 - Questions about the rules and software can be asked in the [GitHub Issues](https://github.com/ARRC-Rocket/BalloonPoppingChallenge/issues). The organizer will hold regular meetings to answer questions and provide updates.
-- Suggestions, contributions, and bug reports to the codebase are highly welcomed. Please submit a pull request or open an issue for discussion.
+- Code suggestions, contributions, and bug reports to the codebase are highly welcomed. Please submit a pull request or open an issue for discussion.
 
-### Competetion Scenarios
-Exact scenario for elimation rounds and final rounds will be announced later. Below are some examples of possible scenarios.
+### Competition Scenarios
+Exact scenario for elimination rounds and final rounds will be announced later. Below are some examples of possible scenarios.
 
 
-|# | Name | 🚀 Throttle Range (TWR) | 🚀 TVC & Throttle Actuator Response | 🚀 Sensor Noise | 🌬️ Wind | 🎈 Number | 🎈 Release Interval (sec) | 🎈 Release Sequence | 🎈 Initial Position | 🎈 Position Observation | 🎈 Velocity Observation |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| #0 | Hello World | 2, TBC | Ideal | No | None | 10 | N/A | N/A | height = linspace(10,100,10) | Static at initial position | Static at initial position, no velocity |
-| #1 | Ideal World | [1, 2 (TBC)] | Ideal | No | None | 100 | 1, TBC | One by one | Random at ground | Free flight after release; Full observation at current step | Free flight after release; Full observation at current step |
-| #2 | Random Balloon | [1, 2 (TBC)] | Ideal | No | None |  100 | Random | Random | Random at ground | Free flight after release; Full observation at current step | Free flight after release; Full observation at current step |
-| #3 | Noisy Sensor | [1, 2 (TBC)] | Ideal | Yes, random magnitude | None | 100 | Random | Random | Random at ground | Free flight after release; Full observation at current step | Free flight after release; Full observation at current step |
-| #4 | Clumsy Actuator | [1, 2 (TBC)] | LPF, random | Yes, random magnitude | None |100 | Random | Random | Random at ground | Free flight after release; Full observation at current step | Free flight after release; Full observation at current step |
-| #5 | Bad Weather | [1, 2 (TBC)] | LPF, random | Yes, random magnitude | Yes, random magnitude | 100 | Random | Random | Random at ground | Free flight after release; Full observation at current step | Free flight after release; Full observation at current step |
-| #6 | Time for Hovering | [0.5, 2] (TBC) | LPF, random | Yes, random magnitude | Yes, random magnitude | 100 | Random | Random | Random at ground | Free flight after release; Full observation at current step | Free flight after release; Full observation at current step |
-| #7 | Sensor Drop off | [0.5, 2] (TBC) | LPF, random | Yes, random magnitude & drop-off | Yes, random magnitude | 100 | Random | Random | Random at ground | Free flight after release; Full observation at current step | Free flight after release; Full observation at current step |
-| #8 | Find the Balloon | [0.5, 2] (TBC) | LPF, random | Yes, random magnitude & drop-off | Yes, random magnitude | 100 | Random | Random | Random at ground | Free flight after release; Partial observation at current step | Free flight after release; Partial observation at current step |
+|# | Name | 🚀 Actuator Response | 🚀 Sensor Noise | 🌬️ Wind | 🎈 Number | 🎈 Release Interval (sec) | 🎈 Initial Position | 🎈 Position Observation | 🎈 Velocity Observation |
+|---|---|---|---|---|---|---|---|---|---|
+|#0         |Hello World       |Ideal       |No             |None                  |10     |N/A    |height = linspace(10,410,40)| Static at initial position           | no velocity                        |
+|#1         |Random Balloon    |Ideal       |No             |Yes                   |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
+|#2 (TBD)   |Noisy Sensor      |Ideal       |Yes            |Yes                   |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
+|#3 (TBD)   |Clumsy Actuator   |LPF, random |Yes            |Yes                   |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
+|#4 (TBD)   |Bad Weather       |LPF, random |Yes            |Yes, random magnitude |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
+|#5 (TBD)   |Sensor Drop off   |LPF, random |Yes & drop-off |Yes, random magnitude |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
+|#6 (TBD)   |Find the Balloon  |LPF, random |Yes & drop-off |Yes, random magnitude |100    |Random |Random at ground            |Partial observation at current step   |Partial observation at current step |
+|#7 (TBD)   |Balloon Recovery
+### Release Notes:
 
+- **2026-04-07**: Initial release of the codebase and rules.
