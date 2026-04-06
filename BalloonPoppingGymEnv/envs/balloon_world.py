@@ -551,7 +551,9 @@ class BalloonPoppingEnv(gym.Env):
             self.simulation_parameters["time_step"],
         )
         monte_carlo_sim = MonteCarlo(
-            filename=os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "balloon_sim"),
+            filename=os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "data", "balloon_sim"
+            ),
             environment=stochastic_env,
             rocket=stochastic_balloon,
             flight=stochastic_flight,
