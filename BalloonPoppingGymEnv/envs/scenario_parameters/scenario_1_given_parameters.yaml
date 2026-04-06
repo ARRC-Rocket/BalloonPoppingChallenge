@@ -1,0 +1,84 @@
+# Parameters exposed to agents for scenario 1
+environment:
+  - date
+  - latitude
+  - longitude
+  - elevation
+simulation:
+  - time_step
+  - max_time
+balloon:
+  - release_interval
+  - num
+  - radius
+  - mass
+rocket:
+  tank:
+    - liquid
+    - liquid_density
+    - gas
+    - gas_density
+    - radius
+    - height
+    - flux_time
+    - initial_liquid_mass
+    - initial_gas_mass
+    - liquid_mass_flow_rate_out
+    - tank_position
+  motor:
+    - thrust_source
+    - dry_mass
+    - dry_inertia
+    - center_of_dry_mass_position
+    - burn_time
+    - grain_number
+    - grain_separation
+    - grain_outer_radius
+    - grain_initial_inner_radius
+    - grain_initial_height
+    - grain_density
+    - nozzle_radius
+    - throat_radius
+    - nozzle_position
+    - grains_center_of_mass_position
+    - motor_position
+  rocket_body:
+    - radius
+    - mass
+    - inertia
+    - center_of_mass_without_motor
+    - power_off_drag
+    - power_on_drag
+    - volume
+  nose:
+    - length
+    - kind
+    - position
+  fins:
+    - useFins
+    - n
+    - span
+    - root_chord
+    - tip_chord
+    - position
+  sensors:
+    - sampling_rate
+    - gyro_position
+    - gyro_noise_density
+    - gyro_random_walk_density
+    - gyro_constant_bias
+    - accelerometer_position
+    - accelerometer_noise_density
+    - accelerometer_random_walk_density
+    - accelerometer_constant_bias
+    - gnss_position
+    - gnss_position_accuracy
+    - gnss_altitude_accuracy
+    - gnss_velocity_accuracy
+  control:
+    - gimbal_range
+    - gimbal_rate_limit
+    - max_roll_torque
+    - torque_rate_limit
+    - throttle_range
+    - throttle_rate_limit
