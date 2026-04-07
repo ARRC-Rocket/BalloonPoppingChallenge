@@ -118,6 +118,21 @@ The evaluation script is located in [/evaluation folder](./BalloonPoppingGymEnv/
 - [RocketPy Documentation](https://docs.rocketpy.org/en/latest/index.html)
 - [Gymnasium Documentation](https://gymnasium.farama.org/)
 
+## Citation
+
+If you run Balloon Popping Challenge in your research, please consider citing:
+
+```bibtex
+@misc{BalloonPoppingChallenge,
+  author = {Zuo-Ren Chen and Advanced Rocket Research Center (ARRC)},
+  title = {Balloon Popping Challenge: A 6-DoF Rocket GNC Simulation Gymnasium Environment},
+  month = {April},
+  year = {2026},
+  url = {https://github.com/ARRC-Rocket/BalloonPoppingChallenge}
+}
+```
+
+
 ___
 ___
 
