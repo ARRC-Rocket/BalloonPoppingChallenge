@@ -87,16 +87,14 @@ def load_scenario_parameters(scenario_number):
     scenario_params_path = os.path.join(
         parameter_dir, f"scenario_{scenario_number}_parameters.yaml"
     )
-    with open(scenario_params_path, "r") as file:
+    with open(scenario_params_path, "r", encoding="utf-8-sig") as file:
         scenario_parameters = yaml.safe_load(file)
-    file.close()
 
     given_params_path = os.path.join(
         parameter_dir, f"scenario_{scenario_number}_given_parameters.yaml"
     )
-    with open(given_params_path, "r") as file:
+    with open(given_params_path, "r", encoding="utf-8-sig") as file:
         given_parameters_spec = yaml.safe_load(file)
-    file.close()
 
     given_parameters = _extract_nested_parameters(
         scenario_parameters, given_parameters_spec
@@ -158,7 +156,6 @@ if __name__ == "__main__":
     eval_cfg_path = sys.argv[1]
     with open(eval_cfg_path, "r") as file:
         eval_cfg = yaml.safe_load(file)
-    file.close()
 
     scenario_number = eval_cfg["scenario_number"]
     render_mode = eval_cfg["render_mode"]
