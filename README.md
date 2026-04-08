@@ -1,5 +1,9 @@
 # Balloon Popping Challenge: A 6-DoF Rocket GNC Simulation [Gymnasium](https://gymnasium.farama.org/) Environment
 
+<a target="_blank" href="https://colab.research.google.com/github/ARRC-Rocket/BalloonPoppingChallenge/blob/main/doc/examples/evaluate_scenario_colab.ipynb">
+  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+</a>
+
 This repository contains the code for the Balloon Popping Challenge, a 6-DoF rocket guidance, navigation, and control (GNC) simulation environment built using [Gymnasium](https://gymnasium.farama.org/). The environment is designed to simulate an active controlled rocket to pop balloons scattered in the sky. The simulator incorporates realistic physics, including atmospheric conditions and rocket dynamics, to provide a challenging platform for developing and testing GNC algorithms. This project is based on [ActiveRocketPy](https://github.com/ARRC-Rocket/ActiveRocketPy), a fork of open-source software [RocketPy](https://github.com/RocketPy/RocketPy). 
 
 ## Installation
@@ -121,6 +125,21 @@ The evaluation script is located in [/evaluation folder](./BalloonPoppingGymEnv/
 - [RocketPy GitHub](https://github.com/RocketPy/RocketPy)
 - [RocketPy Documentation](https://docs.rocketpy.org/en/latest/index.html)
 - [Gymnasium Documentation](https://gymnasium.farama.org/)
+
+## Citation
+
+If you run Balloon Popping Challenge in your research, please consider citing:
+
+```bibtex
+@misc{BalloonPoppingChallenge,
+  author = {Zuo-Ren Chen and Advanced Rocket Research Center (ARRC)},
+  title = {Balloon Popping Challenge: A 6-DoF Rocket GNC Simulation Gymnasium Environment},
+  month = {April},
+  year = {2026},
+  url = {https://github.com/ARRC-Rocket/BalloonPoppingChallenge}
+}
+```
+
 
 ___
 ___
