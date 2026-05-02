@@ -435,6 +435,66 @@ class BalloonPoppingEnv(gym.Env):
                 file=path,
                 dictionary="ECMWF",
             )
+        # ------------------------------------------------------------
+        # Add gust after setting atmospheric model.
+        # Important:
+        # set_atmospheric_model(...) resets wind profiles,
+        # so gust must be added after it.
+        # ------------------------------------------------------------
+        gust_config = self.environment_parameters.get("gust", {"enable": False})
+        self._environment_gust_info = None
+
+        if not gust_config.get("enable", False):
+            return
+
+        model = gust_config.get("model", "gaussian")
+        if model != "gaussian":
+            raise ValueError(f"Unsupported gust model: {model}")
+
+        peak = float(gust_config.get("peak", 0.0))                 # m/s
+        heading_deg = float(gust_config.get("heading_deg", 0.0))   # deg
+        center_agl = float(gust_config.get("center_agl", 500.0))   # m AGL
+        sigma = float(gust_config.get("sigma", 100.0))             # m
+
+        if sigma <= 0:
+            raise ValueError("gust_config['sigma'] must be greater than 0.")
+
+        # RocketPy wind functions use ASL height.
+        # Config uses AGL height for easier setup.
+        center_asl = self._rocketpy_env.elevation + center_agl
+
+        # Heading definition:
+        # 0 deg   = North, +Y
+        # 90 deg  = East,  +X
+        # 180 deg = South, -Y
+        # 270 deg = West,  -X
+        heading_rad = np.deg2rad(heading_deg)
+
+        def gust_profile(height_asl):
+            return peak * np.exp(-((height_asl - center_asl) / sigma) ** 2)
+
+        def gust_x(height_asl):
+            # X direction = East
+            return gust_profile(height_asl) * np.sin(heading_rad)
+
+        def gust_y(height_asl):
+            # Y direction = North
+            return gust_profile(height_asl) * np.cos(heading_rad)
+
+        self._rocketpy_env.add_wind_gust(gust_x, gust_y)
+
+        self._environment_gust_info = {
+            "enable": True,
+            "model": model,
+            "peak": peak,
+            "heading_deg": heading_deg,
+            "center_agl": center_agl,
+            "center_asl": center_asl,
+            "sigma": sigma,
+            "gust_profile": gust_profile,
+            "gust_x": gust_x,
+            "gust_y": gust_y,
+        }
 
     def __reset_balloon_release_sequence(self):
         n = self.balloon_parameters["num"]
