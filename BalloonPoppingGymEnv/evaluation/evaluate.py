@@ -154,7 +154,7 @@ if __name__ == "__main__":
         )
 
     eval_cfg_path = sys.argv[1]
-    with open(eval_cfg_path, "r") as file:
+    with open(eval_cfg_path, "r", encoding="utf-8-sig") as file:
         eval_cfg = yaml.safe_load(file)
 
     scenario_number = eval_cfg["scenario_number"]
