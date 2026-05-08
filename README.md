@@ -59,6 +59,14 @@ git submodule update --remote --merge
     - Open the [evaluate_scenario_colab.ipynb](./doc/examples/evaluate_scenario_colab.ipynb) notebook in Google Colab.
     - Follow the instructions in the notebook to run the evaluation in the cloud.
 
+## Testing
+
+Run the cleanup invariant tests (uses only the Python standard library and PyYAML):
+
+```shell
+python -m unittest discover tests
+```
+
 ## Modelling Details
 - Rocket flight modelling (RocketPy):
     - The details can be found in the [RocketPy Reference](https://docs.rocketpy.org/en/latest/index.html)
