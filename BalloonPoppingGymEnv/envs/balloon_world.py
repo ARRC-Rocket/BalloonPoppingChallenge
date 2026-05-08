@@ -9,7 +9,6 @@ from gymnasium import spaces
 from rocketpy import (
     Environment,
     Flight,
-    Function,
     LinearGenericSurface,
     MonteCarlo,
     Rocket,
@@ -24,7 +23,7 @@ from rocketpy.sensors.accelerometer import Accelerometer
 from rocketpy.sensors.gnss_receiver import GnssReceiver
 from rocketpy.sensors.gyroscope import Gyroscope
 from rocketpy.tools import euler313_to_quaternions
-from vpython import arrow, canvas, color, rate, sphere, vector
+from vpython import canvas, color, rate, sphere, vector
 
 
 class BalloonPoppingEnv(gym.Env):
@@ -213,11 +212,11 @@ class BalloonPoppingEnv(gym.Env):
         # An episode is done iff reaches max time or end of trajectory
         _timeout = self.current_step >= self.num_timesteps - 1
         if _timeout:
-            print(f"Terminated: Reached max time")
+            print("Terminated: Reached max time")
             self._rocket_flight.post_process_simulation()
             self._rocket_flight.initialize_prints_plots()
         elif _rocket_finished:
-            print(f"Terminated: Rocket flight finished")
+            print("Terminated: Rocket flight finished")
         terminated = _timeout or _rocket_finished
 
         reward = np.sum(self._balloon_status[:, 0] == 2)

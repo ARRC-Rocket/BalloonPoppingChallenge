@@ -109,8 +109,6 @@ class AttitudeRateControlAgent(BaseAgent):
 class NavigationAgent(BaseAgent):
     """A simple inertial navigation agent that integrates rocket states"""
 
-    from BalloonPoppingGymEnv.envs.balloon_world import get_initial_attitude
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args)
 

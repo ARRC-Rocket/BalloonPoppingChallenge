@@ -1,1 +1,3 @@
-from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
+from BalloonPoppingGymEnv.envs.balloon_world import (
+    BalloonPoppingEnv as BalloonPoppingEnv,
+)

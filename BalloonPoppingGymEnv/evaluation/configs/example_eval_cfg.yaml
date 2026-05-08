@@ -6,4 +6,3 @@ agent_name: "Attitude Rate Control" # Identifier name for logging purposes. The 
 agent_kwargs:
   rate_targets: [0.0, 0.0, 0.0]
   launch_time: 1
-  arg3: value3
