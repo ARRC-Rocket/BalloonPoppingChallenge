@@ -183,7 +183,7 @@ Exact scenario for elimination rounds and final rounds will be announced later. 
 
 |# | Name | 🚀 Actuator Response | 🚀 Sensor Noise | 🌬️ Wind | 🎈 Number | 🎈 Release Interval (sec) | 🎈 Initial Position | 🎈 Position Observation | 🎈 Velocity Observation |
 |---|---|---|---|---|---|---|---|---|---|
-|#0         |Hello World       |Ideal       |No             |None                  |10     |N/A    |height = linspace(10,410,40)| Static at initial position           | no velocity                        |
+|#0         |Hello World       |Ideal       |No             |None                  |10     |N/A    |height = arange(10, 410, 40) + elevation| Static at initial position           | no velocity                        |
 |#1         |Random Balloon    |Ideal       |No             |Yes                   |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
 |#2 (TBD)   |Noisy Sensor      |Ideal       |Yes            |Yes                   |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
 |#3 (TBD)   |Clumsy Actuator   |LPF, random |Yes            |Yes                   |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
