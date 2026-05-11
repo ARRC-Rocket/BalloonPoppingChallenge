@@ -63,7 +63,7 @@ def run_for_development():
     plt.show()
 
     print(f"Scenario {scenario_number} evaluation completed with agent '{agent_name}'.")
-    print(f"Final reward: {reward}")
+    print(f"Total reward: {info['popped_count']}")
 
     # env._rocket_flight.all_info() # Uncomment to print all info from RocketPy
 

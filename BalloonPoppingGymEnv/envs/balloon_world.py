@@ -124,6 +124,7 @@ class BalloonPoppingEnv(gym.Env):
     def _get_info(self):
         return {
             "rocket_states": self._rocket_states,
+            "popped_count": self._popped_count,
         }
 
     def reset(self, seed=None, options=None):
@@ -158,6 +159,7 @@ class BalloonPoppingEnv(gym.Env):
         self._balloon_states = self._balloon_flights[:, :, self.current_step]
         self._rocket_sensors = np.full(12, np.nan)
         self._rocket_states = np.full(13, np.nan)
+        self._popped_count = 0
 
         observation = self._get_obs()
         info = self._get_info()
@@ -220,7 +222,10 @@ class BalloonPoppingEnv(gym.Env):
             print(f"Terminated: Rocket flight finished")
         terminated = _timeout or _rocket_finished
 
-        reward = np.sum(self._balloon_status[:, 0] == 2)
+        new_count = np.sum(self._balloon_status[:, 0] == 2)
+        reward = new_count - self._popped_count
+        self._popped_count = new_count
+
         observation = self._get_obs()
         info = self._get_info()
 
@@ -404,7 +409,7 @@ class BalloonPoppingEnv(gym.Env):
             )
             self.render_rocket[0].set_3d_properties([self._rocket_states[2]])
             self.render_canvas.set_title(
-                f"Time: {self.current_step * self.simulation_parameters['time_step']:.2f} sec\nReward: {np.sum(self._balloon_status[:, 0] == 2)}"
+                f"Time: {self.current_step * self.simulation_parameters['time_step']:.2f} sec\nTotal Reward: {self._popped_count}"
             )
             plt.draw()
             plt.pause(0.001)
