@@ -18,6 +18,12 @@ python -m venv .venv        # Create a virtual environment (optional but recomme
 python -m pip install -r requirements.txt
 ```
 
+> The `vpython` renderer (`render_mode="vpython"`) is optional and is not installed by the command above. The default `matplotlib` renderer works without it. To use the vpython renderer, install the optional extra:
+>
+> ```shell
+> python -m pip install -e ".[vpython]"
+> ```
+
 ## Update from the repository:
 
 ```shell
@@ -71,6 +77,7 @@ python -m unittest discover tests
 - Rocket flight modelling (RocketPy):
     - The details can be found in the [RocketPy Reference](https://docs.rocketpy.org/en/latest/index.html)
     - The coordinates are shown in the figure below:
+    
     ![Rocket coordinate frames](doc/figures/Coordinates.drawio.svg)
 - Balloon popping specific modelling:
     - Balloons are modeled as rigid spheres with a certain radius and mass.
@@ -88,9 +95,9 @@ There are three stages in the operation of the Gymnasium environment: reset, ste
 
 2. **Stepping**: The agent takes an action (e.g., launch, roll, throttle and TVC commands) and calls `env.step(action)`, which advances the simulation by one time step. The environment returns the new observations, reward, termination flag, and additional info.
 
-3. **Termination**: The episode ends when maximum simulation time is reached or the rocket hits the ground. The environment provides a reward based on the number of balloons popped.
+3. **Termination**: The episode ends when maximum simulation time is reached or the rocket hits the ground.
 
-The actions, observations, info, rewards in this environment are:
+The actions, observations, info, reward in this environment are:
 - actions:
     - `launch`: a binary command to launch the rocket.
     - `launch_inclination_heading`: a 2-element array [inclination, heading] representing the launch inclination (0-90 degrees from horizontal) and heading angles (0-360 degrees from north).
@@ -114,12 +121,13 @@ The actions, observations, info, rewards in this environment are:
         - vel: center of dry mass velocity (m/s) in the launch frame (relative to launch origin).
         - e: quaternion representing the attitude of the rocket (e0, e1, e2, e3) relative to the launch frame.
         - w: angular velocity (rad/s) in the rocket body frame.
+    - `popped_count`: total number of balloon popped. This will be the final score of evaluation.
 
-- rewards:
-    - The reward is calculated based on the total number of balloons popped at each time step.
+- reward:
+    - The reward is the number of balloons popped at each time step.
 
-## Known Issues
-- The mass properties are pre-calculated before flight according to max flow rate and burn time. Throttle commands does not affect the change of the mass properties in-flight. It is equivalent to throttling the Isp of rocket engine while the flow rate remains constant. The engine is cutted of when burn time is reached
+## Known Limitations
+- The mass properties are pre-calculated before flight according to max flow rate and burn time. Throttle commands does not affect the change of the mass properties in-flight. It is equivalent to throttling the Isp of rocket engine while the flow rate remains constant. The engine is cut off when burn time is reached
 
 ## Agent Development
 Agents for evaluation are placed in the [/agents folder](./BalloonPoppingGymEnv/agents). They should be implemented as a class that inherits from [BaseAgent](./BalloonPoppingGymEnv/agents/base_agent.py) and implements the `get_action` method. The agent can access the scenario parameters through `self.given_parameters`, as defined in `scenario_given_parameters.yaml` files in [/scenario_parameters folder](./BalloonPoppingGymEnv/envs/scenario_parameters/). Observations are passed through the `get_action` method. The agent should output an action dictionary that matches the action space defined in the environment.
@@ -190,7 +198,7 @@ Exact scenario for elimination rounds and final rounds will be announced later. 
 
 |# | Name | 🚀 Actuator Response | 🚀 Sensor Noise | 🌬️ Wind | 🎈 Number | 🎈 Release Interval (sec) | 🎈 Initial Position | 🎈 Position Observation | 🎈 Velocity Observation |
 |---|---|---|---|---|---|---|---|---|---|
-|#0         |Hello World       |Ideal       |No             |None                  |10     |N/A    |height = linspace(10,410,40)| Static at initial position           | no velocity                        |
+|#0         |Hello World       |Ideal       |No             |None                  |10     |N/A    |height = arange(10, 410, 40) + elevation| Static at initial position           | no velocity                        |
 |#1         |Random Balloon    |Ideal       |No             |Yes                   |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
 |#2 (TBD)   |Noisy Sensor      |Ideal       |Yes            |Yes                   |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
 |#3 (TBD)   |Clumsy Actuator   |LPF, random |Yes            |Yes                   |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |

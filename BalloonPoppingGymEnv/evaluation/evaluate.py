@@ -87,13 +87,13 @@ def load_scenario_parameters(scenario_number):
     scenario_params_path = os.path.join(
         parameter_dir, f"scenario_{scenario_number}_parameters.yaml"
     )
-    with open(scenario_params_path, "r") as file:
+    with open(scenario_params_path, "r", encoding="utf-8-sig") as file:
         scenario_parameters = yaml.safe_load(file)
 
     given_params_path = os.path.join(
         parameter_dir, f"scenario_{scenario_number}_given_parameters.yaml"
     )
-    with open(given_params_path, "r") as file:
+    with open(given_params_path, "r", encoding="utf-8-sig") as file:
         given_parameters_spec = yaml.safe_load(file)
 
     given_parameters = _extract_nested_parameters(
@@ -143,7 +143,7 @@ def evaluate_scenario(
         observation, reward, terminated, _, info = env.step(action)
 
     print(f"Scenario {scenario_number} evaluation completed with agent '{agent_name}'.")
-    print(f"Final reward: {reward}")
+    print(f"Total reward: {info['popped_count']}")
 
 
 if __name__ == "__main__":
@@ -154,7 +154,7 @@ if __name__ == "__main__":
         )
 
     eval_cfg_path = sys.argv[1]
-    with open(eval_cfg_path, "r") as file:
+    with open(eval_cfg_path, "r", encoding="utf-8-sig") as file:
         eval_cfg = yaml.safe_load(file)
 
     scenario_number = eval_cfg["scenario_number"]
