@@ -132,22 +132,15 @@ class BalloonPoppingEnv(gym.Env):
 
         # Generate balloon release sequences for all balloons
         self.__reset_balloon_release_sequence()
-        self.__generate_balloon_flights()
 
-        # Scenario 0: hello world with static balloons
+        # Scenario 0: hello world with static balloons -- no Monte Carlo needed
         if self.scenario_parameters["number"] == 0:
+            self.__generate_static_balloon_flights()
             self._balloon_status = np.ones(
                 (self.balloon_parameters["num"], 1), dtype=int
             )
-            num_balloons = self._balloon_flights.shape[0]
-
-            # Spaced 40 m apart
-            z_values = 10 + self._rocketpy_env.elevation + np.arange(num_balloons) * 40
-            # x, y, vx, vy, vz = 0 for static balloons
-            self._balloon_flights[:, [0, 1, 3, 4, 5], :] = 0
-            # z = constant per balloon
-            self._balloon_flights[:, 2, :] = z_values[:, None]
         else:
+            self.__generate_balloon_flights()
             self._balloon_status = np.zeros(
                 (self.balloon_parameters["num"], 1), dtype=int
             )
@@ -640,6 +633,24 @@ class BalloonPoppingEnv(gym.Env):
         shifted = np.where(pre_release_mask_expanded, initial_states, shifted)
 
         self._balloon_flights = shifted
+
+    def __generate_static_balloon_flights(self):
+        """Scenario 0: balloons sit at fixed heights, so no Monte Carlo is run.
+
+        Builds the [balloon, state, timestep] array directly: x, y and all
+        velocities stay 0; z is a per-balloon constant spaced 40 m apart.
+        """
+        num_balloons = self.balloon_parameters["num"]
+        num_timesteps = len(
+            np.arange(
+                0,
+                self.simulation_parameters["max_time"],
+                self.simulation_parameters["time_step"],
+            )
+        )
+        self._balloon_flights = np.zeros((num_balloons, 6, num_timesteps))
+        z_values = 10 + self._rocketpy_env.elevation + np.arange(num_balloons) * 40
+        self._balloon_flights[:, 2, :] = z_values[:, None]
 
     def __get_init_rocket_states(self, inclination, heading):
         # Initialize time and state variables
