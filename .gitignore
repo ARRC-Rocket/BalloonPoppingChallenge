@@ -8,5 +8,6 @@ BalloonPoppingGymEnv/envs/data/*
 
 # Python specific
 .venv
+.ci-venv
 .ruff_cache
 __pycache__
