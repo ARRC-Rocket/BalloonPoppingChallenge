@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 dependencies = [
 	"gymnasium>=1.2.3",
 	"pymap3d>=3.2.0",
+	"pyyaml>=6.0",
 	"vpython>=7.6.5",
     "setuptools<82.0.0",
 	]
