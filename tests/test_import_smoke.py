@@ -6,21 +6,18 @@ package imports and registers, and the example agents import.
 `test_import_package` is light -- it only needs `gymnasium`, a hard runtime
 dependency. `test_import_example_agents` pulls in `balloon_world` and the
 full simulation stack (rocketpy, via the ActiveRocketPy submodule), so it is
-skipped when that stack is absent. The skip guard probes `rocketpy` only --
-a broken `BalloonPoppingGymEnv` still fails loudly inside the test body.
+skipped only when that stack is not installed. The guard checks whether
+`rocketpy` is installed without importing it, so an installed-but-broken
+stack still fails loudly inside the test body instead of being skipped.
 """
 
-import importlib
+import importlib.util
 import unittest
 
 
 def _simulation_stack_installed():
-    """True when the heavy simulation stack (rocketpy) is importable."""
-    try:
-        importlib.import_module("rocketpy")
-    except ImportError:
-        return False
-    return True
+    """True when rocketpy is installed (probed via find_spec, without importing it)."""
+    return importlib.util.find_spec("rocketpy") is not None
 
 
 class TestImportSmoke(unittest.TestCase):
