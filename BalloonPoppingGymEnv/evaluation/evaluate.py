@@ -143,7 +143,7 @@ def evaluate_scenario(
         observation, reward, terminated, _, info = env.step(action)
 
     print(f"Scenario {scenario_number} evaluation completed with agent '{agent_name}'.")
-    print(f"Final reward: {reward}")
+    print(f"Total reward: {info['popped_count']}")
 
 
 if __name__ == "__main__":

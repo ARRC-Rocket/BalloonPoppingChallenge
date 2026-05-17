@@ -43,7 +43,7 @@ while not terminated:
     attitude_est = np.append(attitude_est, agent.states[6:10].reshape(-1, 1), axis=1)
     
 
-    print(f"simulation_time: {observation['simulation_time']:.2f} sec, reward: {reward:.2f}", end='\r')
+    print(f"simulation_time: {observation['simulation_time']:.2f} sec, total reward: {info['popped_count']:.2f}", end='\r')
 
 plt.subplot(2, 1, 1)
 plt.plot(time, attitude_gt[0], 'r-', label='e0_attitude_gt')

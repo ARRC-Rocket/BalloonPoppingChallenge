@@ -80,9 +80,9 @@ There are three stages in the operation of the Gymnasium environment: reset, ste
 
 2. **Stepping**: The agent takes an action (e.g., launch, roll, throttle and TVC commands) and calls `env.step(action)`, which advances the simulation by one time step. The environment returns the new observations, reward, termination flag, and additional info.
 
-3. **Termination**: The episode ends when maximum simulation time is reached or the rocket hits the ground. The environment provides a reward based on the number of balloons popped.
+3. **Termination**: The episode ends when maximum simulation time is reached or the rocket hits the ground.
 
-The actions, observations, info, rewards in this environment are:
+The actions, observations, info, reward in this environment are:
 - actions:
     - `launch`: a binary command to launch the rocket.
     - `launch_inclination_heading`: a 2-element array [inclination, heading] representing the launch inclination (0-90 degrees from horizontal) and heading angles (0-360 degrees from north).
@@ -106,9 +106,10 @@ The actions, observations, info, rewards in this environment are:
         - vel: center of dry mass velocity (m/s) in the launch frame (relative to launch origin).
         - e: quaternion representing the attitude of the rocket (e0, e1, e2, e3) relative to the launch frame.
         - w: angular velocity (rad/s) in the rocket body frame.
+    - `popped_count`: total number of balloon popped. This will be the final score of evaluation.
 
-- rewards:
-    - The reward is calculated based on the total number of balloons popped at each time step.
+- reward:
+    - The reward is the number of balloons popped at each time step.
 
 ## Known Issues
 - The mass properties are pre-calculated before flight according to max flow rate and burn time. Throttle commands does not affect the change of the mass properties in-flight. It is equivalent to throttling the Isp of rocket engine while the flow rate remains constant. The engine is cutted of when burn time is reached
