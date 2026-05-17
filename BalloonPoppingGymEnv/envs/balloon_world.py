@@ -24,7 +24,6 @@ from rocketpy.sensors.accelerometer import Accelerometer
 from rocketpy.sensors.gnss_receiver import GnssReceiver
 from rocketpy.sensors.gyroscope import Gyroscope
 from rocketpy.tools import euler313_to_quaternions
-from vpython import arrow, canvas, color, rate, sphere, vector
 
 
 class BalloonPoppingEnv(gym.Env):
@@ -337,6 +336,8 @@ class BalloonPoppingEnv(gym.Env):
 
     def _render_frame(self):
         if self.render_mode == "vpython":
+            from vpython import canvas, color, rate, sphere, vector
+
             if self.render_canvas is None:
                 self.render_canvas = canvas(
                     title="Balloon Popping Environment",

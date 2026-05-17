@@ -11,7 +11,6 @@ requires-python = ">=3.10"
 dependencies = [
 	"gymnasium>=1.2.3",
 	"pymap3d>=3.2.0",
-	"vpython>=7.6.5",
     "setuptools<82.0.0",
 	]
 
@@ -19,6 +18,9 @@ dependencies = [
 dev = [
 	"ruff>0.9",
 	"pytest>=8.0",
+]
+vpython = [
+	"vpython>=7.6.5",
 ]
 
 [tool.hatch.build.targets.wheel]

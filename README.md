@@ -18,6 +18,12 @@ python -m venv .venv        # Create a virtual environment (optional but recomme
 python -m pip install -r requirements.txt
 ```
 
+> The `vpython` renderer (`render_mode="vpython"`) is optional and is not installed by the command above. The default `matplotlib` renderer works without it. To use the vpython renderer, install the optional extra:
+>
+> ```shell
+> python -m pip install -e ".[vpython]"
+> ```
+
 ## Update from the repository:
 
 ```shell
