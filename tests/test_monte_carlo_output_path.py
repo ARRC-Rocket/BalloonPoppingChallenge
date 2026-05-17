@@ -8,6 +8,7 @@ read-only, e.g. a site-packages install).
 Runtime test: needs the simulation stack. Skips cleanly when it is absent.
 """
 
+import os
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -60,6 +61,13 @@ class TestMonteCarloOutputPath(unittest.TestCase):
         self.assertFalse(
             str(filename).startswith(package_data),
             f"MonteCarlo writes into the package directory: {filename}",
+        )
+        # Per-process name: concurrent processes / users must not collide on
+        # one fixed path in the shared system temp directory.
+        self.assertIn(
+            str(os.getpid()),
+            filename.name,
+            f"Monte Carlo output filename should be per-process unique: {filename}",
         )
 
 
