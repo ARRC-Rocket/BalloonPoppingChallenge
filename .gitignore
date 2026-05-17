@@ -11,3 +11,6 @@ BalloonPoppingGymEnv/envs/data/*
 .ci-venv
 .ruff_cache
 __pycache__
+.pytest_cache
+.coverage
+coverage.xml
