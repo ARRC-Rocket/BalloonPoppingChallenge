@@ -63,6 +63,7 @@ git submodule update --remote --merge
 - Rocket flight modelling (RocketPy):
     - The details can be found in the [RocketPy Reference](https://docs.rocketpy.org/en/latest/index.html)
     - The coordinates are shown in the figure below:
+    
     ![Rocket coordinate frames](doc/figures/Coordinates.drawio.svg)
 - Balloon popping specific modelling:
     - Balloons are modeled as rigid spheres with a certain radius and mass.
@@ -111,8 +112,8 @@ The actions, observations, info, reward in this environment are:
 - reward:
     - The reward is the number of balloons popped at each time step.
 
-## Known Issues
-- The mass properties are pre-calculated before flight according to max flow rate and burn time. Throttle commands does not affect the change of the mass properties in-flight. It is equivalent to throttling the Isp of rocket engine while the flow rate remains constant. The engine is cutted of when burn time is reached
+## Known Limitations
+- The mass properties are pre-calculated before flight according to max flow rate and burn time. Throttle commands does not affect the change of the mass properties in-flight. It is equivalent to throttling the Isp of rocket engine while the flow rate remains constant. The engine is cut off when burn time is reached
 
 ## Agent Development
 Agents for evaluation are placed in the [/agents folder](./BalloonPoppingGymEnv/agents). They should be implemented as a class that inherits from [BaseAgent](./BalloonPoppingGymEnv/agents/base_agent.py) and implements the `get_action` method. The agent can access the scenario parameters through `self.given_parameters`, as defined in `scenario_given_parameters.yaml` files in [/scenario_parameters folder](./BalloonPoppingGymEnv/envs/scenario_parameters/). Observations are passed through the `get_action` method. The agent should output an action dictionary that matches the action space defined in the environment.
@@ -183,7 +184,7 @@ Exact scenario for elimination rounds and final rounds will be announced later. 
 
 |# | Name | 🚀 Actuator Response | 🚀 Sensor Noise | 🌬️ Wind | 🎈 Number | 🎈 Release Interval (sec) | 🎈 Initial Position | 🎈 Position Observation | 🎈 Velocity Observation |
 |---|---|---|---|---|---|---|---|---|---|
-|#0         |Hello World       |Ideal       |No             |None                  |10     |N/A    |height = linspace(10,410,40)| Static at initial position           | no velocity                        |
+|#0         |Hello World       |Ideal       |No             |None                  |10     |N/A    |height = arange(10, 410, 40) + elevation| Static at initial position           | no velocity                        |
 |#1         |Random Balloon    |Ideal       |No             |Yes                   |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
 |#2 (TBD)   |Noisy Sensor      |Ideal       |Yes            |Yes                   |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
 |#3 (TBD)   |Clumsy Actuator   |LPF, random |Yes            |Yes                   |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
