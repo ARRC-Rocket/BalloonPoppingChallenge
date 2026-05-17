@@ -8,21 +8,37 @@ This repository contains the code for the Balloon Popping Challenge, a 6-DoF roc
 
 ## Installation
 
+Clone the repository and initialize the `ActiveRocketPy` submodule:
+
 ```shell
 git clone https://github.com/ARRC-Rocket/BalloonPoppingChallenge.git
 cd BalloonPoppingChallenge
-git submodule update --init # Initialize the ActiveRocketPy submodule
-python -m venv .venv        # Create a virtual environment (optional but recommended)
+git submodule update --init
+```
+
+Then set up the environment with **uv** (recommended) or with **pip**.
+
+### Option A: uv (recommended)
+
+[uv](https://docs.astral.sh/uv/) installs the pinned Python version, creates the virtual environment, and installs the locked dependencies in one step:
+
+```shell
+pip install uv==0.11.14
+uv sync
+```
+
+Prefix any command with `uv run` to run it inside the environment, e.g. `uv run python -m unittest discover tests`.
+
+### Option B: pip
+
+```shell
+python -m venv .venv
 .venv\Scripts\activate      # On Windows
-# source .venv/bin/activate # On Unix or MacOS
+# source .venv/bin/activate # On Unix or macOS
 python -m pip install -r requirements.txt
 ```
 
-> The `vpython` renderer (`render_mode="vpython"`) is optional and is not installed by the command above. The default `matplotlib` renderer works without it. To use the vpython renderer, install the optional extra:
->
-> ```shell
-> python -m pip install -e ".[vpython]"
-> ```
+> The `vpython` renderer (`render_mode="vpython"`) is optional and is not installed by either option above; the default `matplotlib` renderer works without it. To enable it, install the `vpython` extra: `uv sync --extra vpython` (uv) or `python -m pip install -e ".[vpython]"` (pip).
 
 ## Update from the repository:
 
@@ -30,6 +46,7 @@ python -m pip install -r requirements.txt
 cd BalloonPoppingChallenge
 git pull origin main
 git submodule update --remote --merge
+uv sync   # re-sync the environment (pip users: python -m pip install -r requirements.txt)
 ```
 
 ## Examples
