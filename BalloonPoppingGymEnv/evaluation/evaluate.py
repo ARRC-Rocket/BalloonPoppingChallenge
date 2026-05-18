@@ -1,10 +1,13 @@
 import importlib.util
+import logging
 import os
 import sys
 
 import yaml
 
 from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_nested_parameters(scenario_parameters, given_parameters_spec):
@@ -142,11 +145,17 @@ def evaluate_scenario(
         action = agent.get_action(observation)
         observation, reward, terminated, _, info = env.step(action)
 
-    print(f"Scenario {scenario_number} evaluation completed with agent '{agent_name}'.")
-    print(f"Total reward: {info['popped_count']}")
+    logger.info(
+        "Scenario %s evaluation completed with agent '%s'.",
+        scenario_number,
+        agent_name,
+    )
+    logger.info("Total reward: %s", info["popped_count"])
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+
     if len(sys.argv) < 2:
         raise ValueError(
             "Configuration file path is required. "
