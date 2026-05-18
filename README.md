@@ -20,14 +20,39 @@ Then set up the environment with **uv** (recommended) or with **pip**.
 
 ### Option A: uv (recommended)
 
-[uv](https://docs.astral.sh/uv/) installs the pinned Python version, creates the virtual environment, and installs the locked dependencies in one step:
+[uv](https://docs.astral.sh/uv/) installs the pinned Python version, creates the virtual environment, and installs the locked dependencies in one step.
+
+**1. Install uv** (skip if it is already installed).
+
+Windows (PowerShell):
 
 ```shell
-pip install uv==0.11.14
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/0.11.14/install.ps1 | iex"
+```
+
+macOS / Linux:
+
+```shell
+curl -LsSf https://astral.sh/uv/0.11.14/install.sh | sh
+```
+
+Other install methods (Homebrew, winget, pipx, ...) are in the [uv installation docs](https://docs.astral.sh/uv/getting-started/installation/).
+
+**2. Open a new terminal** so the shell picks up `uv`, then confirm it works:
+
+```shell
+uv --version
+```
+
+**3. Set up the environment** from the repository root:
+
+```shell
 uv sync
 ```
 
 Prefix any command with `uv run` to run it inside the environment, e.g. `uv run python -m unittest discover tests`.
+
+> **`uv` not found?** First open a new terminal: a fresh shell is needed after installing. If it is still not found, uv's install directory is not on your `PATH`. Either add it to `PATH`, or install uv with `pip install uv==0.11.14` and use `python -m uv` in place of `uv` (for example `python -m uv sync`); `python -m uv ...` is equivalent to `uv ...` and does not depend on `PATH`.
 
 ### Option B: pip
 
