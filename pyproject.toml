@@ -9,12 +9,12 @@ description = "6-DoF rocket GNC simulation Gymnasium environment based on Rocket
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+	"activerocketpy[all]",
 	"gymnasium>=1.2.3",
 	"pymap3d>=3.2.0",
 	"pyyaml>=6.0",
-	"vpython>=7.6.5",
-  "setuptools<82.0.0",
-	]
+	"setuptools<82.0.0",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -24,6 +24,9 @@ dev = [
 vpython = [
 	"vpython>=7.6.5",
 ]
+
+[tool.uv.sources]
+activerocketpy = { path = "ActiveRocketPy", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["BalloonPoppingGymEnv"]
