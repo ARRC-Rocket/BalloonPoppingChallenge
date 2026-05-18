@@ -127,6 +127,11 @@ def evaluate_scenario(
         Scenario number to evaluate
     render_mode : str or None
         Rendering mode for the environment ('matplotlib') or None
+
+    Returns
+    -------
+    int
+        Total number of balloons popped during the run.
     """
 
     # Load scenario parameters
@@ -152,9 +157,11 @@ def evaluate_scenario(
     )
     logger.info("Total reward: %s", info["popped_count"])
 
+    return info["popped_count"]
+
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
     if len(sys.argv) < 2:
         raise ValueError(

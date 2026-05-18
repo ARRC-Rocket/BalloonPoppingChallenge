@@ -72,13 +72,14 @@ def run_for_evaluation():
 
     # Load agent class dynamically from specified module path.
     # Equivalent to run command: python evaluate.py <path_to_eval_config.yaml>
-    evaluate_scenario(
+    total_reward = evaluate_scenario(
         SineCommandAgent,
         agent_kwargs=agent_kwargs,
         agent_name=agent_name,
         scenario_number=scenario_number,
         render_mode='matplotlib',
     )
+    print(f"Total reward: {total_reward}")
 
 if __name__ == "__main__":
     # Use this function for development and debugging purposes.
