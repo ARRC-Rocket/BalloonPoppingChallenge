@@ -346,15 +346,13 @@ class BalloonPoppingEnv(gym.Env):
                     center=vector(0, 0, 0),
                     background=color.white,
                 )
-                self.render_balloons = sphere(
-                    radius=1.5, color=color.magenta, make_trail=True
-                )
+                self.render_balloons = [
+                    sphere(radius=1.5, color=color.magenta, make_trail=True)
+                    for _ in range(self.balloon_parameters["num"])
+                ]
 
-            self.render_balloons.pos = vector(
-                self._balloon_states[0, 0],
-                self._balloon_states[0, 1],
-                self._balloon_states[0, 2],
-            )
+            for balloon, state in zip(self.render_balloons, self._balloon_states):
+                balloon.pos = vector(state[0], state[1], state[2])
             rate(30)
         elif self.render_mode == "matplotlib":
             if self.render_canvas is None:
