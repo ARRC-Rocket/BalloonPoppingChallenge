@@ -1,0 +1,30 @@
+name: Feature request / proposal
+description: Propose an enhancement, a design change, or new functionality
+title: "[Proposal] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for enhancements and design discussions. For a non-trivial change, open the proposal here and discuss before sending a PR.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / current state
+      description: What is missing or not working well today, and why it matters.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What you want to do. Outline the approach and the files or areas affected.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and trade-offs
+      description: Other options considered, and the trade-offs of the proposed one.
+    validations:
+      required: false
