@@ -226,14 +226,15 @@ class BalloonPoppingEnv(gym.Env):
             self._detect_pops(previous_balloon_positions, previous_rocket_position)
 
         # Append rocket and balloon states to trajectories for logging
-        state_record = {
-            "rocket": self._rocket_states.copy().tolist(),
-            "balloons": self._balloon_states.copy().tolist(),
+        step_record = {
+            "rocket_states": self._rocket_states.copy().tolist(),
+            "balloon_states": self._balloon_states.copy().tolist(),
+            "balloon_status": self._balloon_status.copy().tolist(),
         }
         if self.trajectories is None:
-            self.trajectories = [state_record]
+            self.trajectories = [step_record]
         else:
-            self.trajectories.append(state_record)
+            self.trajectories.append(step_record)
 
         # An episode is done iff reaches max time or end of trajectory
         _timeout = self.current_step >= self.num_timesteps - 1

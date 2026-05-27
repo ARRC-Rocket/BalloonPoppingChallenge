@@ -33,6 +33,7 @@ def render_trajectory_from_file(file_path):
         balloon_velocities = [
             balloon[3:6] for balloon in step["balloons"]
         ]  # list of vx, vy, vz for each balloon
+        balloon_states = step["balloon_states"][0]
 
         print(rocket_position)
         # TODO: render the rocket and balloons using the extracted data
