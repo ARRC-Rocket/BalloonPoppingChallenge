@@ -147,6 +147,8 @@ def evaluate_scenario(
     print(f"Scenario {scenario_number} evaluation completed with agent '{agent_name}'.")
     print(f"Total reward: {info['popped_count']}")
 
+    return env, agent, scenario_parameters
+
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
@@ -168,10 +170,16 @@ if __name__ == "__main__":
 
     # Load agent class dynamically from specified module path.
     agent_class = _load_agent_class(agent_module_path, agent_class_name)
-    evaluate_scenario(
+    env, agent, scenario_parameters = evaluate_scenario(
         agent_class,
         agent_kwargs=agent_kwargs,
         agent_name=agent_name,
         scenario_number=scenario_number,
         render_mode=render_mode,
     )
+    if eval_cfg["leaderboard_submission"]:
+        from BalloonPoppingGymEnv.evaluation.results.utils import pack_for_submission
+
+        pack_for_submission(
+            eval_cfg=eval_cfg, env=env, scenario_parameters=scenario_parameters
+        )

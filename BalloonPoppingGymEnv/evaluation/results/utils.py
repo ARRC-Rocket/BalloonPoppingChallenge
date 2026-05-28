@@ -1,6 +1,11 @@
+import hashlib
 import json
 import os
-from datetime import datetime
+import pickle
+import urllib.request
+from datetime import datetime, timezone
+
+from rocketpy._encoders import RocketPyEncoder
 
 
 def save_trajectories(trajectories):
@@ -12,6 +17,67 @@ def save_trajectories(trajectories):
 
     with open(path, "w", encoding="utf-8") as file:
         json.dump(trajectories, file, indent=2)
+
+
+def pack_for_submission(eval_cfg, env, scenario_parameters):
+
+    team_name = eval_cfg["team_name"]
+    timestamp = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
+
+    # Check the md5 of evaluate.py on local and git main
+    url = "https://raw.githubusercontent.com/ARRC-Rocket/BalloonPoppingChallenge/refs/heads/main/BalloonPoppingGymEnv/evaluation/evaluate.py"
+    with urllib.request.urlopen(url) as response:
+        remote_md5 = hashlib.md5(response.read()).hexdigest()
+
+    local = os.path.join(os.path.dirname(os.path.dirname(__file__)), "evaluate.py")
+    with open(local, "rb") as f:
+        local_md5 = hashlib.md5(f.read()).hexdigest()
+
+    if remote_md5 != local_md5:
+        print("Result encryption warning: evaluate.py should not be modified")
+        # return
+
+    # Read agent source
+    agent_module_path = os.fspath(eval_cfg["agent_module_path"])
+    with open(agent_module_path, "r", encoding="utf-8") as f:
+        agent_module_file = f.read()
+
+    # Submission payload
+    submission = {
+        "format_version": 0,
+        "team": {
+            "name": team_name,
+            "secret": eval_cfg["team_secret"],
+        },
+        "leaderboard_info": {
+            "team_name": team_name,
+            "timestamp_utc": timestamp,
+            "agent_name": eval_cfg["agent_name"],
+            "scenario_number": eval_cfg["scenario_number"],
+            "final_reward": env._popped_count,
+        },
+        "balloon_world_data": {
+            "scenario_parameters": scenario_parameters,
+            "trajectories": env.trajectories,
+            "balloon_release_at_step": env._balloon_release_at_step,
+            "rocket_flight": json.dumps(env._rocket_flight, cls=RocketPyEncoder),
+            "balloon_flights": env._balloon_flights,
+        },
+        "agent_info": {
+            "eval_cfg": eval_cfg,
+            "agent_module_file": agent_module_file,
+        },
+    }
+
+    # Save submission
+    out_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        f"{timestamp}_{team_name}_submission.pkl",
+    )
+    with open(out_path, "wb") as f:
+        pickle.dump(submission, f)
+
+    print(f"Submission saved to:\n{out_path}")
 
 
 def render_trajectory_from_file(file_path):
