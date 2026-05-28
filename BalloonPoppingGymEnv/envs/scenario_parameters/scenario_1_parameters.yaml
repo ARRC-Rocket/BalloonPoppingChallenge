@@ -11,12 +11,10 @@ environment:
   elevation: 20.0 # (m) elevation above sea level
   atmosphere_data_filename: TW_Cup_250726_NetCDF4_Ensemble.nc # filename of the atmosphere data in the envs/data folder, or null to use standard atmosphere
   gust:
-    enable: true
-    model: gaussian
-    peak: 20.0        # (m/s) maximum gust speed
-    heading_deg: 0.0  # (deg) 0=North, 90=East, 180=South, 270=West
-    center_agl: 500.0 # (m) gust center altitude above ground level
-    sigma: 150.0      # (m) gust thickness / altitude spread
+    enable: false
+    altitude_spacing: 10.0 # (m) vertical spacing between gust samples
+    max_gust_speed: 3.0 # (m/s) maximum gust speed
+    gust_decay_height: 150.0  # (m) characteristic decay height for the gust speed with altitude
 
 # Simulation timing configuration
 simulation:
