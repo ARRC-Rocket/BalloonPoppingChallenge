@@ -1,0 +1,42 @@
+name: Bug report
+description: Report something broken in the simulator, environment, or evaluation
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please give enough detail for it to be reproduced.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened
+      description: A clear description of the bug, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Commands, scenario number, agent, and config used. A minimal snippet helps.
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output / traceback
+      description: Paste the full traceback or log. It is formatted as code automatically.
+      render: shell
+    validations:
+      required: false
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, install method (uv / pip), and the commit or branch.
+      placeholder: "Windows 11, Python 3.14, uv, develop @ abc1234"
+    validations:
+      required: true
