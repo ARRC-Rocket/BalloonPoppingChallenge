@@ -227,10 +227,11 @@ class BalloonPoppingEnv(gym.Env):
 
         # Append rocket and balloon states to trajectories for logging
         step_record = {
+            "time": self.current_step * self.simulation_parameters["time_step"],
             "rocket_states": self._rocket_states.copy().tolist(),
             "balloon_states": self._balloon_states.copy().tolist(),
-            "balloon_status": self._balloon_status.copy().tolist(),
-        }
+            "balloon_status": self._balloon_status[:, 0].tolist(),
+        }        
         if self.trajectories is None:
             self.trajectories = [step_record]
         else:
