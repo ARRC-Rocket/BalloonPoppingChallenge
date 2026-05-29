@@ -12,7 +12,7 @@ def save_trajectories(trajectories):
     """Save trajectory data as a timestamped JSON list."""
     path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        f"{datetime.now():%y%m%d%H%M%S}_trajectory.json",
+        f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}_trajectory.json",
     )
 
     with open(path, "w", encoding="utf-8") as file:
