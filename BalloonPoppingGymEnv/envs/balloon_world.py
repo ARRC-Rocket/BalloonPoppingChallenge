@@ -61,6 +61,8 @@ class BalloonPoppingEnv(gym.Env):
         self._popped_count = 0
         self._balloon_release_at_step = None
 
+        self._rocketpy_env = None
+
         # Observations include balloon and rocket states
         self.observation_space = spaces.Dict(
             {
@@ -116,9 +118,6 @@ class BalloonPoppingEnv(gym.Env):
             }
         )
 
-        # Create ActiveRocketPy environment for balloon flights and rocket simulation
-        self.__create_environment()
-
         # Graphics-related attributes
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -145,6 +144,8 @@ class BalloonPoppingEnv(gym.Env):
         # We need the following line to seed self.np_random
         super().reset(seed=seed)
 
+        # Create ActiveRocketPy environment for balloon flights and rocket simulation
+        self.__create_environment()
         self._rocket_flight = None
         self._balloon_flights = None
         self.initial_solution = None
@@ -472,6 +473,47 @@ class BalloonPoppingEnv(gym.Env):
                 dictionary="ECMWF",
             )
 
+        # Add gust after setting atmospheric model.
+        if self.environment_parameters["gust"]["enable"]:
+            gust_param = self.environment_parameters["gust"]
+
+            altitude_nodes = np.arange(
+                0.0,
+                self._rocketpy_env.max_expected_height + gust_param["altitude_spacing"],
+                gust_param["altitude_spacing"],
+            )
+            x_gust_nodes = self.np_random.uniform(
+                -gust_param["max_gust_speed"],
+                gust_param["max_gust_speed"],
+                size=len(altitude_nodes),
+            )
+            y_gust_nodes = self.np_random.uniform(
+                -gust_param["max_gust_speed"],
+                gust_param["max_gust_speed"],
+                size=len(altitude_nodes),
+            )
+            gust_decay = np.exp(
+                -altitude_nodes / gust_param["gust_decay_height"]
+            )  # Exponential decay of gust speed with altitude
+
+            def gust_x(height_asl):
+                # X direction = East
+                return np.interp(
+                    height_asl,
+                    altitude_nodes,
+                    x_gust_nodes * gust_decay,
+                )
+
+            def gust_y(height_asl):
+                # Y direction = North
+                return np.interp(
+                    height_asl,
+                    altitude_nodes,
+                    y_gust_nodes * gust_decay,
+                )
+
+            self._rocketpy_env.add_wind_gust(gust_x, gust_y)
+
     def __reset_balloon_release_sequence(self):
         n = self.balloon_parameters["num"]
         i = self.balloon_parameters["release_interval"]
@@ -607,7 +649,7 @@ class BalloonPoppingEnv(gym.Env):
             number_of_simulations=self.balloon_parameters["num"],
             append=False,
             include_function_data=False,
-            random_seed=self._np_random_seed,
+            random_seed=self.np_random_seed,
             parallel=False,
         )
 

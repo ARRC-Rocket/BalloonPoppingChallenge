@@ -10,6 +10,11 @@ environment:
   longitude: 120.8922531 # (deg) longitude of the launch origin
   elevation: 20.0 # (m) elevation above sea level
   atmosphere_data_filename: null # filename of the atmosphere data in the envs/data folder, or null to use standard atmosphere
+  gust:
+    enable: false
+    altitude_spacing: 10.0 # (m) vertical spacing between gust samples
+    max_gust_speed: 3.0 # (m/s) maximum gust speed
+    gust_decay_height: 150.0  # (m) characteristic decay height for the gust speed with altitude
 
 # Simulation timing configuration
 simulation:
