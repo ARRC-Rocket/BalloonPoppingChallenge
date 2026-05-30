@@ -234,6 +234,23 @@ Keywords: GNC, autonomous rocket, optimization, path-finding.
 - Questions about the rules and software can be asked in the [GitHub Issues](https://github.com/ARRC-Rocket/BalloonPoppingChallenge/issues). The organizer will hold regular meetings to answer questions and provide updates.
 - Code suggestions, contributions, and bug reports to the codebase are highly welcomed. Please submit a pull request or open an issue for discussion.
 
+### Competition Leaderboard
+
+Submit your results to: [https://balloonpoppingchallenge.arrcrocket.org/](https://balloonpoppingchallenge.arrcrocket.org/).
+To generate the required .pkl file for submission, please follow these steps:
+1. Register for the competition [here](https://docs.google.com/forms/d/e/1FAIpQLSegCqnI4t-R_6Nxtbkf-XJ-V3L5-_DlyDxmSU_FY2Qa1lvLXQ/viewform). Organizors will send the `team_name` and `team_secret` through email.
+2. Edit [eval_cfg.yaml](./BalloonPoppingGymEnv/evaluation/configs/example_eval_cfg.yaml)
+    ```yaml
+    team_name: example
+    team_secret: 3b4b84252bc53eb1f4d8ea008a9243040088e71a1f1fd7a9ccfe203f9c9cb164
+    leaderboard_submission: true
+    ```
+3. Run 
+    ```
+    python .\BalloonPoppingGymEnv\evaluation\evaluate.py .\BalloonPoppingGymEnv\evaluation\configs\{eval_cfg}.yaml
+    ```
+4. Upload your .pkl file generated in [/results](BalloonPoppingGymEnv\evaluation\results) folder to the [leaderboard](https://balloonpoppingchallenge.arrcrocket.org/)
+
 ### Competition Scenarios
 Exact scenario for elimination rounds and final rounds will be announced later. Below are some examples of possible scenarios.
 
