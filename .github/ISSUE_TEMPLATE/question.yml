@@ -1,0 +1,19 @@
+name: Question
+description: Ask about using the simulator, the competition, or the leaderboard
+title: "[Question] "
+labels: ["question"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: What you are trying to do, and what you are unsure about.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What you have already tried, the relevant scenario or config, and docs you have already read.
+    validations:
+      required: false

@@ -88,18 +88,18 @@ def render_trajectory_from_file(file_path):
     # Here you would implement the logic to render the trajectory using your environment's rendering capabilities.
     # This is a placeholder and should be replaced with actual rendering code.
     for step in trajectories:
-        rocket_position = step["rocket"][:3]  # x, y, z in launch frame
-        rocket_velocity = step["rocket"][3:6]  # vx, vy, vz in launch frame
-        rocket_attitude = step["rocket"][6:10]  # quaternion
-        rocket_angular_rate = step["rocket"][10:13]  # wx, wy, wz in body frame
+        rocket_position = step["rocket_states"][:3]  # x, y, z in launch frame
+        rocket_velocity = step["rocket_states"][3:6]  # vx, vy, vz in launch frame
+        rocket_attitude = step["rocket_states"][6:10]  # quaternion
+        rocket_angular_rate = step["rocket_states"][10:13]  # wx, wy, wz in body frame
 
         balloon_positions = [
-            balloon[:3] for balloon in step["balloons"]
+            balloon[:3] for balloon in step["balloon_states"]
         ]  # list of x, y, z for each balloon
         balloon_velocities = [
-            balloon[3:6] for balloon in step["balloons"]
+            balloon[3:6] for balloon in step["balloon_states"]
         ]  # list of vx, vy, vz for each balloon
-        balloon_states = step["balloon_states"][0]
+        balloon_status = step["balloon_status"][0]
 
         print(rocket_position)
         # TODO: render the rocket and balloons using the extracted data
