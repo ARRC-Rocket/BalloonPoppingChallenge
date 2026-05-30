@@ -46,6 +46,8 @@ class BalloonPoppingEnv(gym.Env):
         # (posX, posY, posZ, velX, velY, velZ, e0, e1, e2, e3, w1, w2, w3)
         self._rocket_states = np.full(13, np.nan)
 
+        self._rocketpy_env = None
+
         # Observations include balloon and rocket states
         self.observation_space = spaces.Dict(
             {
@@ -101,9 +103,6 @@ class BalloonPoppingEnv(gym.Env):
             }
         )
 
-        # Create ActiveRocketPy environment for balloon flights and rocket simulation
-        self.__create_environment()
-
         # Graphics-related attributes
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -129,6 +128,9 @@ class BalloonPoppingEnv(gym.Env):
     def reset(self, seed=None, options=None):
         # We need the following line to seed self.np_random
         super().reset(seed=seed)
+
+        # Create ActiveRocketPy environment for balloon flights and rocket simulation
+        self.__create_environment()
 
         # Generate balloon release sequences for all balloons
         self.__reset_balloon_release_sequence()
@@ -440,19 +442,17 @@ class BalloonPoppingEnv(gym.Env):
         if self.environment_parameters["gust"]["enable"]:
             gust_param = self.environment_parameters["gust"]
 
-            rng_gust = np.random.default_rng(self._np_random_seed)
-
             altitude_nodes = np.arange(
                 0.0,
                 self._rocketpy_env.max_expected_height + gust_param["altitude_spacing"],
                 gust_param["altitude_spacing"],
             )
-            x_gust_nodes = rng_gust.uniform(
+            x_gust_nodes = self.np_random.uniform(
                 -gust_param["max_gust_speed"],
                 gust_param["max_gust_speed"],
                 size=len(altitude_nodes),
             )
-            y_gust_nodes = rng_gust.uniform(
+            y_gust_nodes = self.np_random.uniform(
                 -gust_param["max_gust_speed"],
                 gust_param["max_gust_speed"],
                 size=len(altitude_nodes),
@@ -614,7 +614,7 @@ class BalloonPoppingEnv(gym.Env):
             number_of_simulations=self.balloon_parameters["num"],
             append=False,
             include_function_data=False,
-            random_seed=self._np_random_seed,
+            random_seed=self.np_random_seed,
             parallel=False,
         )
 
