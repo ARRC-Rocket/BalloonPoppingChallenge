@@ -3,6 +3,9 @@ BalloonPoppingGymEnv/envs/data/*
 !BalloonPoppingGymEnv/envs/data/**.md
 !BalloonPoppingGymEnv/envs/data/**.nc
 
+BalloonPoppingGymEnv/evaluation/results/**.json
+BalloonPoppingGymEnv/evaluation/results/**.pkl
+
 # VSCode specific
 .vscode/
 

@@ -37,6 +37,12 @@ class BalloonPoppingEnv(gym.Env):
         self.balloon_parameters = parameters["balloon"]
         self.rocket_parameters = parameters["rocket"]
 
+        # ActiveRocketPy flight classes for rocket flight and balloon flights
+        self._rocket_flight = None
+        self._balloon_flights = None
+
+        # initial solution: [time, x, y, z, vx, vy, vz, e0, e1, e2, e3, w1, w2, w3]
+        self.initial_solution = None
         # [balloon_num, status] status: 0-ground; 1-released; 2-popped
         self._balloon_status = np.zeros((self.balloon_parameters["num"], 1), dtype=int)
         # [balloon_num, (x, y, z, vx, vy, vz)]
@@ -45,6 +51,15 @@ class BalloonPoppingEnv(gym.Env):
         self._rocket_sensors = np.full(12, np.nan)
         # (posX, posY, posZ, velX, velY, velZ, e0, e1, e2, e3, w1, w2, w3)
         self._rocket_states = np.full(13, np.nan)
+        # save trajectories for logging
+        self.trajectories = None
+
+        # attributes for step()
+        self.rocket_launched = False
+        self.current_step = 0
+        self.num_timesteps = 0
+        self._popped_count = 0
+        self._balloon_release_at_step = None
 
         self._rocketpy_env = None
 
@@ -131,6 +146,9 @@ class BalloonPoppingEnv(gym.Env):
 
         # Create ActiveRocketPy environment for balloon flights and rocket simulation
         self.__create_environment()
+        self._rocket_flight = None
+        self._balloon_flights = None
+        self.initial_solution = None
 
         # Generate balloon release sequences for all balloons
         self.__reset_balloon_release_sequence()
@@ -147,12 +165,14 @@ class BalloonPoppingEnv(gym.Env):
                 (self.balloon_parameters["num"], 1), dtype=int
             )
 
+        self._balloon_states = self._balloon_flights[:, :, 0]
+        self._rocket_sensors = np.full(12, np.nan)
+        self._rocket_states = np.full(13, np.nan)
+        self.trajectories = None
+
         self.rocket_launched = False
         self.current_step = 0
         self.num_timesteps = self._balloon_flights.shape[2]
-        self._balloon_states = self._balloon_flights[:, :, self.current_step]
-        self._rocket_sensors = np.full(12, np.nan)
-        self._rocket_states = np.full(13, np.nan)
         self._popped_count = 0
 
         observation = self._get_obs()
@@ -206,6 +226,18 @@ class BalloonPoppingEnv(gym.Env):
             # detect pops
             self._detect_pops(previous_balloon_positions, previous_rocket_position)
 
+        # Append rocket and balloon states to trajectories for logging
+        step_record = {
+            "time": self.current_step * self.simulation_parameters["time_step"],
+            "rocket_states": self._rocket_states.copy().tolist(),
+            "balloon_states": self._balloon_states.copy().tolist(),
+            "balloon_status": self._balloon_status[:, 0].tolist(),
+        }        
+        if self.trajectories is None:
+            self.trajectories = [step_record]
+        else:
+            self.trajectories.append(step_record)
+
         # An episode is done iff reaches max time or end of trajectory
         _timeout = self.current_step >= self.num_timesteps - 1
         if _timeout:
@@ -216,13 +248,16 @@ class BalloonPoppingEnv(gym.Env):
             print("Terminated: Rocket flight finished")
         terminated = _timeout or _rocket_finished
 
+        # Calculate reward based on newly popped balloons at this step
         new_count = np.sum(self._balloon_status[:, 0] == 2)
         reward = new_count - self._popped_count
         self._popped_count = new_count
 
+        # Get observation and info for the current step
         observation = self._get_obs()
         info = self._get_info()
 
+        # Render every 0.1 sec or on termination to balance visualization and performance
         _remainder = np.remainder(
             self.current_step, 0.1 / self.simulation_parameters["time_step"]
         )  # print every 0.1 sec
@@ -618,7 +653,7 @@ class BalloonPoppingEnv(gym.Env):
             parallel=False,
         )
 
-        """Convert Monte Carlo dict to [balloon][state][timestep]."""
+        # Convert Monte Carlo dict to [balloon][state][timestep].
         east0, north0, up0 = pm.geodetic2enu(
             monte_carlo_results_["lat0"],
             monte_carlo_results_["lon0"],
