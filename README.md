@@ -294,9 +294,14 @@ Exact scenario for elimination rounds and final rounds will be announced later. 
     - Make vpython an optional, lazily-imported render dependency (Make vpython an optional, lazily-imported render dependency #15)
     - Clean up dead code, redundant calls, and unused imports (Clean up dead code, redundant calls, and unused imports #7)
     - Move Monte Carlo output out of the package directory (Move Monte Carlo output out of the package directory #22)
+    - Add GitHub Actions CI workflow (#23)
   - Update:
     - Update to return reward from each step only. Total count of popped balloon is returned in info. Reward returned every step is the cumulative pop count, not the per-step delta #10 (ENH: Return reward of each step #12)
     - Skip Monte Carlo balloon simulation for scenario 0 (Skip Monte Carlo balloon simulation for scenario 0 #18)
+    - Render every balloon in the vpython renderer (#27)
   - New:
     - Add uv as the recommended environment setup path (Add uv as the recommended environment setup path #20)
     - Add standardized issue templates (Add standardized issue templates #25)
+    - ENH: Add architecture for post sim graphics (#28)
+    - ENH: Add leaderboard submission functions (#31)
+    - Add gust to balloon_world environment (#32)
