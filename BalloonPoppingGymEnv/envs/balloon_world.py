@@ -18,6 +18,7 @@ from rocketpy import (
     StochasticFlight,
     StochasticRocket,
 )
+from rocketpy.mathutils.vector_matrix import Matrix, Vector
 from rocketpy.motors import CylindricalTank, Fluid, HybridMotor
 from rocketpy.motors.tank import MassFlowRateBasedTank
 from rocketpy.sensors.accelerometer import Accelerometer
@@ -373,7 +374,7 @@ class BalloonPoppingEnv(gym.Env):
 
     def _render_frame(self):
         if self.render_mode == "vpython":
-            from vpython import canvas, color, rate, sphere, vector
+            from vpython import arrow, canvas, color, rate, sphere, vector
 
             if self.render_canvas is None:
                 self.render_canvas = canvas(
@@ -383,15 +384,44 @@ class BalloonPoppingEnv(gym.Env):
                     center=vector(0, 0, 0),
                     background=color.white,
                 )
-                self.render_balloons = sphere(
-                    radius=1.5, color=color.magenta, make_trail=True
+                self.render_balloons = [
+                    sphere(radius=1.5, color=color.magenta)
+                    for _ in range(self.balloon_parameters["num"])
+                ]
+                # Create rocket arrow visualization
+                self.render_rocket = arrow(
+                    pos=vector(0, 0, 0),
+                    axis=vector(0, 0, 5),
+                    shaftwidth=0.5,
+                    color=color.blue,
                 )
 
-            self.render_balloons.pos = vector(
-                self._balloon_states[0, 0],
-                self._balloon_states[0, 1],
-                self._balloon_states[0, 2],
-            )
+            # Status colors: 0=grey (ground), 1=magenta (released), 2=red (popped)
+            status_colors = {0: color.gray(0.5), 1: color.magenta, 2: color.red}
+            for balloon, state, status in zip(
+                self.render_balloons, self._balloon_states, self._balloon_status[:, 0]
+            ):
+                balloon.pos = vector(state[0], state[1], state[2])
+                balloon.color = status_colors[int(status)]
+
+            # Update rocket visualization with attitude
+            if not np.isnan(self._rocket_states[0]):
+                # Convert quaternion to rocket nose direction vector
+                nose_direction = Matrix.transformation(
+                    self._rocket_states[6:10]
+                ) @ Vector([0, 0, 1])
+
+                self.render_rocket.pos = vector(
+                    self._rocket_states[0],
+                    self._rocket_states[1],
+                    self._rocket_states[2],
+                )
+                self.render_rocket.axis = vector(
+                    nose_direction[0] * 10,
+                    nose_direction[1] * 10,
+                    nose_direction[2] * 10,
+                )
+
             rate(30)
         elif self.render_mode == "matplotlib":
             if self.render_canvas is None:
