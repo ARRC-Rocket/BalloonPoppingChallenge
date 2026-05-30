@@ -5,6 +5,7 @@ import sys
 import yaml
 
 from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
+from BalloonPoppingGymEnv.evaluation.results.utils import save_trajectories
 
 
 def _extract_nested_parameters(scenario_parameters, given_parameters_spec):
@@ -142,6 +143,7 @@ def evaluate_scenario(
         action = agent.get_action(observation)
         observation, reward, terminated, _, info = env.step(action)
 
+    save_trajectories(trajectories=env.trajectories)
     print(f"Scenario {scenario_number} evaluation completed with agent '{agent_name}'.")
     print(f"Total reward: {info['popped_count']}")
 
