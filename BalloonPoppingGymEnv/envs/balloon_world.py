@@ -100,8 +100,10 @@ class BalloonPoppingEnv(gym.Env):
                     dtype=np.float64,
                 ),
                 "tvc": spaces.Box(
-                    low=-self.rocket_parameters["control"]["gimbal_range"] * np.ones(2),
-                    high=self.rocket_parameters["control"]["gimbal_range"] * np.ones(2),
+                    low=-self.rocket_parameters["control"]["max_gimbal_angle"]
+                    * np.ones(2),
+                    high=self.rocket_parameters["control"]["max_gimbal_angle"]
+                    * np.ones(2),
                     dtype=np.float64,
                 ),
                 "throttle": spaces.Box(
@@ -213,8 +215,12 @@ class BalloonPoppingEnv(gym.Env):
                 self.__init_rocket_simulation()
         else:  # Apply action to step the rocket simulation and get sensor measurements
             self._rocket_flight.rocket.roll_control.roll_torque = action["roll"]
-            self._rocket_flight.rocket.tvc.gimbal_angle_x = action["tvc"][0]
-            self._rocket_flight.rocket.tvc.gimbal_angle_y = action["tvc"][1]
+            self._rocket_flight.rocket.thrust_vector_control.gimbal_angle_x = action[
+                "tvc"
+            ][0]
+            self._rocket_flight.rocket.thrust_vector_control.gimbal_angle_y = action[
+                "tvc"
+            ][1]
             self._rocket_flight.rocket.throttle_control.throttle = action["throttle"]
             self._rocket_flight.step_simulation()
             _sensor = self._rocket_flight.sensors
@@ -233,7 +239,7 @@ class BalloonPoppingEnv(gym.Env):
             "rocket_states": self._rocket_states.copy().tolist(),
             "balloon_states": self._balloon_states.copy().tolist(),
             "balloon_status": self._balloon_status[:, 0].tolist(),
-        }        
+        }
         if self.trajectories is None:
             self.trajectories = [step_record]
         else:
@@ -926,12 +932,12 @@ class BalloonPoppingEnv(gym.Env):
                 tvc.gimbal_angle_y,
             )
 
-        rocket.add_tvc(
-            gimbal_range=control_cfg["gimbal_range"],
-            gimbal_rate_limit=control_cfg["gimbal_rate_limit"],
-            sampling_rate=1 / self.simulation_parameters["time_step"],
+        rocket.add_thrust_vector_control(
             controller_function=tvc_controller_function,
-            return_controller=False,
+            sampling_rate=1 / self.simulation_parameters["time_step"],
+            max_gimbal_angle=control_cfg["max_gimbal_angle"],
+            gimbal_rate_limit=control_cfg["gimbal_rate_limit"],
+            gimbal_time_constant=control_cfg["gimbal_time_constant"],
         )
 
         def roll_controller_function(
@@ -950,11 +956,11 @@ class BalloonPoppingEnv(gym.Env):
             )
 
         rocket.add_roll_control(
+            controller_function=roll_controller_function,
+            sampling_rate=1 / self.simulation_parameters["time_step"],
             max_roll_torque=control_cfg["max_roll_torque"],
             torque_rate_limit=control_cfg["torque_rate_limit"],
-            sampling_rate=1 / self.simulation_parameters["time_step"],
-            controller_function=roll_controller_function,
-            return_controller=False,
+            roll_torque_time_constant=control_cfg["roll_torque_time_constant"],
         )
 
         def throttle_controller_function(
@@ -973,11 +979,11 @@ class BalloonPoppingEnv(gym.Env):
             )
 
         rocket.add_throttle_control(
+            controller_function=throttle_controller_function,
+            sampling_rate=1 / self.simulation_parameters["time_step"],
             throttle_range=control_cfg["throttle_range"],
             throttle_rate_limit=control_cfg["throttle_rate_limit"],
-            sampling_rate=1 / self.simulation_parameters["time_step"],
-            controller_function=throttle_controller_function,
-            return_controller=False,
+            throttle_time_constant=control_cfg["throttle_time_constant"],
         )
 
         self._rocket_flight = Flight(
