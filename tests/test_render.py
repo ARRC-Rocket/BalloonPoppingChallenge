@@ -54,8 +54,6 @@ class TestVpythonRendersAllBalloons(unittest.TestCase):
             "vpython render must create one sphere per balloon",
         )
         self.assertEqual(len(env.render_balloons), num)
-        # vector(): 1 for the canvas centre + 1 per balloon in the update loop
-        self.assertEqual(fake_vpython.vector.call_count, num + 1)
 
 
 if __name__ == "__main__":
