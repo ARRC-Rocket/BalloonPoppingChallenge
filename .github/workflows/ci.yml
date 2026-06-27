@@ -37,6 +37,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      # Run the opt-in slow regression tests (e.g. the scenario #1 Monte Carlo
+      # golden master) in CI; they are skipped by default for fast local runs.
+      BPC_RUN_SLOW_TESTS: "1"
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
