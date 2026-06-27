@@ -1,4 +1,5 @@
 import copy
+import logging
 import os
 import tempfile
 
@@ -25,6 +26,8 @@ from rocketpy.sensors.accelerometer import Accelerometer
 from rocketpy.sensors.gnss_receiver import GnssReceiver
 from rocketpy.sensors.gyroscope import Gyroscope
 from rocketpy.tools import euler313_to_quaternions
+
+logger = logging.getLogger(__name__)
 
 
 class BalloonPoppingEnv(gym.Env):
@@ -248,11 +251,11 @@ class BalloonPoppingEnv(gym.Env):
         # An episode is done iff reaches max time or end of trajectory
         _timeout = self.current_step >= self.num_timesteps - 1
         if _timeout:
-            print("Terminated: Reached max time")
+            logger.info("Terminated: Reached max time")
             self._rocket_flight.post_process_simulation()
             self._rocket_flight.initialize_prints_plots()
         elif _rocket_finished:
-            print("Terminated: Rocket flight finished")
+            logger.info("Terminated: Rocket flight finished")
         terminated = _timeout or _rocket_finished
 
         # Calculate reward based on newly popped balloons at this step
@@ -484,7 +487,7 @@ class BalloonPoppingEnv(gym.Env):
             pass
 
     def close(self):
-        print("closing environment")
+        logger.debug("closing environment")
 
     def __create_environment(self):
         self._rocketpy_env = Environment(
