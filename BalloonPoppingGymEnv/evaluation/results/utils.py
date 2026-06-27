@@ -24,14 +24,20 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
     team_name = eval_cfg["team_name"]
     timestamp = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
 
-    # Check the md5 of evaluate.py on local and git main
+    # Compare evaluate.py against the official copy on main. Hash the text after
+    # dropping a BOM and normalizing line endings, so a CRLF or BOM-prefixed
+    # working tree (common on Windows) does not flag an unmodified file (#35).
+    def _normalized_md5(raw_bytes):
+        normalized = "\n".join(raw_bytes.decode("utf-8-sig").splitlines())
+        return hashlib.md5(normalized.encode("utf-8")).hexdigest()
+
     url = "https://raw.githubusercontent.com/ARRC-Rocket/BalloonPoppingChallenge/refs/heads/main/BalloonPoppingGymEnv/evaluation/evaluate.py"
     with urllib.request.urlopen(url) as response:
-        remote_md5 = hashlib.md5(response.read()).hexdigest()
+        remote_md5 = _normalized_md5(response.read())
 
     local = os.path.join(os.path.dirname(os.path.dirname(__file__)), "evaluate.py")
     with open(local, "rb") as f:
-        local_md5 = hashlib.md5(f.read()).hexdigest()
+        local_md5 = _normalized_md5(f.read())
 
     if remote_md5 != local_md5:
         print("Result encryption warning: evaluate.py should not be modified")
