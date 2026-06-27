@@ -1,4 +1,5 @@
 import importlib.util
+import logging
 import os
 import sys
 
@@ -6,6 +7,8 @@ import yaml
 
 from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
 from BalloonPoppingGymEnv.evaluation.results.utils import save_trajectories
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_nested_parameters(scenario_parameters, given_parameters_spec):
@@ -144,13 +147,19 @@ def evaluate_scenario(
         observation, reward, terminated, _, info = env.step(action)
 
     save_trajectories(trajectories=env.trajectories)
-    print(f"Scenario {scenario_number} evaluation completed with agent '{agent_name}'.")
-    print(f"Total reward: {info['popped_count']}")
+    logger.info(
+        "Scenario %s evaluation completed with agent '%s'.",
+        scenario_number,
+        agent_name,
+    )
+    logger.info("Total reward: %s", info["popped_count"])
 
     return env, agent, scenario_parameters
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+
     if len(sys.argv) < 2:
         raise ValueError(
             "Configuration file path is required. "
