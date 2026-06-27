@@ -140,6 +140,59 @@ class TestDetectPops(unittest.TestCase):
         status = self._run(positions, [self.RELEASED, self.RELEASED, self.GROUND])
         np.testing.assert_array_equal(status, [self.POPPED, self.RELEASED, self.GROUND])
 
+    def _run_moving(
+        self, prev_balloon, cur_balloon, status, prev_rocket, cur_rocket, radius=2.0
+    ):
+        """Both the rocket and the balloons sweep a segment over the timestep.
+
+        Unlike ``_run`` (static balloons), the balloon's previous and current
+        positions differ, so pop detection must use the swept balloon segment --
+        the scenario-#1 case where balloons drift on the wind.
+        """
+        env = self._env_with_state(
+            cur_balloon, status, rocket_now=cur_rocket, radius=radius
+        )
+        env._detect_pops(
+            previous_balloon_positions=np.asarray(prev_balloon, dtype=float),
+            previous_rocket_position=np.asarray(prev_rocket, dtype=float),
+        )
+        return env._balloon_status[:, 0]
+
+    def test_moving_balloon_crossing_rocket_path_is_popped(self):
+        # Rocket sweeps along +x through (5,0,0); the balloon sweeps across the
+        # x-axis at x=5 in the same step, so the swept paths intersect -> pop.
+        status = self._run_moving(
+            prev_balloon=[[5, 5, 0]],
+            cur_balloon=[[5, -5, 0]],
+            status=[self.RELEASED],
+            prev_rocket=[0, 0, 0],
+            cur_rocket=[10, 0, 0],
+        )
+        np.testing.assert_array_equal(status, [self.POPPED])
+
+    def test_moving_balloon_swept_closest_approach_within_radius_is_popped(self):
+        # The swept paths never cross, but the balloon's sweep passes 1.5 m from
+        # the rocket's sweep (radius 2) -> pop, exercising the swept distance.
+        status = self._run_moving(
+            prev_balloon=[[5, 3, 0]],
+            cur_balloon=[[5, 1.5, 0]],
+            status=[self.RELEASED],
+            prev_rocket=[0, 0, 0],
+            cur_rocket=[10, 0, 0],
+        )
+        np.testing.assert_array_equal(status, [self.POPPED])
+
+    def test_moving_balloon_passing_outside_radius_is_not_popped(self):
+        # The balloon sweeps but stays 3 m from the rocket's path (radius 2).
+        status = self._run_moving(
+            prev_balloon=[[5, 5, 0]],
+            cur_balloon=[[5, 3, 0]],
+            status=[self.RELEASED],
+            prev_rocket=[0, 0, 0],
+            cur_rocket=[10, 0, 0],
+        )
+        np.testing.assert_array_equal(status, [self.RELEASED])
+
 
 if __name__ == "__main__":
     unittest.main()
