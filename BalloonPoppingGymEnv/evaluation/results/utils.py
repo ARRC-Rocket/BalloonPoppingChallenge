@@ -19,18 +19,24 @@ def save_trajectories(trajectories):
         json.dump(trajectories, file, indent=2)
 
 
+def _normalized_md5(raw_bytes):
+    """MD5 of ``raw_bytes`` after dropping a UTF-8 BOM and normalizing line endings.
+
+    ``pack_for_submission`` compares the local ``evaluate.py`` against the copy on
+    main. Hashing the BOM- and line-ending-normalized text keeps a CRLF or
+    BOM-prefixed working tree (common on Windows) from flagging an otherwise
+    unmodified file (issue #35), while a real edit still changes the hash.
+    """
+    normalized = "\n".join(raw_bytes.decode("utf-8-sig").splitlines())
+    return hashlib.md5(normalized.encode("utf-8")).hexdigest()
+
+
 def pack_for_submission(eval_cfg, env, scenario_parameters):
 
     team_name = eval_cfg["team_name"]
     timestamp = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
 
-    # Compare evaluate.py against the official copy on main. Hash the text after
-    # dropping a BOM and normalizing line endings, so a CRLF or BOM-prefixed
-    # working tree (common on Windows) does not flag an unmodified file (#35).
-    def _normalized_md5(raw_bytes):
-        normalized = "\n".join(raw_bytes.decode("utf-8-sig").splitlines())
-        return hashlib.md5(normalized.encode("utf-8")).hexdigest()
-
+    # Compare evaluate.py against the official copy on main (see _normalized_md5).
     url = "https://raw.githubusercontent.com/ARRC-Rocket/BalloonPoppingChallenge/refs/heads/main/BalloonPoppingGymEnv/evaluation/evaluate.py"
     with urllib.request.urlopen(url) as response:
         remote_md5 = _normalized_md5(response.read())
