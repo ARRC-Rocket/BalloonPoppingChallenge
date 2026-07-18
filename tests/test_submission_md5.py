@@ -5,18 +5,20 @@ main. It hashes the text after dropping a BOM and normalizing line endings, so a
 Windows checkout (CRLF, or a UTF-8 BOM) does not flag an otherwise-unmodified
 file, while a genuine edit is still caught. These tests pin both halves.
 
-`utils` imports the rocketpy stack at module top, so the import is guarded and
-the tests skip cleanly when the simulation stack is absent.
+`_normalized_md5` is a pure byte helper, but it lives in `results.utils`, which
+imports the rocketpy stack at module top, so importing it needs the stack. Gate on
+whether rocketpy is installed rather than a blanket `except ImportError`: if the
+stack is present but the helper was renamed or `utils` fails to import, that is a
+real regression and should fail loudly instead of skipping silently.
 """
 
+import importlib.util
 import unittest
 
-try:
-    from BalloonPoppingGymEnv.evaluation.results.utils import _normalized_md5
+_STACK_AVAILABLE = importlib.util.find_spec("rocketpy") is not None
 
-    _STACK_AVAILABLE = True
-except ImportError:
-    _STACK_AVAILABLE = False
+if _STACK_AVAILABLE:
+    from BalloonPoppingGymEnv.evaluation.results.utils import _normalized_md5
 
 # Reference content. Every "cosmetic" variant must hash the same as this, and
 # every "real edit" variant must hash differently.
@@ -68,6 +70,29 @@ class TestNormalizedMd5(unittest.TestCase):
 
     def test_digest_is_a_32_char_hex_string(self):
         self.assertRegex(_normalized_md5(_BASE), r"\A[0-9a-f]{32}\Z")
+
+    def test_form_feed_is_not_treated_as_a_line_ending(self):
+        # ``str.splitlines()`` breaks on a superset of the tokenizer's physical
+        # line endings, so hashing via splitlines let an LF -> form-feed swap keep
+        # the same hash while changing the program. Here the baseline sets
+        # ``result``; the form-feed variant folds the assignment into the comment,
+        # so the two must not hash alike. Form feed stands in for the whole
+        # splitlines-only class (vertical tab, NEL, U+2028, ...).
+        baseline = b"# set result\nresult = 1\n"
+        semantic_edit = b"# set result\fresult = 1\n"
+        self.assertNotEqual(
+            _normalized_md5(semantic_edit),
+            _normalized_md5(baseline),
+            "form feed must not be normalized away like a real line ending",
+        )
+
+    def test_non_utf8_valid_python_source_does_not_hash_crash(self):
+        # A ``coding:`` declaration makes non-UTF-8 bytes valid Python source. The
+        # integrity check must still produce a digest for it (a mismatch warning is
+        # the point) rather than raising UnicodeDecodeError on the way.
+        source = b"# -*- coding: latin-1 -*-\nname = 'caf\xe9'\n"
+        compile(source, "<latin1-source>", "exec")
+        self.assertRegex(_normalized_md5(source), r"\A[0-9a-f]{32}\Z")
 
 
 if __name__ == "__main__":

@@ -23,12 +23,21 @@ def _normalized_md5(raw_bytes):
     """MD5 of ``raw_bytes`` after dropping a UTF-8 BOM and normalizing line endings.
 
     ``pack_for_submission`` compares the local ``evaluate.py`` against the copy on
-    main. Hashing the BOM- and line-ending-normalized text keeps a CRLF or
-    BOM-prefixed working tree (common on Windows) from flagging an otherwise
-    unmodified file (issue #35), while a real edit still changes the hash.
+    main. A Windows checkout can add a UTF-8 BOM or CRLF/CR endings that would flag
+    an otherwise-unmodified file (issue #35), so both are normalized away first.
+
+    This works on raw bytes and only folds the endings Python treats as a physical
+    line break: CRLF, CR, LF. Decoding to text and using ``str.splitlines()``
+    instead would be unsafe twice over. ``splitlines()`` also breaks on form feed,
+    NEL, U+2028 and friends, which the tokenizer does not, so swapping a single LF
+    for a form feed changes the program yet keeps the hash. And decoding as UTF-8
+    raises on a valid non-UTF-8 source (one with a ``coding:`` declaration), turning
+    the integrity warning into a crash. A real source edit still changes the hash.
     """
-    normalized = "\n".join(raw_bytes.decode("utf-8-sig").splitlines())
-    return hashlib.md5(normalized.encode("utf-8")).hexdigest()
+    normalized = raw_bytes.removeprefix(b"\xef\xbb\xbf")
+    normalized = normalized.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    normalized = normalized.removesuffix(b"\n")
+    return hashlib.md5(normalized).hexdigest()
 
 
 def pack_for_submission(eval_cfg, env, scenario_parameters):
