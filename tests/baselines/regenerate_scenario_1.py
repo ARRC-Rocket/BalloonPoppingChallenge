@@ -14,6 +14,8 @@ physics is intentionally updated.
 import json
 from pathlib import Path
 
+from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
+
 from tests.test_scenario1_regression import (
     AGENT_KWARGS,
     BALLOON_INDEX_STRIDE,
@@ -29,10 +31,11 @@ OUTPUT_PATH = Path(__file__).parent / "scenario_1.json"
 
 
 def main():
+    scenario_params, _ = load_scenario_parameters(SCENARIO_NUMBER)
     rocket_positions, balloon_positions, popped = run_scenario_1()
     baseline = {
         "scenario_number": SCENARIO_NUMBER,
-        "random_seed": 0,
+        "random_seed": scenario_params["scenario"]["random_seed"],
         "agent": "AttitudeRateControlAgent",
         "agent_kwargs": AGENT_KWARGS,
         "rocket_downsample_stride": ROCKET_DOWNSAMPLE_STRIDE,

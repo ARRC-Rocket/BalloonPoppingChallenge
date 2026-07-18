@@ -22,10 +22,11 @@ The baseline is tied to the current (repository, ActiveRocketPy submodule)
 state. When a physics change is *intended*, regenerate it deliberately with
 ``tests/baselines/regenerate_scenario_1.py`` and review the diff.
 
-Cost / CI gating: this test is opt-in. It only runs when the environment
-variable ``BPC_RUN_SLOW_TESTS`` is set (the project has no pytest ``slow``
-marker infrastructure yet), so it does not bloat the default PR CI. Run it
-locally or in a nightly job with::
+Cost / CI gating: this test is heavy, so it is gated behind the environment
+variable ``BPC_RUN_SLOW_TESTS`` (the project has no pytest ``slow`` marker
+infrastructure yet). The PR CI sets it, so the test runs there; a local run
+without it is skipped. When the gate is on the simulation stack must import, so
+an ImportError then fails loudly instead of skipping. Run it with::
 
     BPC_RUN_SLOW_TESTS=1 python -m pytest tests/test_scenario1_regression.py -v
 """
@@ -35,18 +36,32 @@ import os
 import unittest
 from pathlib import Path
 
+import numpy as np
+
+# Only "1"/"true"/"yes" enable the slow gate; a leftover "0" or "false" does not.
+_RUN_SLOW = os.environ.get("BPC_RUN_SLOW_TESTS", "0").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
+# ActiveRocketPy (imported as ``rocketpy``) is the heavy optional dependency. When
+# the slow gate is on we intend to run, so a missing or broken stack must fail
+# rather than skip. The BalloonPoppingGymEnv imports stay outside the guard: an
+# ImportError from them is a real regression (a renamed or removed symbol) and
+# must fail loudly when the stack is present.
 try:
-    import numpy as np
+    import rocketpy  # noqa: F401
+except ImportError:
+    if _RUN_SLOW:
+        raise
+    _STACK_AVAILABLE = False
+else:
+    _STACK_AVAILABLE = True
 
     from BalloonPoppingGymEnv.agents.example_agents import AttitudeRateControlAgent
     from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
     from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
-
-    _STACK_AVAILABLE = True
-except ImportError:
-    _STACK_AVAILABLE = False
-
-_RUN_SLOW = bool(os.environ.get("BPC_RUN_SLOW_TESTS"))
 
 BASELINE_PATH = Path(__file__).parent / "baselines" / "scenario_1.json"
 
@@ -58,21 +73,31 @@ SCENARIO_NUMBER = 1
 # interesting part of the run).
 AGENT_KWARGS = {"rate_targets": [0.0, 0.0, 0.0], "launch_time": 1}
 
-# Rocket trajectory is downsampled like scenario #0. The balloon array is much
-# larger -- (num_steps, num_balloons, 6) -- so it is downsampled in *both* time
-# and balloon index to keep the committed baseline small and portable.
+# The rocket trajectory is downsampled in time like scenario #0.
 ROCKET_DOWNSAMPLE_STRIDE = 50
+# The balloon array is (num_steps, num_balloons, 3). Downsample it in time only.
 BALLOON_TIME_STRIDE = 200
-BALLOON_INDEX_STRIDE = 10
+# Keep every balloon (stride 1): sampling only 1 in N would leave the rest of the
+# ensemble unchecked, so a regression in an unsampled balloon would pass
+# unnoticed. Time downsampling alone keeps the baseline small (~30 points x 100).
+BALLOON_INDEX_STRIDE = 1
 
-# Same-machine runs are bit-identical; these tolerances absorb cross-platform
-# float drift only (~3% per issue #38). atol is a metre floor for coordinates
-# near zero (the x/y balloon and rocket coordinates pass through 0).
+# Scenario #1's fixed agent flies straight up and pops nothing; the balloons
+# drift past on the wind. Pin that so regenerating cannot bless a different count.
+EXPECTED_POPPED_COUNT = 0
+
+# Per-coordinate position tolerance, applied as a real floor of
+# ``max(POSITION_ATOL, POSITION_RTOL * abs(expected))`` -- not numpy's additive
+# ``atol + rtol * expected`` -- so a coordinate near zero (the x/y balloon and
+# rocket coordinates pass through 0) cannot drift by the metre floor *plus*
+# another few percent.
 POSITION_RTOL = 0.03
 POSITION_ATOL = 1.0
-# A gross change in flight duration is a regression; a one-step cross-platform
-# difference is not.
-STEP_COUNT_REL_TOL = 0.02
+# Flight duration is deterministic, so allow only a couple of steps of
+# cross-platform jitter, absolute rather than a percentage: a 2% tolerance on a
+# ~6000-step flight would wave through a full second of early termination.
+STEP_COUNT_ABS_TOL = 2
+ROW_COUNT_ABS_TOL = 1
 
 
 def run_scenario_1():
@@ -96,9 +121,10 @@ def run_scenario_1():
     agent = AttitudeRateControlAgent(given_params, **AGENT_KWARGS)
     observation, _ = env.reset(seed=scenario_params["scenario"]["random_seed"])
     terminated = False
-    while not terminated:
+    truncated = False
+    while not (terminated or truncated):
         action = agent.get_action(observation)
-        observation, _, terminated, _, _ = env.step(action)
+        observation, _, terminated, truncated, _ = env.step(action)
     rocket_states = np.array(
         [step["rocket_states"] for step in env.trajectories], dtype=float
     )
@@ -109,18 +135,36 @@ def run_scenario_1():
 
 
 def post_launch_rocket_positions(positions):
-    """Drop the pre-launch NaN rows and downsample to a clean ``(M, 3)`` array."""
-    launched = ~np.isnan(positions).any(axis=1)
-    return positions[launched][::ROCKET_DOWNSAMPLE_STRIDE]
+    """Return the launched rocket trajectory, downsampled to a clean ``(M, 3)``.
+
+    The rows before launch are NaN, so launch is the first finite row. Every row
+    from launch onwards must stay finite: a NaN or Inf appearing *after* launch
+    means the flight diverged, so raise instead of dropping those rows (dropping
+    them would let a broken tail slip past the comparison).
+    """
+    positions = np.asarray(positions, dtype=float)
+    finite_rows = np.isfinite(positions).all(axis=1)
+    launched = np.flatnonzero(finite_rows)
+    if launched.size == 0:
+        raise AssertionError("rocket never produced a finite post-launch position")
+
+    post_launch = positions[launched[0] :]
+    if not np.isfinite(post_launch).all():
+        bad = np.flatnonzero(~np.isfinite(post_launch).all(axis=1))
+        raise AssertionError(
+            f"non-finite rocket position after launch at relative rows "
+            f"{bad[:10].tolist()}"
+        )
+    return post_launch[::ROCKET_DOWNSAMPLE_STRIDE]
 
 
 def downsample_balloon_positions(positions):
-    """Downsample the balloon positions in time and balloon index.
+    """Downsample the balloon positions in time, keeping every balloon.
 
     ``positions`` is ``(num_steps, num_balloons, 3)``. Pre-release balloons are
     held at their initial Monte Carlo position (not NaN), so no NaN masking is
-    needed; the slice is purely a size reduction along fixed, run-stable indices.
-    Returns ``(T, B, 3)``.
+    needed; the slice is purely a size reduction along the time axis. Returns
+    ``(T, num_balloons, 3)``.
     """
     return positions[::BALLOON_TIME_STRIDE, ::BALLOON_INDEX_STRIDE, :]
 
@@ -142,32 +186,25 @@ class TestScenario1Regression(unittest.TestCase):
         cls.balloon_positions = downsample_balloon_positions(balloon_positions)
 
     def test_popped_count_matches_baseline(self):
-        self.assertEqual(self.popped, self.baseline["popped_count"])
+        # Pin the semantic count, not just the (regenerable) baseline.
+        self.assertEqual(self.baseline["popped_count"], EXPECTED_POPPED_COUNT)
+        self.assertEqual(self.popped, EXPECTED_POPPED_COUNT)
 
     def test_flight_duration_matches_baseline(self):
         expected = self.baseline["num_steps_full"]
-        drift = abs(self.num_steps - expected) / expected
         self.assertLessEqual(
-            drift,
-            STEP_COUNT_REL_TOL,
-            f"flight step count {self.num_steps} drifted from baseline {expected}",
+            abs(self.num_steps - expected),
+            STEP_COUNT_ABS_TOL,
+            f"flight step count {self.num_steps} drifted from baseline {expected} "
+            f"by more than {STEP_COUNT_ABS_TOL} steps",
         )
 
     def test_rocket_position_trajectory_matches_baseline(self):
         expected = np.array(self.baseline["rocket_position_downsampled"], dtype=float)
         actual = self.rocket_positions
-        # Guard the overlap clip below: a regression that stopped the rocket from
-        # launching (or terminated it early) would leave the total step count
-        # unchanged but collapse the post-launch row count, and an overlap of
-        # zero rows would otherwise pass assert_allclose vacuously.
         self._assert_row_count_matches(len(actual), len(expected), "rocket")
         overlap = min(len(expected), len(actual))
-        np.testing.assert_allclose(
-            actual[:overlap],
-            expected[:overlap],
-            rtol=POSITION_RTOL,
-            atol=POSITION_ATOL,
-        )
+        self._assert_within_floor(actual[:overlap], expected[:overlap], "rocket")
 
     def test_balloon_position_trajectory_matches_baseline(self):
         expected = np.array(self.baseline["balloon_position_downsampled"], dtype=float)
@@ -178,20 +215,28 @@ class TestScenario1Regression(unittest.TestCase):
         self.assertEqual(actual.shape[1:], expected.shape[1:])
         self._assert_row_count_matches(actual.shape[0], expected.shape[0], "balloon")
         overlap = min(expected.shape[0], actual.shape[0])
-        np.testing.assert_allclose(
-            actual[:overlap],
-            expected[:overlap],
-            rtol=POSITION_RTOL,
-            atol=POSITION_ATOL,
-        )
+        self._assert_within_floor(actual[:overlap], expected[:overlap], "balloon")
 
     def _assert_row_count_matches(self, actual_rows, expected_rows, label):
-        drift = abs(actual_rows - expected_rows) / expected_rows
         self.assertLessEqual(
-            drift,
-            STEP_COUNT_REL_TOL,
+            abs(actual_rows - expected_rows),
+            ROW_COUNT_ABS_TOL,
             f"{label} downsampled row count {actual_rows} drifted from baseline "
-            f"{expected_rows} (possible launch failure or early termination)",
+            f"{expected_rows} by more than {ROW_COUNT_ABS_TOL} rows "
+            f"(possible launch failure or early termination)",
+        )
+
+    def _assert_within_floor(self, actual, expected, label):
+        # Real floor: max(atol, rtol * |expected|), not numpy's additive form. A
+        # NaN in ``actual`` propagates through ``np.max`` and fails the compare.
+        error = np.abs(actual - expected)
+        allowed = np.maximum(POSITION_ATOL, POSITION_RTOL * np.abs(expected))
+        worst = float(np.max(error - allowed))
+        self.assertLessEqual(
+            worst,
+            0.0,
+            f"{label} position exceeds max({POSITION_ATOL} m, "
+            f"{POSITION_RTOL:.0%} of |expected|) by {worst:.4g} m",
         )
 
 
