@@ -2,7 +2,6 @@ import hashlib
 import http.client
 import json
 import os
-import pickle
 import urllib.request
 from datetime import datetime, timezone
 
@@ -93,7 +92,7 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
             "scenario_parameters": scenario_parameters,
             "trajectories": env.trajectories,
             "balloon_release_at_step": env._balloon_release_at_step,
-            "rocket_flight": json.dumps(env._rocket_flight, cls=RocketPyEncoder),
+            "rocket_flight": env._rocket_flight,
             "balloon_flights": env._balloon_flights,
         },
         "agent_info": {
@@ -102,13 +101,16 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
         },
     }
 
-    # Save submission
+    # Save submission as JSON. The upload endpoint is unauthenticated, so the
+    # format must not be able to execute code on load the way pickle did (the
+    # leaderboard side is issue #7); json.loads cannot. RocketPyEncoder turns the
+    # numpy arrays and the Flight object into plain JSON.
     out_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        f"{timestamp}_{team_name}_submission.pkl",
+        f"{timestamp}_{team_name}_submission.json",
     )
-    with open(out_path, "wb") as f:
-        pickle.dump(submission, f)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(submission, f, cls=RocketPyEncoder)
 
     print(f"Submission saved to:\n{out_path}")
 
