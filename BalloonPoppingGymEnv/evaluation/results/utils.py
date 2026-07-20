@@ -76,7 +76,7 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
 
     # Submission payload
     submission = {
-        "format_version": 0,
+        "format_version": 1,
         "team": {
             "name": team_name,
             "secret": eval_cfg["team_secret"],
@@ -104,13 +104,16 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
     # Save submission as JSON. The upload endpoint is unauthenticated, so the
     # format must not be able to execute code on load the way pickle did (the
     # leaderboard side is issue #7); json.loads cannot. RocketPyEncoder turns the
-    # numpy arrays and the Flight object into plain JSON.
+    # numpy arrays and the Flight object into plain JSON. allow_pickle=False keeps
+    # callables out of the payload: with the default the encoder hex-encodes a
+    # Function's callable source with dill, which is inert under json.loads but
+    # would be executable material for anything that later runs dill.loads on it.
     out_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         f"{timestamp}_{team_name}_submission.json",
     )
     with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(submission, f, cls=RocketPyEncoder)
+        json.dump(submission, f, cls=RocketPyEncoder, allow_pickle=False)
 
     print(f"Submission saved to:\n{out_path}")
 
