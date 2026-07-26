@@ -19,19 +19,40 @@ def save_trajectories(trajectories):
         json.dump(trajectories, file, indent=2)
 
 
+def _normalized_md5(raw_bytes):
+    """MD5 of ``raw_bytes`` after dropping a UTF-8 BOM and normalizing line endings.
+
+    ``pack_for_submission`` compares the local ``evaluate.py`` against the copy on
+    main. A Windows checkout can add a UTF-8 BOM or CRLF/CR endings that would flag
+    an otherwise-unmodified file (issue #35), so both are normalized away first.
+
+    This works on raw bytes and only folds the endings Python treats as a physical
+    line break: CRLF, CR, LF. Decoding to text and using ``str.splitlines()``
+    instead would be unsafe twice over. ``splitlines()`` also breaks on form feed,
+    NEL, U+2028 and friends, which the tokenizer does not, so swapping a single LF
+    for a form feed changes the program yet keeps the hash. And decoding as UTF-8
+    raises on a valid non-UTF-8 source (one with a ``coding:`` declaration), turning
+    the integrity warning into a crash. A real source edit still changes the hash.
+    """
+    normalized = raw_bytes.removeprefix(b"\xef\xbb\xbf")
+    normalized = normalized.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    normalized = normalized.removesuffix(b"\n")
+    return hashlib.md5(normalized).hexdigest()
+
+
 def pack_for_submission(eval_cfg, env, scenario_parameters):
 
     team_name = eval_cfg["team_name"]
     timestamp = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
 
-    # Check the md5 of evaluate.py on local and git main
+    # Compare evaluate.py against the official copy on main (see _normalized_md5).
     url = "https://raw.githubusercontent.com/ARRC-Rocket/BalloonPoppingChallenge/refs/heads/main/BalloonPoppingGymEnv/evaluation/evaluate.py"
     with urllib.request.urlopen(url) as response:
-        remote_md5 = hashlib.md5(response.read()).hexdigest()
+        remote_md5 = _normalized_md5(response.read())
 
     local = os.path.join(os.path.dirname(os.path.dirname(__file__)), "evaluate.py")
     with open(local, "rb") as f:
-        local_md5 = hashlib.md5(f.read()).hexdigest()
+        local_md5 = _normalized_md5(f.read())
 
     if remote_md5 != local_md5:
         print("Result encryption warning: evaluate.py should not be modified")
