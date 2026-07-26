@@ -898,11 +898,25 @@ class BalloonPoppingEnv(gym.Env):
 
         # Add sensors from parameters
         sensors_cfg = self.rocket_parameters["sensors"]
+        # Seed each sensor's noise generator deterministically from the scenario
+        # seed, so the sensor-noise realization is reproducible and independent
+        # of the process-global RNG and of how the run is parallelized (the agent
+        # never sees the seed). Distinct sub-streams decorrelate the three
+        # sensors; the domain tag keeps them clear of the balloon Monte Carlo's
+        # own SeedSequence(scenario_seed) tree even once that runs in parallel.
+        sensor_seed_domain = 0x5E2502  # fixed "sensor" tag, distinct from the MC
+        if self.np_random_seed is None:
+            gyro_seed = accelerometer_seed = gnss_seed = None
+        else:
+            gyro_seed, accelerometer_seed, gnss_seed = np.random.SeedSequence(
+                [int(self.np_random_seed), sensor_seed_domain]
+            ).spawn(3)
         gyro = Gyroscope(
             sampling_rate=sensors_cfg["sampling_rate"],
             noise_density=sensors_cfg["gyro_noise_density"],
             random_walk_density=sensors_cfg["gyro_random_walk_density"],
             constant_bias=sensors_cfg["gyro_constant_bias"],
+            seed=gyro_seed,
         )
         accelerometer = Accelerometer(
             sampling_rate=sensors_cfg["sampling_rate"],
@@ -910,12 +924,14 @@ class BalloonPoppingEnv(gym.Env):
             random_walk_density=sensors_cfg["accelerometer_random_walk_density"],
             constant_bias=sensors_cfg["accelerometer_constant_bias"],
             consider_gravity=True,
+            seed=accelerometer_seed,
         )
         gnss = GnssReceiver(
             sampling_rate=sensors_cfg["sampling_rate"],
             position_accuracy=sensors_cfg["gnss_position_accuracy"],
             altitude_accuracy=sensors_cfg["gnss_altitude_accuracy"],
             velocity_accuracy=sensors_cfg["gnss_velocity_accuracy"],
+            seed=gnss_seed,
         )
         rocket.add_sensor(gyro, position=sensors_cfg["gyro_position"])
         rocket.add_sensor(accelerometer, position=sensors_cfg["accelerometer_position"])
