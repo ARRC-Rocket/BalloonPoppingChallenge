@@ -14,17 +14,18 @@ stack is absent (mirroring the rest of the suite).
 """
 
 import unittest
+from importlib.util import find_spec
 
-try:
-    import numpy as np
+import numpy as np
 
+# Only the simulation stack is optional. Guarding this package's own imports too
+# would turn a renamed symbol or a broken module into a silent skip.
+_STACK_AVAILABLE = find_spec("rocketpy") is not None
+
+if _STACK_AVAILABLE:
     from BalloonPoppingGymEnv.agents.example_agents import AttitudeRateControlAgent
     from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
     from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
-
-    _STACK_AVAILABLE = True
-except ImportError:
-    _STACK_AVAILABLE = False
 
 # Launch almost immediately and run well past launch so the sensors (sampled at
 # 100 Hz with time_step 0.01 s) actually produce noisy readings to compare.
