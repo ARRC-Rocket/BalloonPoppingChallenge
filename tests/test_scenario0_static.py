@@ -14,6 +14,9 @@ from importlib.util import find_spec
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCENARIO_0_PARAMS = (
     REPO_ROOT
@@ -22,9 +25,6 @@ SCENARIO_0_PARAMS = (
     / "scenario_parameters"
     / "scenario_0_parameters.yaml"
 )
-
-import numpy as np
-import yaml
 
 # Only the simulation stack is optional. Guarding this package's own imports too
 # would turn a renamed symbol or a broken module into a silent skip.

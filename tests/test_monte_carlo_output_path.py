@@ -14,6 +14,8 @@ from importlib.util import find_spec
 from pathlib import Path
 from unittest.mock import patch
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PACKAGE_DATA_DIR = REPO_ROOT / "BalloonPoppingGymEnv" / "envs" / "data"
 SCENARIO_1_PARAMS = (
@@ -23,8 +25,6 @@ SCENARIO_1_PARAMS = (
     / "scenario_parameters"
     / "scenario_1_parameters.yaml"
 )
-
-import yaml
 
 # Only the simulation stack is optional. Guarding this package's own imports too
 # would turn a renamed symbol or a broken module into a silent skip.
