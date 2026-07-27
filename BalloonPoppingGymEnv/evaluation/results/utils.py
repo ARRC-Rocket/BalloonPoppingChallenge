@@ -17,6 +17,17 @@ INTEGRITY_CHECK_TIMEOUT = 10
 # evaluate.py is a few kB; this leaves plenty of room without being unbounded.
 INTEGRITY_CHECK_MAX_BYTES = 1_000_000
 
+# A mismatch is a fact about two files, not a finding about the competitor. The
+# old wording ("evaluate.py should not be modified") reads as an accusation, and
+# it fires for a reason nobody controls: the reference is whatever sits on main,
+# so anyone running a version ahead of main sees it having edited nothing. It is
+# a constant so the tests can key on it instead of on a phrase (see #35).
+INTEGRITY_MISMATCH_MESSAGE = (
+    "evaluate.py does not match the official copy on main. Your submission was "
+    "still saved. A version that is ahead of main reports this too, so check "
+    "whether you edited the file before treating it as a problem."
+)
+
 
 def save_trajectories(trajectories):
     """Save trajectory data as a timestamped JSON list."""
@@ -104,7 +115,7 @@ def _check_evaluate_integrity():
             return
 
     if _normalized_digest(raw) != local_digest:
-        print("Result encryption warning: evaluate.py should not be modified")
+        print(INTEGRITY_MISMATCH_MESSAGE)
 
 
 def pack_for_submission(eval_cfg, env, scenario_parameters):

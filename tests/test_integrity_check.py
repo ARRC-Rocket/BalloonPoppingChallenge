@@ -191,7 +191,7 @@ class TestIntegrityCheckBounds(_IntegrityHelpers, unittest.TestCase):
             self._pack_with_response(oversized)
         said = " ".join(str(c) for c in printed.call_args_list)
         self.assertIn("unexpectedly large", said)
-        self.assertNotIn("should not be modified", said)
+        self.assertNotIn(utils.INTEGRITY_MISMATCH_MESSAGE, said)
 
     def test_the_remote_body_read_has_a_size_cap(self):
         recorded = {}
@@ -208,13 +208,13 @@ class TestIntegrityCheckBounds(_IntegrityHelpers, unittest.TestCase):
         with mock.patch("builtins.print") as printed:
             self._pack_with_response(self._local_bytes())
         said = " ".join(str(c) for c in printed.call_args_list)
-        self.assertNotIn("should not be modified", said)
+        self.assertNotIn(utils.INTEGRITY_MISMATCH_MESSAGE, said)
 
     def test_a_mismatching_reference_warns(self):
         with mock.patch("builtins.print") as printed:
             self._pack_with_response(self._local_bytes() + b"\n# tampered\n")
         said = " ".join(str(c) for c in printed.call_args_list)
-        self.assertIn("should not be modified", said)
+        self.assertIn(utils.INTEGRITY_MISMATCH_MESSAGE, said)
 
     def test_a_blocked_hash_still_produces_a_submission(self):
         """A FIPS-restricted build refuses the digest with ValueError."""
@@ -263,7 +263,7 @@ class TestIntegrityCheckBounds(_IntegrityHelpers, unittest.TestCase):
             )
         said = " ".join(str(c) for c in printed.call_args_list)
         self.assertIn("arrived incomplete", said)
-        self.assertNotIn("should not be modified", said)
+        self.assertNotIn(utils.INTEGRITY_MISMATCH_MESSAGE, said)
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
