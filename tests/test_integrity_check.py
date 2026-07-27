@@ -10,8 +10,8 @@ skip, but a broken import inside this package is a failure and must stay loud.
 """
 
 import glob
+import json
 import os
-import pickle
 import unittest
 import urllib.error
 from importlib.util import find_spec
@@ -73,8 +73,8 @@ class TestIntegrityCheckFailsOpen(unittest.TestCase):
     def test_network_failure_still_produces_a_submission(self):
         """Before the fix the URLError propagated and the run was lost."""
         path = self._pack(urllib.error.URLError("name resolution failed"))
-        with open(path, "rb") as handle:
-            self.assertEqual(pickle.load(handle)["team"]["name"], "unittest_team")
+        with open(path, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["team"]["name"], "unittest_team")
 
     def test_timeout_still_produces_a_submission(self):
         self._pack(TimeoutError("timed out"))
