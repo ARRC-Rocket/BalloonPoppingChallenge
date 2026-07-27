@@ -89,19 +89,12 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
             "scenario_number": eval_cfg["scenario_number"],
             "final_reward": env._popped_count,
         },
-        # env._balloon_flights is deliberately not here. It is 71% of a
-        # scenario-1 submission and carries nothing the rest of the payload does
-        # not: step() reads it as _balloon_flights[:, :, current_step] and records
-        # the result, so trajectories[k]["balloon_states"] is bit-for-bit
-        # _balloon_flights[:, :, k + 1] for the whole simulated window. What the
-        # array adds is the frame before the first step and the tail after the
-        # episode ended, neither of which takes part in scoring or replay, and all
-        # of it re-derives from the scenario seed. See issue #57.
         "balloon_world_data": {
             "scenario_parameters": scenario_parameters,
             "trajectories": env.trajectories,
             "balloon_release_at_step": env._balloon_release_at_step,
             "rocket_flight": json.dumps(env._rocket_flight, cls=RocketPyEncoder),
+            # "balloon_flights": env._balloon_flights,  # deliberately omitted, see issue #57.
         },
         "agent_info": {
             "eval_cfg": eval_cfg,
