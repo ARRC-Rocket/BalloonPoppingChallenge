@@ -233,7 +233,15 @@ class BalloonPoppingEnv(gym.Env):
             self._rocket_states = self._rocket_flight.y_sol[:]
             _rocket_finished = self._rocket_flight._step_state["finished"]
 
-            # detect pops
+            # detect pops. On the first simulated step the previous position is
+            # still the all-NaN placeholder, because the flight is built on the
+            # launch action and only produces a state on the step after it. Every
+            # NaN comparison is false, so without this the launch-to-first-sample
+            # interval could never register a hit; fall back to the launch state.
+            if not np.isfinite(previous_rocket_position).all():
+                previous_rocket_position = np.asarray(
+                    self.initial_solution[1:4], dtype=float
+                )
             self._detect_pops(previous_balloon_positions, previous_rocket_position)
 
         # Append rocket and balloon states to trajectories for logging
@@ -252,8 +260,12 @@ class BalloonPoppingEnv(gym.Env):
         _timeout = self.current_step >= self.num_timesteps - 1
         if _timeout:
             logger.info("Terminated: Reached max time")
-            self._rocket_flight.post_process_simulation()
-            self._rocket_flight.initialize_prints_plots()
+            # An agent is free never to launch, in which case there is no flight
+            # to post-process and these calls would raise instead of ending the
+            # episode.
+            if self._rocket_flight is not None:
+                self._rocket_flight.post_process_simulation()
+                self._rocket_flight.initialize_prints_plots()
         elif _rocket_finished:
             logger.info("Terminated: Rocket flight finished")
         terminated = _timeout or _rocket_finished
