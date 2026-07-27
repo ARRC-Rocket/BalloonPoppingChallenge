@@ -20,7 +20,7 @@ resolution-markers = [
 
 [[package]]
 name = "activerocketpy"
-version = "1.12.0"
+version = "1.13.0"
 source = { editable = "ActiveRocketPy" }
 dependencies = [
     { name = "dill" },
@@ -61,7 +61,9 @@ requires-dist = [
     { name = "dill" },
     { name = "flake8-black", marker = "extra == 'tests'" },
     { name = "flake8-pyproject", marker = "extra == 'tests'" },
+    { name = "imageio", marker = "extra == 'animation'" },
     { name = "imageio", marker = "extra == 'monte-carlo'" },
+    { name = "imageio-ffmpeg", marker = "extra == 'animation'", specifier = ">=0.5" },
     { name = "ipython", marker = "extra == 'env-analysis'" },
     { name = "ipywidgets", marker = "extra == 'env-analysis'", specifier = ">=7.6.3" },
     { name = "isort", marker = "extra == 'tests'" },
@@ -77,6 +79,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'tests'" },
     { name = "pytest-coverage", marker = "extra == 'tests'" },
     { name = "pytz" },
+    { name = "pyvista", marker = "extra == 'animation'", specifier = ">=0.45" },
     { name = "requests" },
     { name = "scipy", specifier = ">=1.0" },
     { name = "simplekml" },
@@ -84,7 +87,7 @@ requires-dist = [
     { name = "timezonefinder", marker = "extra == 'env-analysis'" },
     { name = "windrose", marker = "extra == 'env-analysis'", specifier = ">=1.6.8" },
 ]
-provides-extras = ["tests", "env-analysis", "monte-carlo", "all"]
+provides-extras = ["tests", "env-analysis", "monte-carlo", "animation", "all"]
 
 [[package]]
 name = "affine"
