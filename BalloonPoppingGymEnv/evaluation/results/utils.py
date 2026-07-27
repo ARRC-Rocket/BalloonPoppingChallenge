@@ -3,6 +3,8 @@ import http.client
 import json
 import os
 import pickle
+import re
+import tempfile
 import urllib.request
 from datetime import datetime, timezone
 
@@ -45,10 +47,69 @@ def _normalized_md5(raw_bytes):
     return hashlib.md5(normalized).hexdigest()
 
 
+_UNSAFE_IN_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _filename_slug(raw_name, fallback="team"):
+    """Reduce a team name to something that cannot leave the results directory.
+
+    ``team_name`` is organizer-assigned rather than attacker-controlled, but it
+    reaches the output path verbatim, and a name holding a path separator or
+    ``..`` would write outside ``results/``. Only the filename is rewritten: the
+    submission payload keeps the name exactly as configured, and that is where
+    the leaderboard reads it from, so nothing downstream sees the slug.
+
+    An empty result falls back rather than raising. By the time this runs the
+    simulation is already done, and the same reasoning as the integrity check
+    applies: nothing at packing time should cost a competitor a finished run.
+    """
+    slug = _UNSAFE_IN_FILENAME.sub("_", str(raw_name)).strip("._-")[:64]
+    return slug or fallback
+
+
+def _write_atomically(out_path, write_payload):
+    """Write via a temp file in the same directory, then ``os.replace`` it.
+
+    A scenario-1 submission runs to a few hundred megabytes. Writing straight to
+    the final path means a disk-full or a killed process leaves a truncated file
+    under a name that looks finished, with nothing to distinguish it from a good
+    submission. Same-directory ``os.replace`` is atomic on POSIX and Windows, so
+    the final path only ever holds a complete file.
+
+    ``write_payload`` receives the open binary handle. The flush and fsync are
+    what make the rename meaningful: without them a crash can leave the renamed
+    file holding nothing. A disk that fills up surfaces as an error from one of
+    the two, which is the case this is here for, so neither is softened.
+
+    One deliberate difference from a plain ``open``: ``mkstemp`` creates the file
+    0600 rather than at the umask default, and the mode survives the rename. The
+    payload carries the team secret, so keeping it owner-only is the better end
+    state on a shared machine.
+    """
+    handle, temp_path = tempfile.mkstemp(
+        dir=os.path.dirname(out_path) or ".", prefix=".partial_", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(handle, "wb") as file:
+            write_payload(file)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temp_path, out_path)
+    except BaseException:
+        # Including KeyboardInterrupt: a stray .partial_ left behind would be a
+        # worse outcome than the truncated file this exists to prevent.
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise
+
+
 def pack_for_submission(eval_cfg, env, scenario_parameters):
 
     team_name = eval_cfg["team_name"]
-    timestamp = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
+    packed_at = datetime.now(timezone.utc)
+    timestamp = f"{packed_at:%Y%m%dT%H%M%SZ}"
 
     # Compare evaluate.py against the official copy on main (see _normalized_md5).
     # This runs after the whole simulation, so a network problem must not cost the
@@ -102,13 +163,16 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
         },
     }
 
-    # Save submission
+    # Save submission. The filename carries milliseconds and a path-safe team
+    # name, so two runs in the same second no longer overwrite each other. The
+    # payload above keeps the second-resolution timestamp and the configured team
+    # name untouched, since those are the copies the leaderboard reads.
+    file_timestamp = f"{packed_at:%Y%m%dT%H%M%S}.{packed_at.microsecond // 1000:03d}Z"
     out_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        f"{timestamp}_{team_name}_submission.pkl",
+        f"{file_timestamp}_{_filename_slug(team_name)}_submission.pkl",
     )
-    with open(out_path, "wb") as f:
-        pickle.dump(submission, f)
+    _write_atomically(out_path, lambda file: pickle.dump(submission, file))
 
     print(f"Submission saved to:\n{out_path}")
 
