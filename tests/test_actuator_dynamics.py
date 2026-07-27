@@ -150,10 +150,21 @@ def _per_step_limit(parameters, actuator):
     return control[actuator.rate_limit_key] * parameters["simulation"]["time_step"]
 
 
-def _command_within_limit(parameters, actuator):
-    """A step well inside the rate limit, so the lag is what shows."""
+def _command_within_limit(parameters, actuator, sign=1.0):
+    """A step well inside the rate limit, so the lag is what shows.
+
+    Throttle starts at the top of its range, so it only has room downwards; the
+    others are centred at zero and are exercised both ways.
+    """
     half_step = 0.5 * _per_step_limit(parameters, actuator)
-    return actuator.initial + (-half_step if actuator.name == "throttle" else half_step)
+    if actuator.name == "throttle":
+        sign = -1.0
+    return actuator.initial + sign * half_step
+
+
+def _directions(actuator):
+    """Which way this actuator can be driven from its initial output."""
+    return (-1.0,) if actuator.name == "throttle" else (1.0, -1.0)
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
@@ -204,41 +215,44 @@ class TestActuatorDynamics(unittest.TestCase):
 
     def test_a_held_command_lags_then_settles_on_it(self):
         for actuator in ACTUATORS:
-            with self.subTest(actuator=actuator.name):
-                env, action, parameters = _launched_env(
-                    **{actuator.time_constant_key: TIME_CONSTANT}
-                )
-                command = _command_within_limit(parameters, actuator)
-                outputs = _drive(env, action, actuator, command, SETTLE_STEPS)
-                span = command - actuator.initial
-
-                first_fraction = (outputs[0] - actuator.initial) / span
-                self.assertGreater(first_fraction, 0.0, "no response at all")
-                self.assertLess(first_fraction, 0.5, "no lag: it arrived at once")
-
-                for earlier, later in zip(outputs, outputs[1:]):
-                    self.assertGreaterEqual(
-                        (later - earlier) / span, 0.0, "moved away from the command"
+            for sign in _directions(actuator):
+                with self.subTest(actuator=actuator.name, sign=sign):
+                    env, action, parameters = _launched_env(
+                        **{actuator.time_constant_key: TIME_CONSTANT}
                     )
-                    self.assertLessEqual(
-                        (later - actuator.initial) / span, 1.0 + 1e-9, "overshoot"
+                    command = _command_within_limit(parameters, actuator, sign)
+                    outputs = _drive(env, action, actuator, command, SETTLE_STEPS)
+                    span = command - actuator.initial
+
+                    first_fraction = (outputs[0] - actuator.initial) / span
+                    self.assertGreater(first_fraction, 0.0, "no response at all")
+                    self.assertLess(first_fraction, 0.5, "no lag: it arrived at once")
+
+                    for earlier, later in zip(outputs, outputs[1:]):
+                        self.assertGreaterEqual(
+                            (later - earlier) / span, 0.0, "moved away from the command"
+                        )
+                        self.assertLessEqual(
+                            (later - actuator.initial) / span, 1.0 + 1e-9, "overshoot"
+                        )
+
+                    # One time constant in, a first-order lag has covered about
+                    # 1 - 1/e of the span. Checking that rather than a particular
+                    # alpha keeps this independent of which discretisation upstream
+                    # uses, while still rejecting a wrong coefficient: backward
+                    # Euler gives 0.598 here and the exact exponential 0.632, but a
+                    # hard-coded alpha of 0.25 reaches 0.763 and a filter that lags
+                    # once and then snaps reaches 1.0.
+                    steps_per_tau = round(
+                        TIME_CONSTANT / parameters["simulation"]["time_step"]
                     )
+                    at_one_tau = (outputs[steps_per_tau - 1] - actuator.initial) / span
+                    self.assertGreater(
+                        at_one_tau, 0.55, "settles too slowly for this tau"
+                    )
+                    self.assertLess(at_one_tau, 0.70, "settles too fast for this tau")
 
-                # One time constant in, a first-order lag has covered about
-                # 1 - 1/e of the span. Checking that rather than a particular
-                # alpha keeps this independent of which discretisation upstream
-                # uses, while still rejecting a wrong coefficient: backward
-                # Euler gives 0.598 here and the exact exponential 0.632, but a
-                # hard-coded alpha of 0.25 reaches 0.763 and a filter that lags
-                # once and then snaps reaches 1.0.
-                steps_per_tau = round(
-                    TIME_CONSTANT / parameters["simulation"]["time_step"]
-                )
-                at_one_tau = (outputs[steps_per_tau - 1] - actuator.initial) / span
-                self.assertGreater(at_one_tau, 0.55, "settles too slowly for this tau")
-                self.assertLess(at_one_tau, 0.70, "settles too fast for this tau")
-
-                self.assertAlmostEqual(outputs[-1], command, delta=abs(span) * 1e-3)
+                    self.assertAlmostEqual(outputs[-1], command, delta=abs(span) * 1e-3)
 
     def test_without_a_time_constant_the_command_lands_at_once(self):
         for actuator in ACTUATORS:
