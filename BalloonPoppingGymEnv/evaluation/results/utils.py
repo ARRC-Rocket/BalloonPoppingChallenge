@@ -47,7 +47,15 @@ def _normalized_md5(raw_bytes):
     return hashlib.md5(normalized).hexdigest()
 
 
-_UNSAFE_IN_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
+# Path separators, the Windows-reserved punctuation, and control characters. A
+# whitelist of ASCII would be shorter, but it would also rewrite every non-ASCII
+# team name, and this competition has plenty of those.
+_UNSAFE_IN_FILENAME = re.compile(r'[\x00-\x1f\x7f/\\:*?"<>|]+')
+
+# Filesystem name limits are in bytes, not characters, so the cap has to be too.
+# 96 leaves room for the timestamp and the suffix under a 255-byte limit even if
+# every character costs four bytes.
+_MAX_SLUG_BYTES = 96
 
 
 def _filename_slug(raw_name, fallback="team"):
@@ -59,12 +67,21 @@ def _filename_slug(raw_name, fallback="team"):
     submission payload keeps the name exactly as configured, and that is where
     the leaderboard reads it from, so nothing downstream sees the slug.
 
+    Only genuinely unsafe characters are replaced. A name in Chinese or Japanese
+    stays readable, which is the point: the filename is how a competitor tells
+    their own submissions apart. Leading dots go so the file cannot hide itself or
+    turn into a parent reference, and a trailing dot or space goes because Windows
+    will not keep one.
+
     An empty result falls back rather than raising. By the time this runs the
     simulation is already done, and the same reasoning as the integrity check
     applies: nothing at packing time should cost a competitor a finished run.
     """
-    slug = _UNSAFE_IN_FILENAME.sub("_", str(raw_name)).strip("._-")[:64]
-    return slug or fallback
+    slug = _UNSAFE_IN_FILENAME.sub("_", str(raw_name)).strip(" ._-")
+    # Truncating bytes can split a character, so drop the partial tail, then strip
+    # again in case the cut exposed a trailing dot.
+    slug = slug.encode("utf-8")[:_MAX_SLUG_BYTES].decode("utf-8", "ignore")
+    return slug.strip(" ._-") or fallback
 
 
 def _write_atomically(out_path, write_payload):

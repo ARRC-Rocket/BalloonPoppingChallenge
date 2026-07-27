@@ -57,7 +57,6 @@ class TestFilenameSlug(unittest.TestCase):
 
     def test_separators_and_parent_references_are_removed(self):
         for raw_name, expected in [
-            ("Team Rocket", "Team_Rocket"),
             ("../../etc/passwd", "etc_passwd"),
             ("..", "team"),
             ("/absolute/path", "absolute_path"),
@@ -65,9 +64,17 @@ class TestFilenameSlug(unittest.TestCase):
             ("", "team"),
             ("...", "team"),
             ("ok.name-1_2", "ok.name-1_2"),
+            ("trailing dot.", "trailing dot"),
         ]:
             with self.subTest(raw_name=raw_name):
                 self.assertEqual(utils._filename_slug(raw_name), expected)
+
+    def test_a_readable_name_survives_unchanged(self):
+        # A whitelist of ASCII would mangle these, and the filename is how a
+        # competitor tells their own submissions apart.
+        for raw_name in ["Team Rocket", "ARRC 火箭隊", "チーム", "Équipe"]:
+            with self.subTest(raw_name=raw_name):
+                self.assertEqual(utils._filename_slug(raw_name), raw_name)
 
     def test_the_slug_is_never_a_path(self):
         for raw_name in ["../x", "a/b", "a\\b", "/x", "..", "\x00x", "a\nb"]:
@@ -77,8 +84,18 @@ class TestFilenameSlug(unittest.TestCase):
                 self.assertFalse(os.path.isabs(slug))
                 self.assertNotIn("..", slug)
 
-    def test_a_long_name_is_capped(self):
-        self.assertEqual(len(utils._filename_slug("x" * 500)), 64)
+    def test_a_long_name_is_capped_in_bytes(self):
+        # Filesystem name limits are in bytes. Capping characters would let 64
+        # four-byte characters past a 255-byte limit once the timestamp and the
+        # suffix are added.
+        for raw_name in ["x" * 500, "火" * 200, "🎈" * 200]:
+            with self.subTest(raw_name=raw_name[:2]):
+                slug = utils._filename_slug(raw_name)
+                self.assertLessEqual(len(slug.encode("utf-8")), 96)
+                # Cutting bytes can split a character; the tail must be dropped
+                # rather than left as a partial sequence or a replacement char.
+                self.assertNotIn("�", slug)
+                self.assertEqual(slug, slug.encode("utf-8").decode("utf-8"))
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
