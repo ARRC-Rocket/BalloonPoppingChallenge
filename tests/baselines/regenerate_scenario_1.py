@@ -15,7 +15,6 @@ import json
 from pathlib import Path
 
 from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
-
 from tests.test_scenario1_regression import (
     AGENT_KWARGS,
     BALLOON_INDEX_STRIDE,
