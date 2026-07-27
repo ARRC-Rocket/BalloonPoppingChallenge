@@ -1,10 +1,12 @@
 import hashlib
 import http.client
 import json
+import math
 import os
 import urllib.request
 from datetime import datetime, timezone
 
+import numpy as np
 from rocketpy._encoders import RocketPyEncoder
 
 # The evaluate.py integrity check is advisory, so it gets a short budget and is
@@ -44,6 +46,40 @@ def _normalized_md5(raw_bytes):
     return hashlib.md5(normalized).hexdigest()
 
 
+def _json_safe(value):
+    """Return ``value`` with every non-finite float replaced by ``None``.
+
+    ``json.dump`` writes ``NaN`` and ``Infinity`` for non-finite floats. Python
+    reads those back, so the pipeline works either way, but RFC 8259 has no such
+    tokens: ``jq`` and a browser ``JSON.parse`` both refuse the file. Since the
+    submission now carries a ``.json`` name, it should be a file that any JSON
+    reader accepts.
+
+    Rocket states before launch are ``NaN``, so this is ordinary data rather than
+    an edge case. ``None`` is also what the leaderboard's replay builder already
+    substitutes before anything reaches the viewer, so this only moves that step
+    upstream, and the viewer sees no change.
+
+    A float array with nothing to fix is returned untouched so the encoder can
+    stream it. Converting it here would turn tens of megabytes of ``float64``
+    into individually allocated Python floats for no benefit.
+    """
+    if isinstance(value, (float, np.floating)):
+        return value if math.isfinite(value) else None
+    if isinstance(value, np.ndarray):
+        if value.dtype.kind != "f":
+            return value
+        if np.isfinite(value).all():
+            return value
+        # object dtype, so the None survives tolist()
+        return np.where(np.isfinite(value), value, None).tolist()
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
 def pack_for_submission(eval_cfg, env, scenario_parameters):
 
     team_name = eval_cfg["team_name"]
@@ -74,6 +110,14 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
     with open(agent_module_path, "r", encoding="utf-8") as f:
         agent_module_file = f.read()
 
+    # The encoder can turn the Flight into JSON, but only as text, so its own
+    # non-finite floats would slip past _json_safe below. Round-tripping it here
+    # brings them into reach. The flight is a few megabytes, so the extra pass is
+    # not worth avoiding.
+    rocket_flight = json.loads(
+        json.dumps(env._rocket_flight, cls=RocketPyEncoder, allow_pickle=False)
+    )
+
     # Submission payload
     submission = {
         "format_version": 1,
@@ -92,7 +136,7 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
             "scenario_parameters": scenario_parameters,
             "trajectories": env.trajectories,
             "balloon_release_at_step": env._balloon_release_at_step,
-            "rocket_flight": env._rocket_flight,
+            "rocket_flight": rocket_flight,
             "balloon_flights": env._balloon_flights,
         },
         "agent_info": {
@@ -100,6 +144,7 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
             "agent_module_file": agent_module_file,
         },
     }
+    submission = _json_safe(submission)
 
     # Save submission as JSON. The upload endpoint is unauthenticated, so the
     # format must not be able to execute code on load the way pickle did (the
