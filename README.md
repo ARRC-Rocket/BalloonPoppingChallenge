@@ -142,7 +142,7 @@ python -m unittest discover tests
 
 There are three stages in the operation of the Gymnasium environment: reset, stepping, and termination.
 
-1. **Reset**: The environment is reset using `env.reset()`, which sets up the initial conditions for the rocket and balloons as given in the [scenario_0_parameter.yaml](./BalloonPoppingGymEnv/envs/scenario_parameters/scenario_0_parameters.yaml) files. The trajectory of each balloon is simulated using the [monte-carlo simulation of ActiveRocketPy](./ActiveRocketPy/rocketpy/simulation/monte_carlo.py) then stored in the environment.
+1. **Reset**: The environment is reset using `env.reset()`, which sets up the initial conditions for the rocket and balloons as given in the [scenario_0_parameter.yaml](./BalloonPoppingGymEnv/envs/scenario_parameters/scenario_0_parameters.yaml) files. Scenario 0 places its balloons at fixed heights directly; every other scenario simulates each balloon trajectory with the [monte-carlo simulation of ActiveRocketPy](./ActiveRocketPy/rocketpy/simulation/monte_carlo.py). Either way the trajectories are stored in the environment up front.
 
 2. **Stepping**: The agent takes an action (e.g., launch, roll, throttle and TVC commands) and calls `env.step(action)`, which advances the simulation by one time step. The environment returns the new observations, reward, termination flag, and additional info.
 
@@ -160,17 +160,17 @@ The actions, observations, info, reward in this environment are:
   - `simulation_time`: the current simulation time in seconds.
   - `balloon_status`: a n-element array representing the status of each balloon (0: on the ground, 1: released, 2: popped). n is the number of balloons in the scenario.
   - `balloon_states`: a n x 6 array representing the position (posX, posY, posZ) and velocity (velX, velY, velZ) of each balloon.
-    - Position is the center of the balloon in the launch frame (relative to launch origin) in meters.
-    - Velocity is the center of the balloon in the launch frame (relative to launch origin) in m/s.
+    - Position is the center of the balloon in the launch frame, in meters. X is east and Y is north of the launch point, so both are zero there. Z is altitude above sea level, not above the launch site: a balloon 10 m above the pad reads `elevation + 10`.
+    - Velocity is the center of the balloon in the launch frame in m/s.
   - `rocket_sensors`: a 12-element array representing the rocket's sensor measurements (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ). Orientation of inertial sensors matches body frame. The measurements will be nan before launch action.
     - Gyroscopes measure the angular velocity (rad/s) in the rocket body frame.
     - Accelerometers measure the linear acceleration (m/s²) in the rocket body frame. Gravity is included in the accelerometer measurements.
-    - GNSS sensors measure the position (m) and velocity (m/s) in the launch frame (relative to launch origin).
+    - GNSS sensors measure the position (m) and velocity (m/s) in the same launch frame as `balloon_states`, so the reported Z is also altitude above sea level.
   - Note that the rocket's true states (e.g., attitude, angular velocity) are not directly observed by the agent, and the agent needs to infer them from the sensor measurements.
 - info:
   - `rocket_states`: a 13-element array representing the rocket's true states. These states are not observed and should not be used by the agent but can be used for development and debugging. The states are [posX, posY, posZ, velX, velY, velZ, e0, e1, e2, e3, wX, wY, wZ]:
-    - pos: center of dry mass position (m) in the launch frame (relative to launch origin).
-    - vel: center of dry mass velocity (m/s) in the launch frame (relative to launch origin).
+    - pos: center of dry mass position (m) in the same launch frame as `balloon_states`; the rocket starts at `z = elevation`.
+    - vel: center of dry mass velocity (m/s) in the same launch frame as `balloon_states`.
     - e: quaternion representing the attitude of the rocket (e0, e1, e2, e3) relative to the launch frame.
     - w: angular velocity (rad/s) in the rocket body frame.
   - `popped_count`: total number of balloon popped. This will be the final score of evaluation.
@@ -276,7 +276,7 @@ Exact scenario for elimination rounds and final rounds will be announced later. 
 
 |# | Name | 🚀 Actuator Response | 🚀 Sensor Noise | 🌬️ Wind | 🎈 Number | 🎈 Release Interval (sec) | 🎈 Initial Position | 🎈 Position Observation | 🎈 Velocity Observation |
 |---|---|---|---|---|---|---|---|---|---|
-|#0         |Hello World       |Ideal       |No             |None                  |10     |N/A    |height = arange(10, 410, 40) + elevation| Static at initial position           | no velocity                        |
+|#0         |Hello World       |Ideal       |No             |None                  |10     |N/A    |z_i = elevation + 10 + 40i (i = 0..n-1), i.e. altitude above sea level| Static at initial position           | no velocity                        |
 |#1         |Random Balloon    |Ideal       |No             |Yes                   |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
 |#2 (TBD)   |Noisy Sensor      |Ideal       |Yes            |Yes                   |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
 |#3 (TBD)   |Clumsy Actuator   |LPF, random |Yes            |Yes                   |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
