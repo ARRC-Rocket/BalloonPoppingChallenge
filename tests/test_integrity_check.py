@@ -117,5 +117,92 @@ class TestIntegrityCheckFailsOpen(unittest.TestCase):
         return new.pop()
 
 
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestIntegrityCheckBounds(TestIntegrityCheckFailsOpen):
+    """The check is bounded, and every expected failure leaves packing alone."""
+
+    class _Response:
+        """Minimal stand-in for the urlopen context manager."""
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def read(self, amount=None):
+            return self._payload if amount is None else self._payload[:amount]
+
+    def _pack_with_response(self, payload):
+        return self._pack_returning(lambda *a, **k: self._Response(payload))
+
+    def _pack_returning(self, fake_urlopen):
+        before = set(glob.glob(os.path.join(self.results_dir, "*_submission.*")))
+        with mock.patch.object(utils.urllib.request, "urlopen", fake_urlopen):
+            utils.pack_for_submission(self.eval_cfg, _fake_env(), {"scenario": {}})
+        new = set(glob.glob(os.path.join(self.results_dir, "*_submission.*"))) - before
+        self.assertEqual(len(new), 1, "packing should still produce a submission")
+        path = new.pop()
+        self.created.append(path)
+        return path
+
+    def _local_bytes(self):
+        local = os.path.join(os.path.dirname(self.results_dir), "evaluate.py")
+        with open(local, "rb") as handle:
+            return handle.read()
+
+    def test_reading_the_local_file_can_fail_without_losing_the_submission(self):
+        """The local read used to sit outside the guarded block."""
+        real_open = open
+
+        def failing_open(path, *args, **kwargs):
+            if str(path).endswith("evaluate.py"):
+                raise PermissionError("evaluate.py is not readable")
+            return real_open(path, *args, **kwargs)
+
+        before = set(glob.glob(os.path.join(self.results_dir, "*_submission.*")))
+        with mock.patch("builtins.open", failing_open):
+            utils.pack_for_submission(self.eval_cfg, _fake_env(), {"scenario": {}})
+        new = set(glob.glob(os.path.join(self.results_dir, "*_submission.*"))) - before
+        self.assertEqual(len(new), 1)
+        self.created.append(new.pop())
+
+    def test_an_oversized_reference_reports_that_it_cannot_check(self):
+        """A capped read leaves a truncated body, which must not be reported as
+        tampering: the honest answer is that the check could not run."""
+        oversized = b"x" * (utils.INTEGRITY_CHECK_MAX_BYTES + 10)
+        with mock.patch("builtins.print") as printed:
+            self._pack_with_response(oversized)
+        said = " ".join(str(c) for c in printed.call_args_list)
+        self.assertIn("unexpectedly large", said)
+        self.assertNotIn("should not be modified", said)
+
+    def test_the_read_is_bounded(self):
+        recorded = {}
+
+        class Recording(self._Response):
+            def read(inner, amount=None):
+                recorded["amount"] = amount
+                return b""
+
+        self._pack_returning(lambda *a, **k: Recording(b""))
+        self.assertEqual(recorded["amount"], utils.INTEGRITY_CHECK_MAX_BYTES + 1)
+
+    def test_a_matching_reference_is_quiet(self):
+        with mock.patch("builtins.print") as printed:
+            self._pack_with_response(self._local_bytes())
+        said = " ".join(str(c) for c in printed.call_args_list)
+        self.assertNotIn("should not be modified", said)
+
+    def test_a_mismatching_reference_warns(self):
+        with mock.patch("builtins.print") as printed:
+            self._pack_with_response(self._local_bytes() + b"\n# tampered\n")
+        said = " ".join(str(c) for c in printed.call_args_list)
+        self.assertIn("should not be modified", said)
+
+
 if __name__ == "__main__":
     unittest.main()

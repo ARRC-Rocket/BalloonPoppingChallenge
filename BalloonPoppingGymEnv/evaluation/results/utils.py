@@ -8,9 +8,12 @@ from datetime import datetime, timezone
 
 from rocketpy._encoders import RocketPyEncoder
 
-# The evaluate.py integrity check is advisory, so it gets a short budget and is
-# never allowed to cost a competitor the submission they just simulated.
+# The evaluate.py integrity check is advisory and must never cost a competitor
+# the submission they just simulated, so it is bounded in both time and size.
+INTEGRITY_CHECK_URL = "https://raw.githubusercontent.com/ARRC-Rocket/BalloonPoppingChallenge/refs/heads/main/BalloonPoppingGymEnv/evaluation/evaluate.py"
 INTEGRITY_CHECK_TIMEOUT = 10
+# evaluate.py is a few kB; this leaves plenty of room without being unbounded.
+INTEGRITY_CHECK_MAX_BYTES = 1_000_000
 
 
 def save_trajectories(trajectories):
@@ -45,30 +48,51 @@ def _normalized_md5(raw_bytes):
     return hashlib.md5(normalized).hexdigest()
 
 
+def _check_evaluate_integrity():
+    """Warn when the local evaluate.py differs from the official copy on main.
+
+    Advisory only, and it runs after the whole scenario has been simulated, so
+    every expected failure has to leave packing alone: an unreadable local file,
+    any network problem, or a reference copy far larger than the real one.
+
+    ``timeout`` bounds each blocking socket operation rather than the whole
+    request, so a server dripping bytes slowly can keep the transfer alive well
+    past it. Reading a bounded number of bytes is what actually caps the work,
+    and it also keeps an unexpectedly large response from exhausting memory.
+    """
+    local = os.path.join(os.path.dirname(os.path.dirname(__file__)), "evaluate.py")
+    try:
+        with open(local, "rb") as source:
+            local_md5 = _normalized_md5(source.read())
+    except OSError as exc:
+        print(f"Could not read the local evaluate.py to check it: {exc}")
+        return
+
+    try:
+        with urllib.request.urlopen(
+            INTEGRITY_CHECK_URL, timeout=INTEGRITY_CHECK_TIMEOUT
+        ) as response:
+            # One byte over the cap, so an oversized body is detectable.
+            raw = response.read(INTEGRITY_CHECK_MAX_BYTES + 1)
+    except (OSError, http.client.HTTPException) as exc:
+        # URLError, HTTPError, socket timeouts and DNS failures are all OSError.
+        print(f"Could not check evaluate.py against the official copy: {exc}")
+        return
+
+    if len(raw) > INTEGRITY_CHECK_MAX_BYTES:
+        print("Could not check evaluate.py: the reference copy is unexpectedly large")
+        return
+
+    if _normalized_md5(raw) != local_md5:
+        print("Result encryption warning: evaluate.py should not be modified")
+
+
 def pack_for_submission(eval_cfg, env, scenario_parameters):
 
     team_name = eval_cfg["team_name"]
     timestamp = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
 
-    # Compare evaluate.py against the official copy on main (see _normalized_md5).
-    # This runs after the whole simulation, so a network problem must not cost the
-    # competitor their submission: the check fails open and packing continues.
-    url = "https://raw.githubusercontent.com/ARRC-Rocket/BalloonPoppingChallenge/refs/heads/main/BalloonPoppingGymEnv/evaluation/evaluate.py"
-
-    local = os.path.join(os.path.dirname(os.path.dirname(__file__)), "evaluate.py")
-    with open(local, "rb") as f:
-        local_md5 = _normalized_md5(f.read())
-
-    try:
-        with urllib.request.urlopen(url, timeout=INTEGRITY_CHECK_TIMEOUT) as response:
-            remote_md5 = _normalized_md5(response.read())
-    except (OSError, http.client.HTTPException) as exc:
-        # URLError, HTTPError, socket timeouts and DNS failures are all OSError.
-        print(f"Could not check evaluate.py against the official copy: {exc}")
-    else:
-        if remote_md5 != local_md5:
-            print("Result encryption warning: evaluate.py should not be modified")
-            # return
+    _check_evaluate_integrity()
 
     # Read agent source
     agent_module_path = os.fspath(eval_cfg["agent_module_path"])
