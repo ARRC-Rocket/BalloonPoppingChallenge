@@ -7,9 +7,9 @@ This tracks what a competitor would notice: environment behaviour, the action an
 observation spaces, the submission format, scoring, and the supported Python
 versions. Entries link to the pull request that made the change.
 
-## [Unreleased]
+## [0.1.0] - 2026-07-DD
 
-Changes on `develop` since v0.0.2.
+*Changes on `develop` since v0.0.2. To be released in #61*
 
 ### Added
 
