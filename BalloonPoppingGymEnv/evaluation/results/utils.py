@@ -56,9 +56,10 @@ def _check_evaluate_integrity():
     any network problem, or a reference copy far larger than the real one.
 
     ``timeout`` bounds each blocking socket operation rather than the whole
-    request, so a server dripping bytes slowly can keep the transfer alive well
-    past it. Reading a bounded number of bytes is what actually caps the work,
-    and it also keeps an unexpectedly large response from exhausting memory.
+    request, so a peer dripping bytes slowly can keep the transfer alive well
+    past it. The byte cap bounds memory, not elapsed time; what keeps a slow
+    peer from costing anyone their run is that this is called after the
+    submission has already been written.
     """
     local = os.path.join(os.path.dirname(os.path.dirname(__file__)), "evaluate.py")
     try:
@@ -74,6 +75,7 @@ def _check_evaluate_integrity():
         with urllib.request.urlopen(
             INTEGRITY_CHECK_URL, timeout=INTEGRITY_CHECK_TIMEOUT
         ) as response:
+            declared = response.headers.get("Content-Length")
             # One byte over the cap, so an oversized body is detectable.
             raw = response.read(INTEGRITY_CHECK_MAX_BYTES + 1)
     except (OSError, http.client.HTTPException, ValueError) as exc:
@@ -87,6 +89,18 @@ def _check_evaluate_integrity():
         print("Could not check evaluate.py: the reference copy is unexpectedly large")
         return
 
+    # A peer that announces a length and then closes early hands back a short
+    # body without raising, and hashing that would accuse the competitor of
+    # editing a file they never touched.
+    if declared is not None:
+        try:
+            expected = int(declared)
+        except ValueError:
+            expected = None
+        if expected is not None and len(raw) < expected:
+            print("Could not check evaluate.py: the reference copy arrived incomplete")
+            return
+
     if _normalized_digest(raw) != local_digest:
         print("Result encryption warning: evaluate.py should not be modified")
 
@@ -95,8 +109,6 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
 
     team_name = eval_cfg["team_name"]
     timestamp = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
-
-    _check_evaluate_integrity()
 
     # Read agent source
     agent_module_path = os.fspath(eval_cfg["agent_module_path"])
@@ -139,6 +151,12 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
         pickle.dump(submission, f)
 
     print(f"Submission saved to:\n{out_path}")
+
+    # Last, and deliberately so: the check is advisory, and the socket timeout
+    # bounds each blocking operation rather than the whole request, so a slow
+    # peer can still drag it out. Running it after the file is on disk means it
+    # can no longer cost anyone the run they just simulated.
+    _check_evaluate_integrity()
 
 
 def render_trajectory_from_file(file_path):

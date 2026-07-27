@@ -129,8 +129,11 @@ class TestIntegrityCheckBounds(_IntegrityCase):
     class _Response:
         """Minimal stand-in for the urlopen context manager."""
 
-        def __init__(self, payload):
+        def __init__(self, payload, declared=None):
             self._payload = payload
+            self.headers = {
+                "Content-Length": str(len(payload) if declared is None else declared)
+            }
 
         def __enter__(self):
             return self
@@ -185,7 +188,7 @@ class TestIntegrityCheckBounds(_IntegrityCase):
         self.assertIn("unexpectedly large", said)
         self.assertNotIn("should not be modified", said)
 
-    def test_the_read_is_bounded(self):
+    def test_the_remote_body_read_has_a_size_cap(self):
         recorded = {}
 
         class Recording(self._Response):
@@ -242,6 +245,20 @@ class TestIntegrityCheckBounds(_IntegrityCase):
     def test_a_protocol_error_still_produces_a_submission(self):
         """BadStatusLine is HTTPException but not OSError, unlike the others."""
         self._pack(http.client.BadStatusLine("garbage"))
+
+    def test_an_incomplete_response_is_not_reported_as_tampering(self):
+        """A peer can announce a length and close early without raising.
+
+        Hashing the short body would accuse the competitor of editing a file
+        they never touched.
+        """
+        with mock.patch("builtins.print") as printed:
+            self._pack_returning(
+                lambda *a, **k: self._Response(b"short", declared=10_000)
+            )
+        said = " ".join(str(c) for c in printed.call_args_list)
+        self.assertIn("arrived incomplete", said)
+        self.assertNotIn("should not be modified", said)
 
 
 if __name__ == "__main__":
