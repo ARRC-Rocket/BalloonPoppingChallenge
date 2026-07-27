@@ -30,6 +30,22 @@ from rocketpy.tools import euler313_to_quaternions
 logger = logging.getLogger(__name__)
 
 
+def _seed_sequence_to_int(seed_sequence):
+    """Return the full 128-bit state of ``seed_sequence`` as a plain int.
+
+    Sensors keep whatever seed they were built with and hand it back from
+    ``to_dict()``, which the submission packer runs through ``RocketPyEncoder``.
+    A ``SeedSequence`` object has no JSON form, so passing one straight to a
+    sensor makes packing a submission fail. An int carries the same entropy and
+    is accepted by ``default_rng``.
+
+    The words are combined by value rather than through ``tobytes``, so the
+    result does not depend on the machine's byte order.
+    """
+    words = seed_sequence.generate_state(4, dtype=np.uint32)
+    return sum(int(word) << (32 * position) for position, word in enumerate(words))
+
+
 class BalloonPoppingEnv(gym.Env):
     metadata = {"render_modes": ["vpython", "matplotlib"]}
 
@@ -905,12 +921,32 @@ class BalloonPoppingEnv(gym.Env):
         # sensors; the domain tag keeps them clear of the balloon Monte Carlo's
         # own SeedSequence(scenario_seed) tree even once that runs in parallel.
         sensor_seed_domain = 0x5E2502  # fixed "sensor" tag, distinct from the MC
-        if self.np_random_seed is None:
+        seed = self.np_random_seed
+        if seed is None:
             gyro_seed = accelerometer_seed = gnss_seed = None
         else:
-            gyro_seed, accelerometer_seed, gnss_seed = np.random.SeedSequence(
-                [int(self.np_random_seed), sensor_seed_domain]
-            ).spawn(3)
+            if seed < 0:
+                # Gymnasium reports -1 when the seed is unknown, which happens
+                # when np_random was assigned directly. SeedSequence rejects a
+                # negative entropy, so draw the entropy from the generator we do
+                # have instead of a seed we do not.
+                entropy = [
+                    int(word)
+                    for word in self.np_random.integers(
+                        0, 2**32, size=4, dtype=np.uint32
+                    )
+                ]
+            else:
+                entropy = [int(seed)]
+            # Plain ints, not the SeedSequence children themselves: sensors keep
+            # their seed and hand it back through to_dict(), which has to stay
+            # JSON serializable for the submission packer.
+            gyro_seed, accelerometer_seed, gnss_seed = (
+                _seed_sequence_to_int(child)
+                for child in np.random.SeedSequence(
+                    [*entropy, sensor_seed_domain]
+                ).spawn(3)
+            )
         gyro = Gyroscope(
             sampling_rate=sensors_cfg["sampling_rate"],
             noise_density=sensors_cfg["gyro_noise_density"],
