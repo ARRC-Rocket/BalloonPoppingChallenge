@@ -189,11 +189,13 @@ class TestActuatorWiring(unittest.TestCase):
                 )
 
     def test_shipped_scenarios_leave_the_dynamics_off(self):
-        _env, _action, parameters = _launched_env()
-        control = parameters["rocket"]["control"]
-        for actuator in ACTUATORS:
-            with self.subTest(actuator=actuator.name):
-                self.assertIsNone(control[actuator.time_constant_key])
+        """Reading the YAML is enough; no need to build an environment."""
+        for scenario_number in (0, 1):
+            parameters, _ = load_scenario_parameters(scenario_number)
+            control = parameters["rocket"]["control"]
+            for actuator in ACTUATORS:
+                with self.subTest(scenario=scenario_number, actuator=actuator.name):
+                    self.assertIsNone(control[actuator.time_constant_key])
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
@@ -222,6 +224,20 @@ class TestActuatorDynamics(unittest.TestCase):
                         (later - actuator.initial) / span, 1.0 + 1e-9, "overshoot"
                     )
 
+                # One time constant in, a first-order lag has covered about
+                # 1 - 1/e of the span. Checking that rather than a particular
+                # alpha keeps this independent of which discretisation upstream
+                # uses, while still rejecting a wrong coefficient: backward
+                # Euler gives 0.598 here and the exact exponential 0.632, but a
+                # hard-coded alpha of 0.25 reaches 0.763 and a filter that lags
+                # once and then snaps reaches 1.0.
+                steps_per_tau = round(
+                    TIME_CONSTANT / parameters["simulation"]["time_step"]
+                )
+                at_one_tau = (outputs[steps_per_tau - 1] - actuator.initial) / span
+                self.assertGreater(at_one_tau, 0.55, "settles too slowly for this tau")
+                self.assertLess(at_one_tau, 0.70, "settles too fast for this tau")
+
                 self.assertAlmostEqual(outputs[-1], command, delta=abs(span) * 1e-3)
 
     def test_without_a_time_constant_the_command_lands_at_once(self):
@@ -237,21 +253,80 @@ class TestActuatorDynamics(unittest.TestCase):
 
         Worth pinning: it is why the tests above stay inside the limit.
         """
+        # Both scenarios ship with the dynamics off, so the limit has to hold
+        # there too: a regression that only rate-limits when a time constant is
+        # configured would otherwise pass every test in this file.
+        for time_constant in (None, TIME_CONSTANT):
+            for actuator in ACTUATORS:
+                with self.subTest(actuator=actuator.name, tau=time_constant):
+                    env, action, parameters = _launched_env(
+                        **{actuator.time_constant_key: time_constant}
+                    )
+                    limit = _per_step_limit(parameters, actuator)
+                    sign = -1.0 if actuator.name == "throttle" else 1.0
+                    # Clipping is expected to say so, so pin that as well.
+                    with self.assertWarnsRegex(UserWarning, "exceeds rate limit"):
+                        outputs = _drive(
+                            env,
+                            action,
+                            actuator,
+                            actuator.initial + sign * 10 * limit,
+                            2,
+                        )
+                    self.assertAlmostEqual(
+                        abs(outputs[0] - actuator.initial), limit, places=6
+                    )
+                    self.assertAlmostEqual(
+                        abs(outputs[1] - actuator.initial), 2 * limit, places=6
+                    )
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestActuatorStateAcrossEpisodes(unittest.TestCase):
+    """A new episode starts from clean actuators, not the previous one's state.
+
+    ActiveRocketPy unit tests cover an actuator's own reset. What is checked
+    here is the environment path: reset() drops the flight, and the next launch
+    builds a fresh rocket, so filter state must not survive the episode.
+    """
+
+    def test_relaunching_starts_the_filters_from_their_initial_output(self):
+        constants = {a.time_constant_key: TIME_CONSTANT for a in ACTUATORS}
+        env, action, parameters = _launched_env(**constants)
+
+        # Drive every actuator away from where it started.
         for actuator in ACTUATORS:
-            with self.subTest(actuator=actuator.name):
-                env, action, parameters = _launched_env(
-                    **{actuator.time_constant_key: TIME_CONSTANT}
+            _drive(
+                env, action, actuator, _command_within_limit(parameters, actuator), 20
+            )
+        moved = env._rocket_flight.rocket
+        for actuator in ACTUATORS:
+            with self.subTest(actuator=actuator.name, phase="driven"):
+                self.assertNotAlmostEqual(
+                    float(actuator.read(moved).actuator_output), actuator.initial
                 )
-                limit = _per_step_limit(parameters, actuator)
-                sign = -1.0 if actuator.name == "throttle" else 1.0
-                outputs = _drive(
-                    env, action, actuator, actuator.initial + sign * 10 * limit, 2
-                )
+
+        env.reset(seed=parameters["scenario"]["random_seed"])
+        self.assertIsNone(env._rocket_flight, "reset should drop the flight")
+
+        relaunch = env.action_space.sample()
+        relaunch["launch"] = np.array(1, dtype=relaunch["launch"].dtype)
+        relaunch["launch_inclination_heading"] = np.array(
+            [90.0, 0.0], dtype=relaunch["launch_inclination_heading"].dtype
+        )
+        _hold_current_commands(env, relaunch)
+        env.step(relaunch)
+
+        rocket = env._rocket_flight.rocket
+        for actuator in ACTUATORS:
+            with self.subTest(actuator=actuator.name, phase="relaunched"):
                 self.assertAlmostEqual(
-                    abs(outputs[0] - actuator.initial), limit, places=6
+                    float(actuator.read(rocket).actuator_output),
+                    actuator.initial,
+                    places=9,
                 )
-                self.assertAlmostEqual(
-                    abs(outputs[1] - actuator.initial), 2 * limit, places=6
+                self.assertEqual(
+                    actuator.read(rocket).actuator_time_constant, TIME_CONSTANT
                 )
 
 
