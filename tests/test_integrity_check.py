@@ -36,7 +36,12 @@ def _fake_env():
     )
 
 
-class _IntegrityCase(unittest.TestCase):
+class _IntegrityHelpers:
+    """Fixtures only. Deliberately not a TestCase: a TestCase base carrying
+    test methods is collected in its own right and its methods then run again in
+    every subclass, and an undecorated base also sidesteps the skip that keeps
+    this file quiet without the simulation stack."""
+
     def setUp(self):
         self.results_dir = os.path.dirname(utils.__file__)
         self.agent_file = os.path.join(self.results_dir, "_unittest_agent.py")
@@ -69,6 +74,18 @@ class _IntegrityCase(unittest.TestCase):
         path = new.pop()
         self.created.append(path)
         return path
+
+    def _pack_path_after(self, call):
+        before = set(glob.glob(os.path.join(self.results_dir, "*_submission.*")))
+        call()
+        new = set(glob.glob(os.path.join(self.results_dir, "*_submission.*"))) - before
+        self.assertEqual(len(new), 1)
+        return new.pop()
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestIntegrityCheckFailsOpen(_IntegrityHelpers, unittest.TestCase):
+    """Every expected failure still leaves a submission behind."""
 
     def test_network_failure_still_produces_a_submission(self):
         """Before the fix the URLError propagated and the run was lost."""
@@ -109,21 +126,9 @@ class _IntegrityCase(unittest.TestCase):
         self.assertIsNotNone(recorded.get("timeout"), "urlopen needs a timeout")
         self.assertEqual(recorded["timeout"], utils.INTEGRITY_CHECK_TIMEOUT)
 
-    def _pack_path_after(self, call):
-        before = set(glob.glob(os.path.join(self.results_dir, "*_submission.*")))
-        call()
-        new = set(glob.glob(os.path.join(self.results_dir, "*_submission.*"))) - before
-        self.assertEqual(len(new), 1)
-        return new.pop()
-
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
-class TestIntegrityCheckFailsOpen(_IntegrityCase):
-    """Runs the shared fail-open cases once."""
-
-
-@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
-class TestIntegrityCheckBounds(_IntegrityCase):
+class TestIntegrityCheckBounds(_IntegrityHelpers, unittest.TestCase):
     """The check is bounded, and every expected failure leaves packing alone."""
 
     class _Response:
@@ -259,6 +264,43 @@ class TestIntegrityCheckBounds(_IntegrityCase):
         said = " ".join(str(c) for c in printed.call_args_list)
         self.assertIn("arrived incomplete", said)
         self.assertNotIn("should not be modified", said)
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestSubmissionIsDurableFirst(_IntegrityHelpers, unittest.TestCase):
+    """The advisory check runs only once the result is safely on disk.
+
+    Every other test here inspects the file after pack_for_submission returns,
+    which cannot tell the two orderings apart: moving the check back in front of
+    the write leaves them all green, because each failure mode fails open and
+    the file is still written afterwards.
+    """
+
+    def test_the_submission_is_complete_when_the_check_runs(self):
+        seen = {}
+
+        def inspect_at_call_time():
+            found = glob.glob(os.path.join(self.results_dir, "*_submission.*"))
+            seen["count"] = len(found)
+            if found:
+                with open(found[0], "rb") as handle:
+                    seen["payload"] = pickle.load(handle)
+
+        with mock.patch.object(
+            utils, "_check_evaluate_integrity", side_effect=inspect_at_call_time
+        ):
+            before = set(glob.glob(os.path.join(self.results_dir, "*_submission.*")))
+            utils.pack_for_submission(self.eval_cfg, _fake_env(), {"scenario": {}})
+            new = (
+                set(glob.glob(os.path.join(self.results_dir, "*_submission.*")))
+                - before
+            )
+            self.created.extend(new)
+
+        self.assertEqual(seen.get("count"), 1, "no submission on disk yet")
+        # Written, closed and complete, not just created.
+        self.assertEqual(seen["payload"]["team"]["name"], "unittest_team")
+        self.assertIn("balloon_world_data", seen["payload"])
 
 
 if __name__ == "__main__":

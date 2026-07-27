@@ -9,7 +9,9 @@ from datetime import datetime, timezone
 from rocketpy._encoders import RocketPyEncoder
 
 # The evaluate.py integrity check is advisory and must never cost a competitor
-# the submission they just simulated, so it is bounded in both time and size.
+# the submission they just simulated. The socket timeout and the byte cap bound
+# each read and the memory it can take, not the total time; what protects the
+# run is that the check happens after the file is written.
 INTEGRITY_CHECK_URL = "https://raw.githubusercontent.com/ARRC-Rocket/BalloonPoppingChallenge/refs/heads/main/BalloonPoppingGymEnv/evaluation/evaluate.py"
 INTEGRITY_CHECK_TIMEOUT = 10
 # evaluate.py is a few kB; this leaves plenty of room without being unbounded.
