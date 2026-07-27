@@ -27,7 +27,7 @@ def save_trajectories(trajectories):
         json.dump(trajectories, file, indent=2)
 
 
-def _normalized_md5(raw_bytes):
+def _normalized_digest(raw_bytes):
     """MD5 of ``raw_bytes`` after dropping a UTF-8 BOM and normalizing line endings.
 
     ``pack_for_submission`` compares the local ``evaluate.py`` against the copy on
@@ -45,7 +45,7 @@ def _normalized_md5(raw_bytes):
     normalized = raw_bytes.removeprefix(b"\xef\xbb\xbf")
     normalized = normalized.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
     normalized = normalized.removesuffix(b"\n")
-    return hashlib.md5(normalized).hexdigest()
+    return hashlib.sha256(normalized).hexdigest()
 
 
 def _check_evaluate_integrity():
@@ -63,19 +63,23 @@ def _check_evaluate_integrity():
     local = os.path.join(os.path.dirname(os.path.dirname(__file__)), "evaluate.py")
     try:
         with open(local, "rb") as source:
-            local_md5 = _normalized_md5(source.read())
-    except OSError as exc:
-        print(f"Could not read the local evaluate.py to check it: {exc}")
-        return
+            # Same cap as the remote side: an unexpectedly large local file
+            # should report that the check could not run, not exhaust memory.
+            local_raw = source.read(INTEGRITY_CHECK_MAX_BYTES + 1)
+        if len(local_raw) > INTEGRITY_CHECK_MAX_BYTES:
+            print("Could not check evaluate.py: the local copy is unexpectedly large")
+            return
+        local_digest = _normalized_digest(local_raw)
 
-    try:
         with urllib.request.urlopen(
             INTEGRITY_CHECK_URL, timeout=INTEGRITY_CHECK_TIMEOUT
         ) as response:
             # One byte over the cap, so an oversized body is detectable.
             raw = response.read(INTEGRITY_CHECK_MAX_BYTES + 1)
-    except (OSError, http.client.HTTPException) as exc:
+    except (OSError, http.client.HTTPException, ValueError) as exc:
         # URLError, HTTPError, socket timeouts and DNS failures are all OSError.
+        # ValueError covers a hash the interpreter refuses to provide, which is
+        # how a FIPS-restricted build reports a blocked digest.
         print(f"Could not check evaluate.py against the official copy: {exc}")
         return
 
@@ -83,7 +87,7 @@ def _check_evaluate_integrity():
         print("Could not check evaluate.py: the reference copy is unexpectedly large")
         return
 
-    if _normalized_md5(raw) != local_md5:
+    if _normalized_digest(raw) != local_digest:
         print("Result encryption warning: evaluate.py should not be modified")
 
 

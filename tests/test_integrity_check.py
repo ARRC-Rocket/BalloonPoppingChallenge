@@ -10,6 +10,7 @@ skip, but a broken import inside this package is a failure and must stay loud.
 """
 
 import glob
+import http.client
 import os
 import pickle
 import unittest
@@ -35,8 +36,7 @@ def _fake_env():
     )
 
 
-@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
-class TestIntegrityCheckFailsOpen(unittest.TestCase):
+class _IntegrityCase(unittest.TestCase):
     def setUp(self):
         self.results_dir = os.path.dirname(utils.__file__)
         self.agent_file = os.path.join(self.results_dir, "_unittest_agent.py")
@@ -118,7 +118,12 @@ class TestIntegrityCheckFailsOpen(unittest.TestCase):
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
-class TestIntegrityCheckBounds(TestIntegrityCheckFailsOpen):
+class TestIntegrityCheckFailsOpen(_IntegrityCase):
+    """Runs the shared fail-open cases once."""
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestIntegrityCheckBounds(_IntegrityCase):
     """The check is bounded, and every expected failure leaves packing alone."""
 
     class _Response:
@@ -202,6 +207,41 @@ class TestIntegrityCheckBounds(TestIntegrityCheckFailsOpen):
             self._pack_with_response(self._local_bytes() + b"\n# tampered\n")
         said = " ".join(str(c) for c in printed.call_args_list)
         self.assertIn("should not be modified", said)
+
+    def test_a_blocked_hash_still_produces_a_submission(self):
+        """A FIPS-restricted build refuses the digest with ValueError."""
+        with mock.patch.object(
+            utils.hashlib, "sha256", side_effect=ValueError("disabled by FIPS policy")
+        ):
+            self._pack(urllib.error.URLError("unused"))
+
+    def test_an_oversized_local_file_still_produces_a_submission(self):
+        real_open = open
+
+        class _Huge:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self, amount=None):
+                size = utils.INTEGRITY_CHECK_MAX_BYTES + 10
+                return b"x" * (size if amount is None else min(amount, size))
+
+        def huge_open(path, *args, **kwargs):
+            if str(path).endswith("evaluate.py"):
+                return _Huge()
+            return real_open(path, *args, **kwargs)
+
+        with mock.patch("builtins.open", huge_open), mock.patch("builtins.print") as p:
+            self._pack_returning(lambda *a, **k: self._Response(b""))
+        said = " ".join(str(c) for c in p.call_args_list)
+        self.assertIn("local copy is unexpectedly large", said)
+
+    def test_a_protocol_error_still_produces_a_submission(self):
+        """BadStatusLine is HTTPException but not OSError, unlike the others."""
+        self._pack(http.client.BadStatusLine("garbage"))
 
 
 if __name__ == "__main__":
