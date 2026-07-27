@@ -1,4 +1,5 @@
 import hashlib
+import http.client
 import json
 import os
 import pickle
@@ -6,6 +7,10 @@ import urllib.request
 from datetime import datetime, timezone
 
 from rocketpy._encoders import RocketPyEncoder
+
+# The evaluate.py integrity check is advisory, so it gets a short budget and is
+# never allowed to cost a competitor the submission they just simulated.
+INTEGRITY_CHECK_TIMEOUT = 10
 
 
 def save_trajectories(trajectories):
@@ -46,17 +51,24 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
     timestamp = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
 
     # Compare evaluate.py against the official copy on main (see _normalized_md5).
+    # This runs after the whole simulation, so a network problem must not cost the
+    # competitor their submission: the check fails open and packing continues.
     url = "https://raw.githubusercontent.com/ARRC-Rocket/BalloonPoppingChallenge/refs/heads/main/BalloonPoppingGymEnv/evaluation/evaluate.py"
-    with urllib.request.urlopen(url) as response:
-        remote_md5 = _normalized_md5(response.read())
 
     local = os.path.join(os.path.dirname(os.path.dirname(__file__)), "evaluate.py")
     with open(local, "rb") as f:
         local_md5 = _normalized_md5(f.read())
 
-    if remote_md5 != local_md5:
-        print("Result encryption warning: evaluate.py should not be modified")
-        # return
+    try:
+        with urllib.request.urlopen(url, timeout=INTEGRITY_CHECK_TIMEOUT) as response:
+            remote_md5 = _normalized_md5(response.read())
+    except (OSError, http.client.HTTPException) as exc:
+        # URLError, HTTPError, socket timeouts and DNS failures are all OSError.
+        print(f"Could not check evaluate.py against the official copy: {exc}")
+    else:
+        if remote_md5 != local_md5:
+            print("Result encryption warning: evaluate.py should not be modified")
+            # return
 
     # Read agent source
     agent_module_path = os.fspath(eval_cfg["agent_module_path"])
