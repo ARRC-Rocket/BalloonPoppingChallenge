@@ -14,11 +14,16 @@ pull request.
 ## Setup
 
 The physics engine lives in a submodule and a fresh clone leaves it empty, so
-this comes first. Nothing imports until it is populated:
+this comes first. Nothing that touches the simulator runs until it is populated,
+which is everything except the AST-only tests:
 
 ```shell
-git submodule update --init --recursive
+git submodule update --init --recursive --checkout
 ```
+
+`--checkout` is the default only while nothing sets
+`submodule.ActiveRocketPy.update` locally; with that set to `merge` or `rebase`
+the submodule stays wherever it already was. Same command as the README.
 
 Then either path works:
 
@@ -71,7 +76,15 @@ So an editor integration or a stale environment tells you, instead of formatting
 file that CI then rejects.
 
 `uv lock --check` matters more than it looks. CI installs with pip, so nothing
-else notices `uv.lock` drifting away from the ActiveRocketPy submodule.
+else notices `uv.lock` going stale, and it goes stale for more reasons than the
+submodule: the release that moved `version` in `pyproject.toml` was enough. It
+compares the lockfile against the project metadata, the path dependencies and
+their declared versions.
+
+What it does not check is the simulator's source. ActiveRocketPy is an editable
+path dependency, so the lockfile records its version and dependencies with no
+commit, and a source-only change leaves this green. The recorded submodule
+commit is what pins that.
 
 ## Tests
 
@@ -105,8 +118,11 @@ numbers come out of a different BLAS build:
 ```
 
 That is the jitter the tolerance exists to absorb, and it is not a physics
-change. A real one shows up in the leading digits, or in `popped_count`, or in
-the step count.
+change. A real one typically shows up in the leading digits, or in
+`popped_count`, or in the step count. Typically, not always: a small real change
+can sit in the low digits or stay inside the tolerance, so passing is not proof
+that nothing moved. Those larger signals are a reason to look, not the only
+place worth looking.
 
 A baseline is tied to the pair of (repository, submodule commit). Regenerating
 one because it went red, without understanding why, defeats the point of having
