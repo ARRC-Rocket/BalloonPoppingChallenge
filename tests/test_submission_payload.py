@@ -66,7 +66,13 @@ class TestBalloonFlightsIsNotShipped(unittest.TestCase):
 
         self.assertNotIn("balloon_flights", world)
 
-    def test_the_fields_the_leaderboard_reads_are_still_there(self):
+    def test_the_other_balloon_world_fields_are_unchanged(self):
+        """Scoped to "this change removed one key", not to a consumer contract.
+
+        Of these four, ``trajectories`` is the one the leaderboard actually
+        reads. Naming the test after the consumer would have frozen the other
+        three as requirements and made the next payload trim argue with it.
+        """
         world = self._payload()["balloon_world_data"]
 
         for key in [

@@ -95,8 +95,18 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
         # the result, so trajectories[k]["balloon_states"] is bit-for-bit
         # _balloon_flights[:, :, k + 1] for the whole simulated window. What the
         # array adds is the frame before the first step and the tail after the
-        # episode ended, neither of which takes part in scoring or replay, and all
-        # of it re-derives from the scenario seed. See issue #57.
+        # episode ended, and neither takes part in scoring or replay.
+        #
+        # Those two are not archived any more, rather than regenerable. Rerunning
+        # the scenario needs the same atmosphere NetCDF bytes, the same
+        # ActiveRocketPy commit and the same solver behaviour, and the golden
+        # master is downsampled and tolerant, so it says the physics has not
+        # drifted, not that a dropped frame comes back byte for byte.
+        #
+        # format_version stays 0: this is a producer that has stopped emitting an
+        # optional key rather than a new schema, and the leaderboard reads
+        # trajectories. A third-party tool that indexes world["balloon_flights"]
+        # gets a KeyError, so it is called out in the changelog. See issue #57.
         "balloon_world_data": {
             "scenario_parameters": scenario_parameters,
             "trajectories": env.trajectories,
