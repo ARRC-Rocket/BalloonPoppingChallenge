@@ -5,10 +5,14 @@ import sys
 
 import yaml
 
+from BalloonPoppingGymEnv.console_logging import configure_console_logging
 from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
 from BalloonPoppingGymEnv.evaluation.results.utils import save_trajectories
 
-logger = logging.getLogger(__name__)
+# Named rather than __name__: running this file as a script makes __name__
+# "__main__", which puts its records outside the package logger the console
+# setup below attaches to, and shows up in the output as "__main__".
+logger = logging.getLogger("BalloonPoppingGymEnv.evaluation.evaluate")
 
 
 def _extract_nested_parameters(scenario_parameters, given_parameters_spec):
@@ -157,34 +161,37 @@ def evaluate_scenario(
     return env, agent, scenario_parameters
 
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+def main(argv=None):
+    """The command line entry point, as a function so it can be driven.
 
-    if len(sys.argv) < 2:
+    Split out of the ``__main__`` block so a test can exercise the console
+    configuration and the exact output without launching a subprocess that runs
+    a full simulation, a renderer and the submission path just to see a
+    formatter.
+    """
+    configure_console_logging()
+
+    arguments = sys.argv[1:] if argv is None else list(argv)
+    if not arguments:
         raise ValueError(
             "Configuration file path is required. "
             "Usage: python evaluate.py <path_to_eval_config.yaml>"
         )
 
-    eval_cfg_path = sys.argv[1]
+    eval_cfg_path = arguments[0]
     with open(eval_cfg_path, "r", encoding="utf-8-sig") as file:
         eval_cfg = yaml.safe_load(file)
 
-    scenario_number = eval_cfg["scenario_number"]
-    render_mode = eval_cfg["render_mode"]
-    agent_module_path = eval_cfg["agent_module_path"]
-    agent_class_name = eval_cfg["agent_class_name"]
-    agent_name = eval_cfg["agent_name"]
-    agent_kwargs = eval_cfg["agent_kwargs"]
-
     # Load agent class dynamically from specified module path.
-    agent_class = _load_agent_class(agent_module_path, agent_class_name)
+    agent_class = _load_agent_class(
+        eval_cfg["agent_module_path"], eval_cfg["agent_class_name"]
+    )
     env, agent, scenario_parameters = evaluate_scenario(
         agent_class,
-        agent_kwargs=agent_kwargs,
-        agent_name=agent_name,
-        scenario_number=scenario_number,
-        render_mode=render_mode,
+        agent_kwargs=eval_cfg["agent_kwargs"],
+        agent_name=eval_cfg["agent_name"],
+        scenario_number=eval_cfg["scenario_number"],
+        render_mode=eval_cfg["render_mode"],
     )
     if eval_cfg["leaderboard_submission"]:
         from BalloonPoppingGymEnv.evaluation.results.utils import pack_for_submission
@@ -192,3 +199,8 @@ if __name__ == "__main__":
         pack_for_submission(
             eval_cfg=eval_cfg, env=env, scenario_parameters=scenario_parameters
         )
+    return env, agent, scenario_parameters
+
+
+if __name__ == "__main__":
+    main()

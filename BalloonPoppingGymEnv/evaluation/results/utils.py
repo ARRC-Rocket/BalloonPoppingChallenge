@@ -11,9 +11,31 @@ from uuid import uuid4
 
 from rocketpy._encoders import RocketPyEncoder
 
-# The evaluate.py integrity check is advisory, so it gets a short budget and is
-# never allowed to cost a competitor the submission they just simulated.
+# The evaluate.py integrity check is advisory and must never cost a competitor
+# the submission they just simulated. The socket timeout and the byte cap bound
+# each read and the memory it can take, not the total time; what protects the
+# run is that the check happens after the file is written.
+INTEGRITY_CHECK_URL = "https://raw.githubusercontent.com/ARRC-Rocket/BalloonPoppingChallenge/refs/heads/main/BalloonPoppingGymEnv/evaluation/evaluate.py"
 INTEGRITY_CHECK_TIMEOUT = 10
+# evaluate.py is a few kB; this leaves plenty of room without being unbounded.
+INTEGRITY_CHECK_MAX_BYTES = 1_000_000
+
+# A mismatch is a fact about two files, not a finding about the competitor. The
+# old wording ("evaluate.py should not be modified") reads as an accusation, and
+# it fires for a reason nobody controls: the reference is whatever sits on main,
+# so anyone whose checkout is not current main sees it having edited nothing. It
+# is a constant so the tests can key on it instead of on a phrase (see #35).
+#
+# "A different revision", not "ahead of main": #35 covers both directions. An
+# untouched older release starts reporting this the moment main moves on, and
+# telling that competitor only about being ahead invites them to conclude the
+# file really was edited.
+INTEGRITY_MISMATCH_MESSAGE = (
+    "evaluate.py does not match the official copy on main. Your submission was "
+    "still saved. A checkout from a revision other than current main can report "
+    "this too, so check whether you edited the file before treating it as a "
+    "problem."
+)
 
 
 def save_trajectories(trajectories):
@@ -27,8 +49,8 @@ def save_trajectories(trajectories):
         json.dump(trajectories, file, indent=2)
 
 
-def _normalized_md5(raw_bytes):
-    """MD5 of ``raw_bytes`` after dropping a UTF-8 BOM and normalizing line endings.
+def _normalized_digest(raw_bytes):
+    """SHA-256 of ``raw_bytes``, less a UTF-8 BOM and with line endings normalized.
 
     ``pack_for_submission`` compares the local ``evaluate.py`` against the copy on
     main. A Windows checkout can add a UTF-8 BOM or CRLF/CR endings that would flag
@@ -45,7 +67,118 @@ def _normalized_md5(raw_bytes):
     normalized = raw_bytes.removeprefix(b"\xef\xbb\xbf")
     normalized = normalized.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
     normalized = normalized.removesuffix(b"\n")
-    return hashlib.md5(normalized).hexdigest()
+    return hashlib.sha256(normalized).hexdigest()
+
+
+def _check_evaluate_integrity():
+    """Warn when the local evaluate.py differs from the official copy on main.
+
+    Advisory only, and it runs after the whole scenario has been simulated, so
+    every expected failure has to leave packing alone: an unreadable local file,
+    any network problem, or a reference copy far larger than the real one.
+
+    ``timeout`` bounds each blocking socket operation rather than the whole
+    request, so a peer dripping bytes slowly can keep the transfer alive well
+    past it. The byte cap bounds memory, not elapsed time; what keeps a slow
+    peer from costing anyone their run is that this is called after the
+    submission has already been written.
+    """
+    local = os.path.join(os.path.dirname(os.path.dirname(__file__)), "evaluate.py")
+    try:
+        with open(local, "rb") as source:
+            # Same cap as the remote side: an unexpectedly large local file
+            # should report that the check could not run, not exhaust memory.
+            local_raw = source.read(INTEGRITY_CHECK_MAX_BYTES + 1)
+        if len(local_raw) > INTEGRITY_CHECK_MAX_BYTES:
+            print("Could not check evaluate.py: the local copy is unexpectedly large")
+            return
+        local_digest = _normalized_digest(local_raw)
+
+        with urllib.request.urlopen(
+            INTEGRITY_CHECK_URL, timeout=INTEGRITY_CHECK_TIMEOUT
+        ) as response:
+            # urlopen treats the whole 2xx range as success, so nothing above
+            # raises for a 203 an intermediary rewrote, a 204 with no body, or a
+            # 206 carrying one slice of the file. Only 200 is the representation
+            # of the target resource, and the completeness check below cannot
+            # stand in for this: a well-formed 206 declares the length of its
+            # own partial body, matches it, and would be hashed as if it were
+            # the whole file.
+            status = getattr(response, "status", None)
+            if status != 200:
+                print(f"Could not check evaluate.py: unexpected HTTP status {status}")
+                return
+
+            # urlopen follows redirects on its own, so a proxy or captive portal
+            # that lands on its own 200 page arrives here looking successful.
+            final_url = response.geturl()
+            if final_url != INTEGRITY_CHECK_URL:
+                print(f"Could not check evaluate.py: redirected to {final_url}")
+                return
+
+            # http.client asks for identity and cannot decode anything else, so
+            # a coded body would be hashed in its coded form.
+            encoding = response.headers.get("Content-Encoding")
+            if encoding not in (None, "", "identity"):
+                print(f"Could not check evaluate.py: Content-Encoding {encoding}")
+                return
+
+            chunked = bool(getattr(response, "chunked", False))
+            declared = response.headers.get("Content-Length")
+            # One byte over the cap, so an oversized body is detectable.
+            raw = response.read(INTEGRITY_CHECK_MAX_BYTES + 1)
+
+        if len(raw) > INTEGRITY_CHECK_MAX_BYTES:
+            print(
+                "Could not check evaluate.py: the reference copy is unexpectedly large"
+            )
+            return
+
+        # Completeness has to come from the framing, and there are only two
+        # kinds that carry it. A chunked body ends at a terminator http.client
+        # validates, raising on a short stream. A declared length can be
+        # compared against what arrived. A response with neither is delimited
+        # by the connection closing, and RFC 9112 is explicit that such a body
+        # cannot be told apart from one cut short mid-transfer: read() hands
+        # back whatever turned up and nothing raises. Hashing that would accuse
+        # a competitor of editing a file they never touched.
+        if chunked:
+            pass
+        elif declared is None:
+            print(
+                "Could not check evaluate.py: the reference copy arrived without a "
+                "length to check it against"
+            )
+            return
+        else:
+            # A length that will not parse, or parses negative, says the framing
+            # cannot be trusted, which is the same conclusion.
+            try:
+                expected = int(declared)
+            except ValueError:
+                print("Could not check evaluate.py: unusable Content-Length")
+                return
+            if expected < 0:
+                print("Could not check evaluate.py: unusable Content-Length")
+                return
+            if len(raw) < expected:
+                print(
+                    "Could not check evaluate.py: the reference copy arrived incomplete"
+                )
+                return
+
+        # Inside the try with the local digest, so a build that refuses this hash
+        # reports an unavailable check from either side rather than only one.
+        remote_digest = _normalized_digest(raw)
+    except (OSError, http.client.HTTPException, ValueError) as exc:
+        # URLError, HTTPError, socket timeouts and DNS failures are all OSError.
+        # ValueError covers a hash the interpreter refuses to provide, which is
+        # how a FIPS-restricted build reports a blocked digest.
+        print(f"Could not check evaluate.py against the official copy: {exc}")
+        return
+
+    if remote_digest != local_digest:
+        print(INTEGRITY_MISMATCH_MESSAGE)
 
 
 # Path separators, the Windows-reserved punctuation, and control characters. A
@@ -158,26 +291,6 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
     packed_at = datetime.now(timezone.utc)
     timestamp = f"{packed_at:%Y%m%dT%H%M%SZ}"
 
-    # Compare evaluate.py against the official copy on main (see _normalized_md5).
-    # This runs after the whole simulation, so a network problem must not cost the
-    # competitor their submission: the check fails open and packing continues.
-    url = "https://raw.githubusercontent.com/ARRC-Rocket/BalloonPoppingChallenge/refs/heads/main/BalloonPoppingGymEnv/evaluation/evaluate.py"
-
-    local = os.path.join(os.path.dirname(os.path.dirname(__file__)), "evaluate.py")
-    with open(local, "rb") as f:
-        local_md5 = _normalized_md5(f.read())
-
-    try:
-        with urllib.request.urlopen(url, timeout=INTEGRITY_CHECK_TIMEOUT) as response:
-            remote_md5 = _normalized_md5(response.read())
-    except (OSError, http.client.HTTPException) as exc:
-        # URLError, HTTPError, socket timeouts and DNS failures are all OSError.
-        print(f"Could not check evaluate.py against the official copy: {exc}")
-    else:
-        if remote_md5 != local_md5:
-            print("Result encryption warning: evaluate.py should not be modified")
-            # return
-
     # Read agent source
     agent_module_path = os.fspath(eval_cfg["agent_module_path"])
     with open(agent_module_path, "r", encoding="utf-8") as f:
@@ -221,6 +334,12 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
     _write_atomically(out_path, lambda file: pickle.dump(submission, file))
 
     print(f"Submission saved to:\n{out_path}")
+
+    # Last, and deliberately so: the check is advisory, and the socket timeout
+    # bounds each blocking operation rather than the whole request, so a slow
+    # peer can still drag it out. Running it after the file is on disk means it
+    # can no longer cost anyone the run they just simulated.
+    _check_evaluate_integrity()
 
 
 def render_trajectory_from_file(file_path):
