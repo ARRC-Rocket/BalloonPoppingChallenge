@@ -3,9 +3,16 @@
 
 The balloons are not something a competitor controls. Their flights come out of
 the scenario parameters and the seed, and an agent only ever commands the
-rocket, so regenerating them from the submission's own
-``scenario_parameters`` gives an independent copy of what the run should have
-recorded. Anything that does not match was not produced by the simulator.
+rocket, so regenerating them gives an independent copy of what the run should
+have recorded. Anything that does not match was not produced by the simulator.
+
+Regenerated from the scenario **this repository ships**, not from the copy
+inside the submission. A submission carries its own ``scenario_parameters``, and
+using those as the oracle would let the file being checked supply the answer it
+is checked against: change the rocket inertia and the balloons together, and
+everything agrees with everything. The shipped scenario is compared against the
+submitted one as its own check, so a run against modified physics is reported
+rather than quietly blessed.
 
 Run it against a submission downloaded from the leaderboard::
 
@@ -113,6 +120,127 @@ def load_submission(path):
         return _Restricted(handle).load()
 
 
+def _load_canonical_scenario(scenario_number):
+    """The scenario as this repository ships it, which is the actual oracle.
+
+    Returns ``None`` for a number this repository has no scenario for, which is
+    itself worth reporting: a submission naming scenario 7 was not produced by
+    anything here.
+    """
+    from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
+
+    try:
+        canonical, _ = load_scenario_parameters(scenario_number)
+    except (FileNotFoundError, OSError, TypeError):
+        return None
+    return canonical
+
+
+def _parameter_differences(submitted, canonical, path=""):
+    """Every leaf where the two parameter trees disagree, as (path, got, want).
+
+    Compared strictly. Measured before relying on it: the environment does not
+    write to the parameters it is handed, and a fresh ``load_scenario_parameters``
+    equals the dict a finished run carries, so an honest submission produces an
+    empty list rather than a pile of floating point noise.
+    """
+    if isinstance(canonical, dict):
+        if not isinstance(submitted, dict):
+            return [(path or "<root>", submitted, canonical)]
+        differences = []
+        for key in sorted(set(canonical) | set(submitted), key=str):
+            child = f"{path}.{key}" if path else str(key)
+            if key not in submitted:
+                differences.append((child, "<missing>", canonical[key]))
+            elif key not in canonical:
+                differences.append((child, submitted[key], "<not in the scenario>"))
+            else:
+                differences += _parameter_differences(
+                    submitted[key], canonical[key], child
+                )
+        return differences
+
+    if isinstance(canonical, (list, tuple)):
+        if not isinstance(submitted, (list, tuple)) or len(submitted) != len(canonical):
+            return [(path or "<root>", submitted, canonical)]
+        differences = []
+        for index, (mine, theirs) in enumerate(zip(submitted, canonical)):
+            differences += _parameter_differences(mine, theirs, f"{path}[{index}]")
+        return differences
+
+    if submitted != canonical:
+        return [(path or "<root>", submitted, canonical)]
+    return []
+
+
+def check_scenario_is_official(submission):
+    """Establish the oracle before anything is compared against it.
+
+    Returns the findings and the canonical parameters, or ``None`` for them when
+    there is no scenario to check against, in which case nothing that needs
+    physics can run.
+
+    The scenario number is taken from the submitted parameters and cross checked
+    against the one in ``leaderboard_info``. Both are competitor controlled, so
+    neither is trusted: naming a different scenario to the one the data came
+    from makes the comparison below fail rather than pass.
+    """
+    world = submission["balloon_world_data"]
+    submitted = world["scenario_parameters"]
+
+    if not isinstance(submitted, dict) or not isinstance(
+        submitted.get("scenario"), dict
+    ):
+        return [
+            Finding("scenario", False, "the submission carries no scenario section")
+        ], None
+
+    number = submitted["scenario"].get("number")
+    claimed = submission.get("leaderboard_info", {}).get("scenario_number")
+    findings = []
+    if claimed is not None and claimed != number:
+        findings.append(
+            Finding(
+                "scenario number",
+                False,
+                f"the parameters say scenario {number}, leaderboard_info says "
+                f"{claimed}",
+            )
+        )
+
+    canonical = _load_canonical_scenario(number)
+    if canonical is None:
+        findings.append(
+            Finding(
+                "scenario",
+                False,
+                f"this repository ships no scenario {number!r}, so there is "
+                "nothing to check the run against",
+            )
+        )
+        return findings, None
+
+    differences = _parameter_differences(submitted, canonical)
+    findings.append(
+        Finding(
+            "scenario parameters are the shipped ones",
+            not differences,
+            f"identical to scenario {number} as shipped"
+            if not differences
+            else f"{len(differences)} parameters differ from scenario {number}",
+        )
+    )
+    for where, got, want in differences[:5]:
+        findings.append(
+            Finding(
+                f"parameter {where}",
+                False,
+                f"submission has {got!r}, the scenario has {want!r}",
+            )
+        )
+    return findings, canonical
+
+
 def _regenerate_balloon_flights(scenario_parameters):
     """Run the environment's own reset to get the flights the seed implies.
 
@@ -130,8 +258,12 @@ def _regenerate_balloon_flights(scenario_parameters):
     )
 
 
-def check_balloon_trajectories(submission, tolerance, trusted_positions):
+def check_balloon_trajectories(submission, tolerance, trusted_positions, canonical):
     """The main check: every recorded balloon state came out of the simulator.
+
+    ``canonical`` is the scenario as shipped, never the copy in the submission.
+    Regenerating from the submitted parameters would let the file supply its own
+    oracle: modify the physics and the balloons together and they agree.
 
     ``trusted_positions`` is appended to with the regenerated positions, so the
     pop check below can reuse them instead of paying for the Monte Carlo twice.
@@ -150,7 +282,7 @@ def check_balloon_trajectories(submission, tolerance, trusted_positions):
             )
         ]
 
-    flights, release_at_step = _regenerate_balloon_flights(world["scenario_parameters"])
+    flights, release_at_step = _regenerate_balloon_flights(canonical)
 
     expected_balloons = flights.shape[0]
     if claimed.shape[1] != expected_balloons:
@@ -239,7 +371,7 @@ def check_balloon_trajectories(submission, tolerance, trusted_positions):
     return findings
 
 
-def check_claimed_pops_are_reachable(submission, expected_positions):
+def check_claimed_pops_are_reachable(submission, expected_positions, canonical):
     """Every balloon claimed popped has to have been somewhere the rocket went.
 
     The checks above catch a balloon that was moved. They do not catch the
@@ -255,17 +387,30 @@ def check_claimed_pops_are_reachable(submission, expected_positions):
     editing an integer.
 
     Deliberately reports the closest approach rather than reproducing the pop
-    decision. Reproducing it means matching the environment's sweep boundaries
-    exactly, including the one interval whose origin is the launch state rather
-    than a recorded position, and being subtly wrong there would accuse an
-    honest competitor. A boundary that is one step out moves the distance by
-    about a metre; a fabricated pop is out by hundreds.
+    decision. A boundary that is one step out moves the distance by about a
+    metre; a fabricated pop is out by hundreds. Where it does follow the
+    environment it errs towards letting a pop through, because the cost of being
+    subtly wrong here is accusing an honest competitor.
+
+    Two of those boundaries used to be missed, and both could only ever have
+    produced a false accusation:
+
+    The environment sweeps the first interval from the launch pad, which is
+    ``(0, 0, elevation)``, to the first stepped position. The row before that
+    one is all NaN, so an interval needing two real endpoints skipped it. The
+    pad is in the scenario, so it is reconstructed exactly rather than
+    approximated.
+
+    A balloon released on step k is marked released before pops are detected on
+    step k, so the environment can pop it over the interval that ends there.
+    Reading the status at the start of that interval says it was still on the
+    ground, and skipped it.
     """
     from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
 
     world = submission["balloon_world_data"]
     records = world["trajectories"]
-    radius = float(world["scenario_parameters"]["balloon"]["radius"])
+    radius = float(canonical["balloon"]["radius"])
 
     status = np.asarray([record["balloon_status"] for record in records], dtype=int)
     claimed_popped = np.flatnonzero((status == 2).any(axis=0))
@@ -276,6 +421,18 @@ def check_claimed_pops_are_reachable(submission, expected_positions):
         [record["rocket_states"][:3] for record in records], dtype=float
     )
     flyable = np.isfinite(rocket).all(axis=1)
+    # Put the launch pad back where the environment starts sweeping from, so the
+    # first flown interval is checked instead of dropped for having a NaN end.
+    # Overwriting the row before it makes it an ordinary interval below.
+    if flyable.any():
+        first_flown = int(np.argmax(flyable))
+        if first_flown >= 1:
+            rocket[first_flown - 1] = (
+                0.0,
+                0.0,
+                float(canonical["environment"]["elevation"]),
+            )
+            flyable[first_flown - 1] = True
     if flyable.sum() < 2:
         return [
             Finding(
@@ -292,7 +449,10 @@ def check_claimed_pops_are_reachable(submission, expected_positions):
     # pre-launch rows are all-NaN by construction.
     steps = np.flatnonzero(flyable[:-1] & flyable[1:])
     for step in steps:
-        released = status[step, claimed_popped] >= 1
+        # The status at the *end* of the interval. A balloon released on this
+        # step is released before the environment detects pops on it, so reading
+        # the start would skip the interval it was actually popped over.
+        released = status[step + 1, claimed_popped] >= 1
         if not released.any():
             continue
         distance_squared = BalloonPoppingEnv._segment_distance_squared_batch(
@@ -367,15 +527,30 @@ def check_internal_consistency(submission):
         )
     )
 
-    # A balloon on the ground cannot be popped, so 2 never follows 0 directly.
-    skipped = int(((status[:-1] == 0) & (status[1:] == 2)).sum())
+    # Not "2 never follows 0". That reads like the rule and is not one: step()
+    # marks a balloon released, detects pops, and only then writes the record,
+    # so a balloon released and popped on the same step legitimately records 0
+    # then 2 with nothing in between. Asserting that transition away would
+    # accuse an honest competitor of the one thing they cannot argue with.
+    #
+    # The rule that does hold is about when, not about the shape of the
+    # sequence: no balloon is popped before the step it is released on. Row k
+    # holds step k+1, the same offset the trajectory comparison uses.
+    release_at_step = np.asarray(world["balloon_release_at_step"], dtype=int)
+    popped_rows = status == 2
+    early = []
+    if release_at_step.shape[0] == status.shape[1]:
+        has_popped = popped_rows.any(axis=0)
+        first_pop_step = popped_rows.argmax(axis=0) + _TRAJECTORY_OFFSET
+        early = np.flatnonzero(has_popped & (first_pop_step < release_at_step))
     findings.append(
         Finding(
             "no balloon is popped before release",
-            skipped == 0,
-            "every pop follows a release"
-            if skipped == 0
-            else f"{skipped} balloons go from the ground straight to popped",
+            len(early) == 0,
+            "every pop is on or after the balloon's release step"
+            if len(early) == 0
+            else f"{len(early)} balloons are popped before they are released, "
+            f"first {early[:5].tolist()}",
         )
     )
     return findings
@@ -392,13 +567,25 @@ def verify(submission, tolerance):
     if not world["trajectories"]:
         return [Finding("structure", False, "the submission records no steps")]
 
-    trusted_positions = []
-    findings = check_balloon_trajectories(submission, tolerance, trusted_positions)
+    # First, because everything below is measured against it. A submission that
+    # names a scenario this repository does not ship, or whose parameters are
+    # not the shipped ones, is reported here rather than checked against itself.
+    findings, canonical = check_scenario_is_official(submission)
+    # These need no physics, so they run whatever the scenario turned out to be.
     findings += check_internal_consistency(submission)
+    if canonical is None:
+        return findings
+
+    trusted_positions = []
+    findings += check_balloon_trajectories(
+        submission, tolerance, trusted_positions, canonical
+    )
     # Only worth asking where the rocket went if the balloons it is compared
     # against are the ones the seed produced.
     if trusted_positions and all(finding.ok for finding in findings):
-        findings += check_claimed_pops_are_reachable(submission, trusted_positions[0])
+        findings += check_claimed_pops_are_reachable(
+            submission, trusted_positions[0], canonical
+        )
     return findings
 
 

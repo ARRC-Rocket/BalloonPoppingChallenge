@@ -17,6 +17,7 @@ import sys
 import unittest
 from importlib.util import find_spec
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -36,7 +37,14 @@ if _STACK_AVAILABLE:
     import yaml
 
     from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
-    from verify_submission import DEFAULT_TOLERANCE_METRES, verify
+    from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
+    from verify_submission import (
+        DEFAULT_TOLERANCE_METRES,
+        _load_canonical_scenario,
+        check_claimed_pops_are_reachable,
+        check_internal_consistency,
+        verify,
+    )
 
 
 def _build_submission(steps=40):
@@ -88,6 +96,23 @@ class TestTheSubmissionChecker(unittest.TestCase):
     def setUp(self):
         self.submission = copy.deepcopy(self.clean)
         self.records = self.submission["balloon_world_data"]["trajectories"]
+        # The fixture is scenario 1 cut to one balloon, so it is deliberately
+        # not the scenario this repository ships and the real oracle rejects it
+        # on sight. That rejection is the subject of its own class below; here
+        # the reduced scenario stands in as the official one, so these tests
+        # keep exercising what they are named for.
+        #
+        # A fresh copy each time, so a test that edits the submitted parameters
+        # is editing only those.
+        official = copy.deepcopy(
+            self.clean["balloon_world_data"]["scenario_parameters"]
+        )
+        patcher = patch(
+            "verify_submission._load_canonical_scenario",
+            lambda number: copy.deepcopy(official),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def failures(self, submission=None):
         found = verify(submission or self.submission, DEFAULT_TOLERANCE_METRES)
@@ -165,10 +190,26 @@ class TestTheSubmissionChecker(unittest.TestCase):
         self.assertIn("claimed pops are reachable", failures)
 
     def test_a_changed_seed_is_caught(self):
+        """Caught by the parameter comparison now, which is the tighter answer.
+
+        It used to be caught indirectly: regenerating with the edited seed
+        produced balloons that did not match the recorded ones. That only worked
+        because the recording was made with the real seed. A run genuinely
+        carried out under a different seed agreed with itself and passed, which
+        is the hole the shipped scenario closes.
+        """
         parameters = self.submission["balloon_world_data"]["scenario_parameters"]
         parameters["scenario"]["random_seed"] = 99
 
-        self.assertIn("balloon trajectories", self.failures())
+        failures = self.failures()
+        self.assertIn("scenario parameters are the shipped ones", failures)
+        self.assertIn("parameter scenario.random_seed", failures)
+        # And the balloons still compare clean, which is what says the
+        # regeneration used the shipped scenario rather than this edited copy.
+        # Regenerating from the submission would use seed 99, produce different
+        # balloons from the recorded ones, and fail here too. Without this line
+        # the two sources are indistinguishable to the suite.
+        self.assertNotIn("balloon trajectories", failures)
 
     def test_a_changed_release_schedule_is_caught(self):
         self.submission["balloon_world_data"]["balloon_release_at_step"][0] += 1
@@ -179,6 +220,184 @@ class TestTheSubmissionChecker(unittest.TestCase):
         del self.submission["balloon_world_data"]["trajectories"]
 
         self.assertEqual(self.failures(), ["structure"])
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestTheOracleIsTheShippedScenario(unittest.TestCase):
+    """Nothing here patches the loader, because the loader is the subject.
+
+    The checker used to regenerate the balloons from the ``scenario_parameters``
+    inside the submission, which let the file under examination supply the
+    answer it was checked against.
+    """
+
+    def test_the_loader_reads_this_repository(self):
+        shipped, _ = load_scenario_parameters(0)
+
+        self.assertEqual(_load_canonical_scenario(0), shipped)
+
+    def test_a_scenario_this_repository_does_not_ship_has_no_oracle(self):
+        self.assertIsNone(_load_canonical_scenario(7))
+
+    def test_a_run_against_modified_parameters_is_caught_though_it_agrees_with_itself(
+        self,
+    ):
+        """The whole point, and the fixture is already the right probe.
+
+        It is scenario 1 with the balloon count changed, and everything in it
+        was produced by the environment under exactly those parameters. So it is
+        internally consistent: its balloons are the ones its own parameters
+        imply, its statuses follow, its score matches. Against its own copy of
+        the scenario it passed every check. Against the shipped one it does not.
+        """
+        submission = _build_submission()
+
+        findings = verify(submission, DEFAULT_TOLERANCE_METRES)
+        failures = [finding.name for finding in findings if not finding.ok]
+
+        self.assertIn("scenario parameters are the shipped ones", failures)
+        self.assertIn("parameter balloon.num", failures)
+
+    def test_a_scenario_number_that_disagrees_with_the_parameters_is_caught(self):
+        submission = _build_submission()
+        submission["leaderboard_info"]["scenario_number"] = 0
+
+        failures = [
+            finding.name
+            for finding in verify(submission, DEFAULT_TOLERANCE_METRES)
+            if not finding.ok
+        ]
+
+        self.assertIn("scenario number", failures)
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestWhenAPopIsTooEarly(unittest.TestCase):
+    """ "2 never follows 0" reads like the rule and is not one.
+
+    step() marks a balloon released, detects pops, and only then writes the
+    record, so a balloon released and popped on the same step legitimately
+    records 0 and then 2 with nothing in between. What actually holds is about
+    the step number, not the shape of the sequence.
+    """
+
+    @staticmethod
+    def _consistency(status_rows, release_at_step):
+        submission = {
+            "leaderboard_info": {
+                "final_reward": int((np.asarray(status_rows)[-1] == 2).sum())
+            },
+            "balloon_world_data": {
+                "trajectories": [{"balloon_status": list(row)} for row in status_rows],
+                "balloon_release_at_step": list(release_at_step),
+            },
+        }
+        return [
+            finding.name
+            for finding in check_internal_consistency(submission)
+            if not finding.ok
+        ]
+
+    def test_released_and_popped_on_the_same_step_is_allowed(self):
+        # Row 0 holds step 1, so a balloon released on step 1 may read 2 there.
+        failures = self._consistency([[0], [2], [2]], release_at_step=[1])
+
+        self.assertNotIn("no balloon is popped before release", failures)
+
+    def test_popped_before_the_release_step_is_caught(self):
+        # Row 0 is step 1 again, and this balloon is not released until step 50.
+        failures = self._consistency([[2], [2], [2]], release_at_step=[50])
+
+        self.assertIn("no balloon is popped before release", failures)
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestTheIntervalsThePopCheckLooksAt(unittest.TestCase):
+    """Two boundaries the environment sweeps and the checker used to skip.
+
+    Both could only produce a false accusation, which is the expensive direction
+    for a checker that decides whether somebody cheated. Driven directly rather
+    than through ``verify``, because ``verify`` only reaches the pop check once
+    everything else has passed, and these cases are about the pop check alone.
+
+    The submissions built here carry no ``scenario_parameters`` on purpose. The
+    radius and the pad elevation have to come from the shipped scenario, so
+    reading either of them off the submission raises a KeyError here rather than
+    letting the file being checked widen the check that judges it.
+    """
+
+    ELEVATION = 20.0
+    RADIUS = 1.5
+    CANONICAL = {"balloon": {"radius": RADIUS}, "environment": {"elevation": ELEVATION}}
+
+    @staticmethod
+    def _submission(rocket_rows, status_rows):
+        return {
+            "balloon_world_data": {
+                "trajectories": [
+                    {
+                        "rocket_states": list(rocket) + [0.0] * 10,
+                        "balloon_status": list(status),
+                    }
+                    for rocket, status in zip(rocket_rows, status_rows)
+                ]
+            }
+        }
+
+    def _closest(self, rocket_rows, status_rows, balloon_positions):
+        findings = check_claimed_pops_are_reachable(
+            self._submission(rocket_rows, status_rows),
+            np.asarray(balloon_positions, dtype=float),
+            self.CANONICAL,
+        )
+        return [finding for finding in findings if not finding.ok]
+
+    def test_a_pop_over_the_launch_interval_is_not_an_accusation(self):
+        """The environment sweeps that interval from the pad, not from a record.
+
+        On the launch step the rocket has not been stepped, so its recorded
+        state is NaN and the interval into the first stepped position has only
+        one real end. An interval needing two dropped it, and a balloon popped
+        against the pad looked unreachable.
+        """
+        nan = [float("nan")] * 3
+        rocket = [nan, [0.0, 0.0, 60.0], [0.0, 0.0, 140.0]]
+        status = [[1], [2], [2]]
+        # Half a metre above the pad the whole time, so the only interval that
+        # can reach it is the one starting there.
+        balloons = [[[0.0, 0.0, self.ELEVATION + 0.5]] for _ in range(3)]
+
+        self.assertEqual(self._closest(rocket, status, balloons), [])
+
+    def test_the_launch_pad_does_not_excuse_an_unreachable_pop(self):
+        """Or the test above would pass by reaching everything.
+
+        Same shape, with the balloon parked far from both the pad and the path.
+        """
+        nan = [float("nan")] * 3
+        rocket = [nan, [0.0, 0.0, 60.0], [0.0, 0.0, 140.0]]
+        status = [[1], [2], [2]]
+        balloons = [[[500.0, 500.0, self.ELEVATION + 0.5]] for _ in range(3)]
+
+        self.assertNotEqual(self._closest(rocket, status, balloons), [])
+
+    def test_a_balloon_released_and_popped_on_the_same_step_is_not_an_accusation(self):
+        """step() releases, then detects pops, then writes the record.
+
+        So the row before shows 0 and the row itself shows 2, and reading the
+        status at the start of the interval said the balloon was still on the
+        ground and skipped the interval it was popped over.
+        """
+        rocket = [
+            [0.0, 0.0, self.ELEVATION],
+            [40.0, 0.0, self.ELEVATION],
+            [80.0, 0.0, self.ELEVATION],
+        ]
+        status = [[0], [2], [2]]
+        # Sitting on the segment the rocket flies between rows 0 and 1.
+        balloons = [[[20.0, 0.0, self.ELEVATION]] for _ in range(3)]
+
+        self.assertEqual(self._closest(rocket, status, balloons), [])
 
 
 if __name__ == "__main__":
