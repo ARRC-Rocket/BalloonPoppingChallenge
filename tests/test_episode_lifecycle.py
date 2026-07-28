@@ -20,6 +20,7 @@ import numpy as np
 _STACK_AVAILABLE = find_spec("rocketpy") is not None
 
 if _STACK_AVAILABLE:
+    from BalloonPoppingGymEnv.agents.example_agents import AttitudeRateControlAgent
     from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
     from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
 
@@ -46,17 +47,56 @@ class TestNeverLaunchingAgent(unittest.TestCase):
         env.reset(seed=scenario_params["scenario"]["random_seed"])
 
         action = _idle_action(env)
-        terminated = False
+        terminated = truncated = False
         steps = 0
         # Before the fix this raised AttributeError on the final step, because
         # the timeout branch post-processed a flight that was never created.
-        while not terminated:
-            _observation, _reward, terminated, _truncated, info = env.step(action)
+        while not (terminated or truncated):
+            _observation, _reward, terminated, truncated, info = env.step(action)
             steps += 1
-            self.assertLess(steps, env.num_timesteps + 5, "episode did not terminate")
+            self.assertLess(steps, env.num_timesteps + 5, "episode did not end")
+
+        # Running out of horizon is truncation, not termination: nothing about
+        # the rocket ended the episode, the precomputed clock did. Reporting it
+        # as terminated tells an algorithm not to bootstrap the final value,
+        # which for an agent that simply never launched is the wrong lesson.
+        self.assertFalse(terminated, "the flight did not end; the clock did")
+        self.assertTrue(truncated)
+        self.assertEqual(steps, env.num_timesteps - 1)
 
         self.assertIsNone(env._rocket_flight, "no flight should exist without a launch")
         self.assertEqual(info["popped_count"], 0)
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestAFinishedFlightTerminates(unittest.TestCase):
+    """The other end of the pair, so neither flag is simply hard-coded.
+
+    Without this, setting terminated to False unconditionally would satisfy the
+    timeout case above and nothing else would notice.
+    """
+
+    def test_a_flight_that_lands_terminates_rather_than_truncating(self):
+        scenario_params, given = load_scenario_parameters(SCENARIO_NUMBER)
+        env = BalloonPoppingEnv(render_mode=None, parameters=scenario_params)
+        agent = AttitudeRateControlAgent(
+            given, rate_targets=[0.0, 0.0, 0.0], launch_time=1
+        )
+        observation, _ = env.reset(seed=scenario_params["scenario"]["random_seed"])
+
+        terminated = truncated = False
+        steps = 0
+        while not (terminated or truncated):
+            observation, _reward, terminated, truncated, _info = env.step(
+                agent.get_action(observation)
+            )
+            steps += 1
+            self.assertLess(steps, env.num_timesteps + 5)
+
+        self.assertTrue(terminated, "the flight finished, so the episode ended")
+        self.assertFalse(truncated)
+        # And it really did stop early rather than reaching the horizon.
+        self.assertLess(steps, env.num_timesteps - 1)
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
@@ -91,10 +131,75 @@ class TestFirstPostLaunchInterval(unittest.TestCase):
             _idle_action(env)
         )
 
-        # Without the launch-state fallback the sweep starts from NaN, every
-        # comparison is false and nothing pops.
+        # Without seeding the sweep origin from the launch state there is no
+        # valid start for this interval and nothing pops.
         self.assertGreater(reward, 0, "the first simulated interval registered no pop")
         self.assertGreater(info["popped_count"], 0)
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestSweepOriginAdvances(unittest.TestCase):
+    """Each sweep starts where the previous one ended, not at the pad.
+
+    The first-interval test above only pins the launch-time initialization: the
+    balloons it parks never move, so it still passes if the origin is left
+    stuck at the launch point. The golden masters do not catch that either,
+    since scenario 0 pops all ten balloons regardless and scenario 1 pops none.
+    """
+
+    def _launched_env(self):
+        scenario_params, _ = load_scenario_parameters(SCENARIO_NUMBER)
+        env = BalloonPoppingEnv(render_mode=None, parameters=scenario_params)
+        env.reset(seed=scenario_params["scenario"]["random_seed"])
+        launch = _idle_action(env)
+        launch["launch"] = np.array(1, dtype=launch["launch"].dtype)
+        launch["launch_inclination_heading"] = np.array(
+            [90.0, 0.0], dtype=launch["launch_inclination_heading"].dtype
+        )
+        env.step(launch)
+        return env
+
+    def test_origin_starts_at_the_launch_state(self):
+        env = self._launched_env()
+        np.testing.assert_allclose(
+            env._sweep_origin, np.asarray(env.initial_solution[1:4], dtype=float)
+        )
+
+    def test_origin_is_cleared_by_reset(self):
+        env = self._launched_env()
+        self.assertIsNotNone(env._sweep_origin)
+        scenario_params, _ = load_scenario_parameters(SCENARIO_NUMBER)
+        env.reset(seed=scenario_params["scenario"]["random_seed"])
+        self.assertIsNone(env._sweep_origin)
+
+    def test_second_interval_sweeps_from_the_first_endpoint(self):
+        env = self._launched_env()
+        launch_position = np.asarray(env.initial_solution[1:4], dtype=float)
+
+        env.step(_idle_action(env))
+        first_endpoint = env._rocket_states[:3].copy()
+        # The rocket has to have moved, or the two candidates are the same point
+        # and the assertion below would hold either way.
+        self.assertGreater(
+            float(np.linalg.norm(first_endpoint - launch_position)),
+            1e-9,
+            "the rocket did not move, so this test cannot discriminate",
+        )
+
+        swept_from = []
+        original = env._detect_pops
+
+        def recording_detect_pops(previous_balloon_positions, previous_rocket_position):
+            swept_from.append(np.asarray(previous_rocket_position, dtype=float).copy())
+            return original(previous_balloon_positions, previous_rocket_position)
+
+        env._detect_pops = recording_detect_pops
+        env.step(_idle_action(env))
+
+        self.assertEqual(len(swept_from), 1, "one sweep per flown step")
+        # Deleting the advancement leaves the origin at the pad, which this
+        # catches; the first-interval test above does not.
+        np.testing.assert_allclose(swept_from[0], first_endpoint)
 
 
 if __name__ == "__main__":
