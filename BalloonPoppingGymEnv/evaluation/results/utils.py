@@ -3,8 +3,11 @@ import http.client
 import json
 import os
 import pickle
+import re
+import tempfile
 import urllib.request
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from rocketpy._encoders import RocketPyEncoder
 
@@ -178,10 +181,115 @@ def _check_evaluate_integrity():
         print(INTEGRITY_MISMATCH_MESSAGE)
 
 
+# Path separators, the Windows-reserved punctuation, and control characters. A
+# whitelist of ASCII would be shorter, but it would also rewrite every non-ASCII
+# team name, and this competition has plenty of those.
+_UNSAFE_IN_FILENAME = re.compile(r'[\x00-\x1f\x7f/\\:*?"<>|]+')
+
+# Filesystem name limits are in bytes, not characters, so the cap has to be too.
+# 96 leaves room for the timestamp and the suffix under a 255-byte limit even if
+# every character costs four bytes.
+_MAX_SLUG_BYTES = 96
+
+
+def _filename_slug(raw_name, fallback="team"):
+    """Reduce a team name to something that cannot leave the results directory.
+
+    ``team_name`` is organizer-assigned rather than attacker-controlled, but it
+    reaches the output path verbatim, and a name holding a path separator or
+    ``..`` would write outside ``results/``. Only the filename is rewritten: the
+    submission payload keeps the name exactly as configured, and that is where
+    the leaderboard reads it from, so nothing downstream sees the slug.
+
+    Only genuinely unsafe characters are replaced. A name in Chinese or Japanese
+    stays readable, which is the point: the filename is how a competitor tells
+    their own submissions apart. Leading dots go so the file cannot hide itself or
+    turn into a parent reference, and a trailing dot or space goes because Windows
+    will not keep one.
+
+    An empty result falls back rather than raising. By the time this runs the
+    simulation is already done, and the same reasoning as the integrity check
+    applies: nothing at packing time should cost a competitor a finished run.
+    """
+    slug = _UNSAFE_IN_FILENAME.sub("_", str(raw_name)).strip(" ._-")
+    # Truncating bytes can split a character, so drop the partial tail, then strip
+    # again in case the cut exposed a trailing dot.
+    slug = slug.encode("utf-8")[:_MAX_SLUG_BYTES].decode("utf-8", "ignore")
+    return slug.strip(" ._-") or fallback
+
+
+def _submission_filename(packed_at, team_name, run_id):
+    """Name a submission so two runs cannot land on the same path.
+
+    The timestamp sorts and the slug identifies; neither makes the name unique.
+    Milliseconds narrow the window rather than closing it, and ``packed_at`` is
+    taken before the integrity check and before serializing a few hundred
+    megabytes, so two packers can share a millisecond and finish minutes apart.
+    ``os.replace`` does not refuse an existing destination, so the second one
+    would atomically replace the first competitor's finished submission, which is
+    a worse failure than the truncated file the atomic write is here to prevent.
+
+    Slugs collide too, which the timestamp cannot help with: ``a/b`` and ``a\\b``
+    both normalise to ``a_b``, and a name of only unsafe characters falls back to
+    ``team``. ``run_id`` is what actually makes the path unique.
+    """
+    stamp = f"{packed_at:%Y%m%dT%H%M%S}.{packed_at.microsecond // 1000:03d}Z"
+    return f"{stamp}_{_filename_slug(team_name)}_{run_id}_submission.pkl"
+
+
+def _write_atomically(out_path, write_payload, mode="wb", encoding=None):
+    """Write via a temp file in the same directory, then ``os.replace`` it.
+
+    A scenario-1 submission runs to a few hundred megabytes. Writing straight to
+    the final path means a disk-full or a killed process leaves a truncated file
+    under a name that looks finished, with nothing to distinguish it from a good
+    submission. Same-directory ``os.replace`` is atomic on POSIX and Windows, so
+    the final path only ever holds a complete file.
+
+    ``write_payload`` receives the open handle. ``mode`` and ``encoding`` are
+    arguments rather than fixed at ``"wb"`` because the writer is not always
+    binary: ``json.dump`` writes ``str``, and a text writer through a binary
+    handle raises ``TypeError: a bytes-like object is required``. Keeping both
+    here means the JSON submission format can reuse this rather than reimplement
+    the atomicity.
+
+    The flush and fsync are what make the rename meaningful for the case this is
+    here for: a disk that fills up surfaces as an error from one of the two,
+    rather than as a renamed file holding nothing. Full power-loss durability
+    would additionally need an fsync on the parent directory, which is not
+    claimed and is not what #59 was about.
+
+    One deliberate difference from a plain ``open``: ``mkstemp`` creates the file
+    0600 rather than at the umask default, and the mode survives the rename. The
+    payload carries the team secret, so keeping it owner-only is the better end
+    state on a shared machine.
+    """
+    handle, temp_path = tempfile.mkstemp(
+        dir=os.path.dirname(out_path) or ".", prefix=".partial_", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(handle, mode, encoding=encoding) as file:
+            write_payload(file)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temp_path, out_path)
+    except BaseException:
+        # Including KeyboardInterrupt: a stray .partial_ left behind would be a
+        # worse outcome than the truncated file this exists to prevent. A
+        # SIGKILL still can, which no handler can cover; what it cannot leave is
+        # a file under the finished name.
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise
+
+
 def pack_for_submission(eval_cfg, env, scenario_parameters):
 
     team_name = eval_cfg["team_name"]
-    timestamp = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
+    packed_at = datetime.now(timezone.utc)
+    timestamp = f"{packed_at:%Y%m%dT%H%M%SZ}"
 
     # Read agent source
     agent_module_path = os.fspath(eval_cfg["agent_module_path"])
@@ -215,13 +323,15 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
         },
     }
 
-    # Save submission
+    # Save submission. The filename carries milliseconds and a path-safe team
+    # name, so two runs in the same second no longer overwrite each other. The
+    # payload above keeps the second-resolution timestamp and the configured team
+    # name untouched, since those are the copies the leaderboard reads.
     out_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        f"{timestamp}_{team_name}_submission.pkl",
+        _submission_filename(packed_at, team_name, uuid4().hex),
     )
-    with open(out_path, "wb") as f:
-        pickle.dump(submission, f)
+    _write_atomically(out_path, lambda file: pickle.dump(submission, file))
 
     print(f"Submission saved to:\n{out_path}")
 
