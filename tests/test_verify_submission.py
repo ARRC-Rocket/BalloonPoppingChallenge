@@ -519,6 +519,72 @@ class TestTheRocketPathHasToBeATrajectory(unittest.TestCase):
 
         self.assertIn("recorded velocity matches the path", self.failures())
 
+    def test_a_nan_in_a_column_nothing_reads_does_not_erase_the_flight(self):
+        """The way through the whole of this check.
+
+        The rows were filtered to those entirely finite. The environment writes
+        thirteen NaNs before launch and thirteen finite numbers after, so those
+        are the only two shapes a run produces, but a submission that put a NaN
+        in one body rate, a column nothing here reads, made every row fail that
+        filter. The function then reported "the rocket never launched" as a
+        passing finding, while the positions stayed finite for the reachability
+        check to trust.
+
+        Measured before the fix: this exact submission, with its path dragged
+        sideways by a factor of 37 and its velocities untouched, passed.
+        """
+        for record in self._flown():
+            record["rocket_states"][10] = float("nan")
+            record["rocket_states"][0] *= 37.0
+
+        self.assertIn("rocket state shape", self.failures())
+
+    def test_a_partly_non_finite_row_is_refused(self):
+        """Neither of the two shapes a run produces."""
+        flown = self._flown()
+        flown[len(flown) // 2]["rocket_states"][3] = float("nan")
+
+        self.assertIn("rocket state shape", self.failures())
+
+    def test_a_pre_launch_row_in_the_middle_of_the_flight_is_refused(self):
+        """A whole row of NaN reads as pre-launch, which is a shape a run does
+        make, so the partial-row check above does not see it.
+
+        The flight has to be contiguous. Dropping the row instead would splice
+        two samples 0.02 s apart into a series this differentiates at 0.01 s,
+        and would let a submission delete whichever rows disagree with it.
+        """
+        records = self.records
+        flown = [
+            index
+            for index, record in enumerate(records)
+            if np.isfinite(record["rocket_states"][:3]).all()
+        ]
+        middle = flown[len(flown) // 2]
+        records[middle]["rocket_states"] = [float("nan")] * len(
+            records[middle]["rocket_states"]
+        )
+
+        self.assertIn("rocket path", self.failures())
+
+    def test_a_state_that_is_not_thirteen_wide_is_refused(self):
+        for record in self.records:
+            record["rocket_states"] = list(record["rocket_states"])[:11]
+
+        self.assertIn("rocket state shape", self.failures())
+
+    def test_a_quaternion_in_the_frozen_tail_is_still_checked(self):
+        """Trimming the tail used to remove it from this check as well.
+
+        The tail only needs excluding from the differentiation, so a repeated
+        position carrying something that is not a rotation went unexamined.
+        """
+        self._with_impact_tail()
+        for record in self.records[-3:]:
+            record["rocket_states"][6] = 1.5
+
+        self.assertIn("attitude is a rotation", self.failures())
+
     def test_a_run_that_never_launched_is_not_an_accusation(self):
         for record in self.records:
             record["rocket_states"] = [float("nan")] * len(record["rocket_states"])

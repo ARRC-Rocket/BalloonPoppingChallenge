@@ -583,6 +583,7 @@ VELOCITY_CONSISTENCY_TOLERANCE = 1.0
 _POSITION = slice(0, 3)
 _VELOCITY = slice(3, 6)
 _QUATERNION = slice(6, 10)
+_STATE_WIDTH = 13
 
 # The attitude quaternion is a rotation, so it is a unit vector. Measured
 # deviation on a real run: 5.3e-12.
@@ -622,27 +623,75 @@ def check_the_rocket_path_is_a_trajectory(submission, canonical):
     world = submission["balloon_world_data"]
     records = world["trajectories"]
     states = np.asarray([record["rocket_states"] for record in records], dtype=float)
-    if states.ndim != 2 or states.shape[1] < 10:
+    if states.ndim != 2 or states.shape[1] != _STATE_WIDTH:
         return [
             Finding(
                 "rocket state shape",
                 False,
-                f"expected (steps, 13) rocket states, got {states.shape}",
+                f"expected (steps, {_STATE_WIDTH}) rocket states, got {states.shape}",
             )
         ]
 
-    flown = states[np.isfinite(states).all(axis=1)]
-    if len(flown) == 0:
+    # Filtering to the rows that are entirely finite was a way through the whole
+    # of this. The environment writes a row of thirteen NaNs before launch and a
+    # row of thirteen finite numbers after, so those are the only two shapes a
+    # run produces. A submission that put a NaN in one body rate, a column
+    # nothing here reads, made every row fail that filter, and the function
+    # reported "the rocket never launched" as a passing finding while the
+    # positions stayed finite for the reachability check to trust.
+    #
+    # Measured: a path dragged sideways by a factor of 37 with its velocities
+    # untouched passed, because column 10 was NaN.
+    #
+    # So the two shapes are named and anything else is refused. A JSON null
+    # arrives here as NaN, which makes a partly null row a partial row rather
+    # than a pre-launch one, which is what it is.
+    before_launch = np.isnan(states).all(axis=1)
+    flying = np.isfinite(states).all(axis=1)
+    partial = ~(before_launch | flying)
+    if partial.any():
+        rows = np.flatnonzero(partial)
+        return [
+            Finding(
+                "rocket state shape",
+                False,
+                f"{rows.size} rocket states are neither all-NaN nor finite, "
+                f"first at row {int(rows[0])}",
+            )
+        ]
+
+    if not flying.any():
         return [Finding("rocket path", True, "the rocket never launched")]
 
+    # The pre-launch rows are a prefix. A non-finite row after the flight has
+    # started is a gap, and deleting it would splice two samples 0.02 s apart
+    # into a series this differentiates at 0.01 s.
+    first_flown = int(np.argmax(flying))
+    if not flying[first_flown:].all():
+        gaps = np.flatnonzero(~flying[first_flown:]) + first_flown
+        return [
+            Finding(
+                "rocket path",
+                False,
+                f"the flight has {gaps.size} non-finite rows after it starts, "
+                f"first at row {int(gaps[0])}",
+            )
+        ]
+
+    flown = states[first_flown:]
     position = flown[:, _POSITION]
     # Trim the run of repeated positions at the end, which is the finished
     # flight being recorded rather than advanced.
+    quaternion = flown[:, _QUATERNION]
+
+    # Trimmed only for the differentiation. Truncating the flight itself also
+    # removed those rows from the quaternion check below, so a repeated-position
+    # tail carrying a quaternion that is not a rotation went unexamined.
     end = len(position)
     while end > 1 and np.array_equal(position[end - 1], position[end - 2]):
         end -= 1
-    flown, position = flown[:end], position[:end]
-    velocity, quaternion = flown[:, _VELOCITY], flown[:, _QUATERNION]
+    position = position[:end]
+    velocity = flown[:end, _VELOCITY]
 
     findings = []
 
