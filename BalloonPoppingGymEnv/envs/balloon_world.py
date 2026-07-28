@@ -478,10 +478,12 @@ class BalloonPoppingEnv(gym.Env):
                     self._balloon_states[:, 2],
                     c="magenta",
                 )
+                # Arrays, not scalars: plot documents xs/ys as array-like, and
+                # the update below has to keep the same types (see #89).
                 self.render_rocket = self.render_canvas.plot(
-                    self._rocket_states[0],
-                    self._rocket_states[1],
-                    self._rocket_states[2],
+                    np.array([self._rocket_states[0]]),
+                    np.array([self._rocket_states[1]]),
+                    np.array([self._rocket_states[2]]),
                     "s",
                     color="blue",
                 )
@@ -511,10 +513,18 @@ class BalloonPoppingEnv(gym.Env):
                 self._balloon_states[:, 2],
             )
             self.render_balloons.set_facecolors(colors)
-            self.render_rocket[0].set_data(
-                [self._rocket_states[0]], [self._rocket_states[1]]
+            # Arrays rather than lists. Line3D.draw reaches for `_verts3d[0].shape`
+            # when a coordinate is invalid for the axis scale, and the rocket
+            # state is all-NaN until the launch action builds the flight, so
+            # every frame before launch takes that branch. With lists it raises
+            # `'list' object has no attribute 'shape'` on Matplotlib 3.11 and
+            # loses the run (#89). Finite coordinates never reach the branch,
+            # which is why lists went unnoticed.
+            self.render_rocket[0].set_data_3d(
+                np.array([self._rocket_states[0]]),
+                np.array([self._rocket_states[1]]),
+                np.array([self._rocket_states[2]]),
             )
-            self.render_rocket[0].set_3d_properties([self._rocket_states[2]])
             self.render_canvas.set_title(
                 f"Time: {self.current_step * self.simulation_parameters['time_step']:.2f} sec\nTotal Reward: {self._popped_count}"
             )
