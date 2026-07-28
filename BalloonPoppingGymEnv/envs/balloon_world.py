@@ -505,42 +505,94 @@ class BalloonPoppingEnv(gym.Env):
                 b_coeff = np.einsum("j,ij->i", direction_a, direction_b)
                 denominator = a_coeff * e_coeff - b_coeff * b_coeff
 
+                b_r = b_coeff[regular]
+                c_r = c_coeff[regular]
+                e_r = e_coeff[regular]
+                f_r = f_coeff[regular]
+                offset_r = offset[regular]
+                direction_b_r = direction_b[regular]
+
+                def _squared(s_values, t_values):
+                    separation = (
+                        offset_r
+                        + s_values[:, None] * direction_a
+                        - t_values[:, None] * direction_b_r
+                    )
+                    return np.einsum("ij,ij->i", separation, separation)
+
+                # The minimum of a convex quadratic over the unit square is
+                # either its stationary point, when that lands inside, or on an
+                # edge. Both are evaluated and the better one wins.
+                #
+                # The previous version took the stationary point and, when the
+                # two directions were too close to parallel to solve for it,
+                # pinned s to zero and solved only for t. Pinning s is right for
+                # exactly parallel segments and wrong for merely near parallel
+                # ones, because the separation then varies along s and zero is
+                # not where it is smallest, it is only where the caller happened
+                # to start writing the segment down.
+                #
+                # Measured on the merged version of that code: a rocket sweep
+                # (0,0,0) to (1,0,0) against a balloon sweep (-1, 1.50000007, 0)
+                # to (1, 1.49999999, 0) returned 1.50000003 m, a miss against
+                # the 1.5 m radius, where the real closest approach is the
+                # endpoint distance 1.49999999 m, a pop. Writing the same rocket
+                # sweep down end to start returned the pop. One geometry, two
+                # scores, decided by which end was called the start.
+                #
+                # Enumerating the edges removes that. The candidate set maps
+                # onto itself when either segment is reversed, since that swaps
+                # s = 0 with s = 1, and when the two segments are exchanged,
+                # since that swaps the s edges with the t edges. So the answer
+                # cannot depend on how the caller ordered any of it.
+                #
+                # It also takes the tolerance below off the correctness path. It
+                # decides only whether the stationary point is worth computing;
+                # when it is skipped the edges still hold the true minimum.
+                candidates = []
+                for s_value in (0.0, 1.0):
+                    s_edge = np.full(f_r.shape, s_value)
+                    t_edge = np.clip((b_r * s_value + f_r) / e_r, 0.0, 1.0)
+                    candidates.append((s_edge, t_edge))
+                for t_value in (0.0, 1.0):
+                    t_edge = np.full(f_r.shape, t_value)
+                    s_edge = np.clip((b_r * t_value - c_r) / a_coeff, 0.0, 1.0)
+                    candidates.append((s_edge, t_edge))
+
                 # Relative to a_coeff * e_coeff, which is what the denominator
                 # would be at ninety degrees, so this compares sin(angle)**2
                 # against a dimensionless tolerance and scaling both segments
                 # cannot change the answer.
-                non_parallel = regular & (
-                    np.abs(denominator) > parallel_relative_epsilon * a_coeff * e_coeff
+                solvable = np.abs(denominator[regular]) > (
+                    parallel_relative_epsilon * a_coeff * e_r
                 )
-                s_param[non_parallel] = np.clip(
-                    (
-                        b_coeff[non_parallel] * f_coeff[non_parallel]
-                        - c_coeff[non_parallel] * e_coeff[non_parallel]
+                s_interior, t_interior = (
+                    candidates[0][0].copy(),
+                    candidates[0][1].copy(),
+                )
+                if np.any(solvable):
+                    s_interior[solvable] = np.clip(
+                        (b_r[solvable] * f_r[solvable] - c_r[solvable] * e_r[solvable])
+                        / denominator[regular][solvable],
+                        0.0,
+                        1.0,
                     )
-                    / denominator[non_parallel],
-                    0.0,
-                    1.0,
-                )
+                    t_interior[solvable] = np.clip(
+                        (b_r[solvable] * s_interior[solvable] + f_r[solvable])
+                        / e_r[solvable],
+                        0.0,
+                        1.0,
+                    )
+                candidates.append((s_interior, t_interior))
 
-                t_param[regular] = (
-                    b_coeff[regular] * s_param[regular] + f_coeff[regular]
-                ) / e_coeff[regular]
-
-                t_too_low = regular & (t_param < 0.0)
-                t_param[t_too_low] = 0.0
-                s_param[t_too_low] = np.clip(
-                    -c_coeff[t_too_low] / a_coeff,
-                    0.0,
-                    1.0,
-                )
-
-                t_too_high = regular & (t_param > 1.0)
-                t_param[t_too_high] = 1.0
-                s_param[t_too_high] = np.clip(
-                    (b_coeff[t_too_high] - c_coeff[t_too_high]) / a_coeff,
-                    0.0,
-                    1.0,
-                )
+                distances = np.stack([_squared(s, t) for s, t in candidates])
+                best = np.argmin(distances, axis=0)
+                s_param[regular] = np.stack([s for s, _ in candidates])[
+                    best, np.arange(len(best))
+                ]
+                t_param[regular] = np.stack([t for _, t in candidates])[
+                    best, np.arange(len(best))
+                ]
 
         closest_point_a = segment_start_a + s_param[:, None] * direction_a
         closest_point_b = segment_start_b + t_param[:, None] * direction_b
