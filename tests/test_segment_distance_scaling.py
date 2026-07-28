@@ -229,3 +229,72 @@ class TestTheParallelTestDoesNotDependOnScale(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestANearParallelInteriorMinimum(unittest.TestCase):
+    """The case four edges do not contain.
+
+    Enumerating the edges is only complete when the constrained minimum is on
+    the boundary. It is on the boundary when the two directions are exactly
+    parallel, because the separation is then constant along the valley and its
+    smallest value is attained where the valley leaves the square. For a pair
+    that is merely close to parallel the stationary point can lie strictly
+    inside both segments, and then no edge holds it.
+
+    An earlier version skipped the stationary point whenever the relative
+    determinant fell under 8 * eps, and claimed the edges covered that. They do
+    not, and this pair is the proof.
+    """
+
+    RADIUS = 1.5
+
+    def _pair(self):
+        angle = np.sqrt(7 * np.finfo(float).eps)
+        just_inside = np.nextafter(self.RADIUS, 0.0)
+        half = 5.0
+        return (
+            np.array([-half, 0.0, 0.0]),
+            np.array([half, 0.0, 0.0]),
+            np.array([-half, -half * angle, just_inside]),
+            np.array([half, half * angle, just_inside]),
+        )
+
+    def test_it_is_below_the_old_cutoff_and_not_parallel(self):
+        """Both halves, or the fixture is not the case it is named for."""
+        start_a, end_a, start_b, end_b = self._pair()
+        direction_a, direction_b = end_a - start_a, end_b - start_b
+        a = float(direction_a @ direction_a)
+        e = float(direction_b @ direction_b)
+        b = float(direction_a @ direction_b)
+        relative = (a * e - b * b) / (a * e)
+
+        self.assertGreater(relative, 0.0, "this pair is exactly parallel")
+        self.assertLessEqual(relative, 8 * np.finfo(float).eps)
+
+    def test_the_closest_points_are_the_two_midpoints(self):
+        start_a, end_a, start_b, end_b = self._pair()
+        midpoint_a = (start_a + end_a) / 2.0
+        midpoint_b = (start_b + end_b) / 2.0
+
+        distance = float(np.linalg.norm(midpoint_a - midpoint_b))
+
+        self.assertLessEqual(distance, self.RADIUS, "the fixture is not a pop")
+
+    def test_the_interior_minimum_is_not_skipped(self):
+        start_a, end_a, start_b, end_b = self._pair()
+
+        measured = float(
+            np.sqrt(
+                BalloonPoppingEnv._segment_distance_squared_batch(
+                    start_a, end_a, np.array([start_b]), np.array([end_b])
+                )[0]
+            )
+        )
+
+        self.assertLessEqual(
+            measured,
+            self.RADIUS,
+            f"reported {measured!r} against a {self.RADIUS} m radius, so a pop "
+            "is scored as a miss",
+        )

@@ -448,28 +448,6 @@ class BalloonPoppingEnv(gym.Env):
         # so no score moved. It is the shape of the test that is wrong rather
         # than any current result.
         degenerate_length_squared = 1e-12
-        # Dimensionless: sin(angle)**2 has to clear this before the two
-        # directions count as distinct, whatever the segments are scaled to.
-        #
-        # Derived from double precision rather than chosen. The denominator is
-        # two nearly equal products subtracted, so its own rounding error is of
-        # order eps * a_coeff * e_coeff, and a few multiples of that is the
-        # point below which its sign and magnitude mean nothing. Eight is the
-        # margin.
-        #
-        # Not a value to widen. The branch it selects pins s to zero, which is
-        # the right answer only when the directions really are parallel, since
-        # then every s gives the same distance. For merely close to parallel it
-        # is wrong, and the wider the tolerance the more pairs land there. At
-        # 1e-12 this pair returned 1.5000004 m where the true closest approach
-        # is 1.4999995 m, which against a 1.5 m radius is a pop reported as a
-        # miss:
-        #
-        #     rocket  (0, 0, 0)          -> (1, 0, 0)
-        #     balloon (-1, 1.5000013, 0) -> (1, 1.4999995, 0)
-        #
-        # At 8 * eps that pair goes through the regular solution and is right.
-        parallel_relative_epsilon = 8 * np.finfo(float).eps
         epsilon = degenerate_length_squared
         direction_a = segment_end_a - segment_start_a
         direction_b = segment_end_b - segment_start_b
@@ -503,7 +481,14 @@ class BalloonPoppingEnv(gym.Env):
             regular = ~degenerate_b
             if np.any(regular):
                 b_coeff = np.einsum("j,ij->i", direction_a, direction_b)
-                denominator = a_coeff * e_coeff - b_coeff * b_coeff
+                # ||u x v||**2, which equals a_coeff * e_coeff - b_coeff**2
+                # exactly in real arithmetic and behaves far better in floating
+                # point. The subtraction takes two nearly equal products and
+                # loses most of their significant digits when the directions are
+                # close to parallel: on the pair below it returns 1.637e-11
+                # where the true value is 1.554e-11, out by five percent.
+                normal = np.cross(direction_a, direction_b[regular])
+                denominator_regular = np.einsum("ij,ij->i", normal, normal)
 
                 b_r = b_coeff[regular]
                 c_r = c_coeff[regular]
@@ -559,13 +544,26 @@ class BalloonPoppingEnv(gym.Env):
                     s_edge = np.clip((b_r * t_value - c_r) / a_coeff, 0.0, 1.0)
                     candidates.append((s_edge, t_edge))
 
-                # Relative to a_coeff * e_coeff, which is what the denominator
-                # would be at ninety degrees, so this compares sin(angle)**2
-                # against a dimensionless tolerance and scaling both segments
-                # cannot change the answer.
-                solvable = np.abs(denominator[regular]) > (
-                    parallel_relative_epsilon * a_coeff * e_r
-                )
+                # Zero, not a tolerance. The claim above, that the edges hold
+                # the minimum when the stationary point is skipped, is only true
+                # when the two directions are exactly parallel: then the
+                # separation is constant along the valley and its smallest value
+                # is attained where the valley leaves the square. For a pair that
+                # is merely close to parallel the stationary point can lie
+                # strictly inside both segments, and then no edge contains it.
+                #
+                # Measured with an 8 * eps cutoff in place: a rocket sweep
+                # (-5, 0, 0) to (5, 0, 0) against a balloon sweep
+                # (-5, -5t, z) to (5, 5t, z) with t = sqrt(7 * eps) and z just
+                # inside 1.5 m has a relative determinant of 1.637e-15, under
+                # the cutoff, and its closest points are the two midpoints. The
+                # cutoff skipped them and returned 1.5000000000000127 m, a miss,
+                # where the truth is 1.4999999999999998 m, a pop.
+                #
+                # So the tolerance is gone from the correctness path rather than
+                # merely narrowed, which is what the previous attempt claimed
+                # and did not do.
+                solvable = denominator_regular > 0.0
                 s_interior, t_interior = (
                     candidates[0][0].copy(),
                     candidates[0][1].copy(),
@@ -573,7 +571,7 @@ class BalloonPoppingEnv(gym.Env):
                 if np.any(solvable):
                     s_interior[solvable] = np.clip(
                         (b_r[solvable] * f_r[solvable] - c_r[solvable] * e_r[solvable])
-                        / denominator[regular][solvable],
+                        / denominator_regular[solvable],
                         0.0,
                         1.0,
                     )
