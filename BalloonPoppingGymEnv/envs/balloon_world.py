@@ -304,7 +304,15 @@ class BalloonPoppingEnv(gym.Env):
                 self._rocket_flight.initialize_prints_plots()
         elif _rocket_finished:
             logger.info("Terminated: Rocket flight finished")
-        terminated = _timeout or _rocket_finished
+        # Gymnasium keeps these apart on purpose. terminated means the MDP
+        # reached a terminal state, which here is the flight ending. truncated
+        # means something outside it stopped the episode, which is what running
+        # out of precomputed horizon is. An algorithm bootstraps the value of
+        # the final state when it was truncated and does not when it terminated,
+        # so reporting the clock as termination teaches an agent that running
+        # out of time is absorbing.
+        terminated = _rocket_finished
+        truncated = _timeout
 
         # Calculate reward based on newly popped balloons at this step
         new_count = np.sum(self._balloon_status[:, 0] == 2)
@@ -322,7 +330,7 @@ class BalloonPoppingEnv(gym.Env):
         if _remainder == 0 or terminated:
             self._render_frame()
 
-        return observation, reward, terminated, False, info
+        return observation, reward, terminated, truncated, info
 
     @staticmethod
     def _segment_distance_squared_batch(

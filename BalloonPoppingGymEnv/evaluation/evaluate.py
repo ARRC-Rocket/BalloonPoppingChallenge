@@ -160,10 +160,11 @@ def evaluate_scenario(
 
     observation, info = env.reset(seed=scenario_parameters["scenario"]["random_seed"])
     terminated = False
+    truncated = False
 
-    while not terminated:
+    while not (terminated or truncated):
         action = agent.get_action(observation)
-        observation, reward, terminated, _, info = env.step(action)
+        observation, reward, terminated, truncated, info = env.step(action)
 
     save_trajectories(trajectories=env.trajectories)
     logger.info(
