@@ -24,13 +24,14 @@ def run_for_development():
     # use seed=None to randomize environment
     observation, info = env.reset(seed=scenario_parameters["scenario"]["random_seed"])
     terminated = False
+    truncated = False
 
     angular_rates = np.full((3, 1), np.nan)
     time = np.full(1, np.nan)
 
-    while not terminated:
+    while not (terminated or truncated):
         action = agent.get_action(observation)
-        observation, reward, terminated, _, info = env.step(action)
+        observation, reward, terminated, truncated, info = env.step(action)
 
         # ground truth angular rates, should not pass to agent
         angular_rates = np.append(
