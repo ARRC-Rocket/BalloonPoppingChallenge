@@ -470,7 +470,7 @@ class TestSubmissionIsDurableFirst(_IntegrityHelpers, unittest.TestCase):
     """
 
     def test_the_submission_is_complete_when_the_check_runs(self):
-        seen = {}
+        observations = []
         pattern = os.path.join(self.results_dir, "*_submission.*")
         # Only files this call creates. Submissions are gitignored, so a working
         # tree that has produced one before already has files matching the
@@ -480,11 +480,16 @@ class TestSubmissionIsDurableFirst(_IntegrityHelpers, unittest.TestCase):
         before = set(glob.glob(pattern))
 
         def inspect_at_call_time():
+            # Appended, not overwritten. Keying a dict meant a wrong
+            # implementation that checked once before the write and once after
+            # it passed: the second observation replaced the first, and the
+            # assertions only ever saw the successful one.
             created = set(glob.glob(pattern)) - before
-            seen["count"] = len(created)
+            observation = {"count": len(created)}
             if len(created) == 1:
                 with open(next(iter(created)), "rb") as handle:
-                    seen["payload"] = pickle.load(handle)
+                    observation["payload"] = pickle.load(handle)
+            observations.append(observation)
 
         with mock.patch.object(
             utils, "_check_evaluate_integrity", side_effect=inspect_at_call_time
@@ -492,10 +497,14 @@ class TestSubmissionIsDurableFirst(_IntegrityHelpers, unittest.TestCase):
             utils.pack_for_submission(self.eval_cfg, _fake_env(), {"scenario": {}})
             self.created.extend(set(glob.glob(pattern)) - before)
 
-        self.assertEqual(seen.get("count"), 1, "no submission on disk yet")
+        self.assertEqual(
+            len(observations), 1, "the check must run once, after the write"
+        )
+        self.assertEqual(observations[0]["count"], 1)
+        self.assertEqual(observations[0]["payload"]["team"]["name"], "unittest_team")
+
         # Written, closed and complete, not just created.
-        self.assertEqual(seen["payload"]["team"]["name"], "unittest_team")
-        self.assertIn("balloon_world_data", seen["payload"])
+        self.assertIn("balloon_world_data", observations[0]["payload"])
 
 
 if __name__ == "__main__":
