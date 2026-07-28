@@ -91,10 +91,75 @@ class TestFirstPostLaunchInterval(unittest.TestCase):
             _idle_action(env)
         )
 
-        # Without the launch-state fallback the sweep starts from NaN, every
-        # comparison is false and nothing pops.
+        # Without seeding the sweep origin from the launch state there is no
+        # valid start for this interval and nothing pops.
         self.assertGreater(reward, 0, "the first simulated interval registered no pop")
         self.assertGreater(info["popped_count"], 0)
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestSweepOriginAdvances(unittest.TestCase):
+    """Each sweep starts where the previous one ended, not at the pad.
+
+    The first-interval test above only pins the launch-time initialization: the
+    balloons it parks never move, so it still passes if the origin is left
+    stuck at the launch point. The golden masters do not catch that either,
+    since scenario 0 pops all ten balloons regardless and scenario 1 pops none.
+    """
+
+    def _launched_env(self):
+        scenario_params, _ = load_scenario_parameters(SCENARIO_NUMBER)
+        env = BalloonPoppingEnv(render_mode=None, parameters=scenario_params)
+        env.reset(seed=scenario_params["scenario"]["random_seed"])
+        launch = _idle_action(env)
+        launch["launch"] = np.array(1, dtype=launch["launch"].dtype)
+        launch["launch_inclination_heading"] = np.array(
+            [90.0, 0.0], dtype=launch["launch_inclination_heading"].dtype
+        )
+        env.step(launch)
+        return env
+
+    def test_origin_starts_at_the_launch_state(self):
+        env = self._launched_env()
+        np.testing.assert_allclose(
+            env._sweep_origin, np.asarray(env.initial_solution[1:4], dtype=float)
+        )
+
+    def test_origin_is_cleared_by_reset(self):
+        env = self._launched_env()
+        self.assertIsNotNone(env._sweep_origin)
+        scenario_params, _ = load_scenario_parameters(SCENARIO_NUMBER)
+        env.reset(seed=scenario_params["scenario"]["random_seed"])
+        self.assertIsNone(env._sweep_origin)
+
+    def test_second_interval_sweeps_from_the_first_endpoint(self):
+        env = self._launched_env()
+        launch_position = np.asarray(env.initial_solution[1:4], dtype=float)
+
+        env.step(_idle_action(env))
+        first_endpoint = env._rocket_states[:3].copy()
+        # The rocket has to have moved, or the two candidates are the same point
+        # and the assertion below would hold either way.
+        self.assertGreater(
+            float(np.linalg.norm(first_endpoint - launch_position)),
+            1e-9,
+            "the rocket did not move, so this test cannot discriminate",
+        )
+
+        swept_from = []
+        original = env._detect_pops
+
+        def recording_detect_pops(previous_balloon_positions, previous_rocket_position):
+            swept_from.append(np.asarray(previous_rocket_position, dtype=float).copy())
+            return original(previous_balloon_positions, previous_rocket_position)
+
+        env._detect_pops = recording_detect_pops
+        env.step(_idle_action(env))
+
+        self.assertEqual(len(swept_from), 1, "one sweep per flown step")
+        # Deleting the advancement leaves the origin at the pad, which this
+        # catches; the first-interval test above does not.
+        np.testing.assert_allclose(swept_from[0], first_endpoint)
 
 
 if __name__ == "__main__":
