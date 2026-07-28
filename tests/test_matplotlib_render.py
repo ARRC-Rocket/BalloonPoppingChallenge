@@ -5,11 +5,19 @@ Issue #89: with Matplotlib 3.11 the run dies on the first frame, because
 axis scale, and the rocket state is all-NaN until the launch action builds the
 flight. Passing lists made those entries lists.
 
-These assert the types rather than only that a frame draws. The crashing branch
-does not exist on Matplotlib 3.10, so a draw-only test passes there whether or
-not the fix is applied, and the project's own CI pins 3.10 through the lockfile.
-Asserting the entries are arrays pins the fix on every version, and is what the
-fix actually guarantees.
+Both halves are load-bearing, in opposite environments.
+
+CI installs with ``pip install -r requirements-dev.txt``, and the only
+constraint anywhere is ActiveRocketPy's ``matplotlib>=3.9.0``, with no upper
+bound. So CI resolves whatever is current, which is how it picked up 3.11.1 and
+went red. There, rendering a frame is enough to catch this.
+
+``uv sync`` resolves 3.10.9 from the lockfile, and that is what a local run
+gets. The crashing branch does not exist there, so the draw test passes with or
+without the fix. What holds on 3.10 is the assertion about what the line is
+holding, which is what the fix actually guarantees.
+
+Neither environment covers this on its own, so both assertions stay.
 """
 
 import unittest
