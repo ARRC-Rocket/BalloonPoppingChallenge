@@ -1,3 +1,4 @@
+import copy
 import importlib.util
 import logging
 import os
@@ -29,13 +30,27 @@ def _extract_nested_parameters(scenario_parameters, given_parameters_spec):
     -------
     dict
         Filtered parameters containing only specified keys
+
+    Notes
+    -----
+    Deep copied, because this is what the agent's constructor is handed and the
+    agent is a competitor's code. The dict comprehension builds new dicts, so
+    replacing a value in the result did not reach the environment, but any list
+    value was the same object the environment reads. Measured: four of them were
+    shared, and writing to one of those reached the physics.
+
+    ``given["rocket"]["control"]["throttle_range"][1] = 99.0`` made the
+    environment build the throttle actuator with a range of ``[0.0, 99.0]``, and
+    ``given["rocket"]["rocket_body"]["inertia"][0]`` changed the rocket's moment
+    of inertia. Both are read when the flight is constructed on the launch
+    action, which is after the agent has already run.
     """
     given_parameters = {}
 
     for section, keys in given_parameters_spec.items():
         if isinstance(keys, list):
             given_parameters[section] = {
-                key: scenario_parameters[section][key]
+                key: copy.deepcopy(scenario_parameters[section][key])
                 for key in keys
                 if key in scenario_parameters[section]
             }
@@ -43,7 +58,7 @@ def _extract_nested_parameters(scenario_parameters, given_parameters_spec):
             given_parameters[section] = {}
             for subsection, sub_keys in keys.items():
                 given_parameters[section][subsection] = {
-                    key: scenario_parameters[section][subsection][key]
+                    key: copy.deepcopy(scenario_parameters[section][subsection][key])
                     for key in sub_keys
                     if key in scenario_parameters[section][subsection]
                 }

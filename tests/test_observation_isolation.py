@@ -188,5 +188,72 @@ class TestTheAgentCannotReachTheEnvironment(unittest.TestCase):
         self.assertFalse(self.env.rocket_launched)
 
 
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestTheGivenParametersAreAlsoDetached(unittest.TestCase):
+    """The other thing the agent is handed, and it reaches further.
+
+    The observation is what the agent sees every step; ``given_parameters`` is
+    what its constructor gets. The extraction builds new dicts, so replacing a
+    value there never reached the environment, but any list value was the same
+    object the environment reads.
+
+    Measured: four were shared, and two of them are read when the flight is
+    built on the launch action, which is after the agent has already run. So an
+    agent could widen its own throttle range or change the rocket's moment of
+    inertia from its ``__init__``.
+    """
+
+    def setUp(self):
+        from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
+
+        self.scenario, self.given = load_scenario_parameters(0)
+
+    def test_nothing_in_them_is_the_same_object(self):
+        """The property, checked over the whole tree rather than the two known
+        offenders, so a new whitelisted key cannot reintroduce this quietly."""
+        shared = []
+
+        def walk(given, scenario, path=""):
+            if isinstance(given, dict) and isinstance(scenario, dict):
+                for key in given:
+                    if key in scenario:
+                        walk(given[key], scenario[key], f"{path}.{key}")
+            elif given is scenario and isinstance(given, (list, dict, set)):
+                shared.append(path)
+
+        walk(self.given, self.scenario)
+
+        self.assertEqual(
+            shared, [], "given_parameters shares objects with the scenario"
+        )
+
+    def test_writing_to_them_does_not_reach_the_environment(self):
+        """Driven the way an agent would, on the two that reached the physics."""
+        env = BalloonPoppingEnv(render_mode=None, parameters=self.scenario)
+        throttle_before = list(env.rocket_parameters["control"]["throttle_range"])
+        inertia_before = list(env.rocket_parameters["rocket_body"]["inertia"])
+
+        self.given["rocket"]["control"]["throttle_range"][1] = 99.0
+        self.given["rocket"]["rocket_body"]["inertia"][0] = 1e-6
+
+        self.assertEqual(
+            list(env.rocket_parameters["control"]["throttle_range"]), throttle_before
+        )
+        self.assertEqual(
+            list(env.rocket_parameters["rocket_body"]["inertia"]), inertia_before
+        )
+
+    def test_the_values_are_still_the_ones_the_scenario_holds(self):
+        """Or the fix could be "hand the agent something else entirely"."""
+        self.assertEqual(
+            self.given["rocket"]["control"]["throttle_range"],
+            self.scenario["rocket"]["control"]["throttle_range"],
+        )
+        self.assertEqual(
+            self.given["rocket"]["rocket_body"]["inertia"],
+            self.scenario["rocket"]["rocket_body"]["inertia"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
