@@ -47,23 +47,110 @@ class TestCoordinateDatum(unittest.TestCase):
             expected_above_pad + self.elevation,
         )
 
-    def test_horizontal_axes_are_measured_from_the_launch_point(self):
+    def test_the_internal_state_starts_at_the_launch_point(self):
         launch = self._launch()
+
         np.testing.assert_allclose(
             np.asarray(launch[1:3], dtype=float), [0.0, 0.0], atol=1e-9
         )
 
     def test_the_rocket_starts_at_the_site_elevation(self):
         launch = self._launch()
+
         self.assertAlmostEqual(float(launch[3]), self.elevation, places=9)
 
-    def test_gnss_reports_the_same_datum_as_the_true_state(self):
+    def test_the_observed_horizontal_position_is_launch_relative(self):
+        """The public GNSS, which is what an agent actually navigates on.
+
+        Asserting this on ``initial_solution`` says nothing about it: that is
+        the integrator's own state, and the observation is produced separately.
+        A global offset added to the reported X and Y, or reporting latitude and
+        longitude there, left every other test in this file green.
+
+        Scenario 0's GNSS accuracies are all zero, so this is exact rather than
+        within a noise budget.
+        """
+        self._launch()
+        observation, _reward, _term, _trunc, _info = self.env.step(self._idle())
+        gnss_xy = np.asarray(observation["rocket_sensors"][6:8], dtype=float)
+
+        # One step of a vertical launch: still over the pad, and small either way
+        # compared with the site's latitude and longitude, or with any offset
+        # large enough to matter to an agent.
+        np.testing.assert_allclose(gnss_xy, [0.0, 0.0], atol=1.0)
+
+    def test_the_observed_position_matches_the_true_state_on_every_axis(self):
+        """All three axes, not only Z.
+
+        The datum check covered Z alone, so the two horizontal components could
+        be reported in any frame at all and nothing here noticed.
+        """
         self._launch()
         observation, _reward, _term, _trunc, info = self.env.step(self._idle())
-        gnss_z = float(observation["rocket_sensors"][8])
-        state_z = float(np.asarray(info["rocket_states"], dtype=float)[2])
-        self.assertAlmostEqual(gnss_z, state_z, places=6)
-        self.assertGreater(gnss_z, self.elevation - 1.0)
+        gnss = np.asarray(observation["rocket_sensors"][6:9], dtype=float)
+        state = np.asarray(info["rocket_states"], dtype=float)[:3]
+
+        np.testing.assert_allclose(gnss, state, atol=1e-6)
+        self.assertGreater(float(gnss[2]), self.elevation - 1.0)
+
+    def test_the_observed_velocity_is_in_the_same_frame(self):
+        """A frame change would show up here as a rotated or offset velocity."""
+        self._launch()
+        observation, _reward, _term, _trunc, info = self.env.step(self._idle())
+        gnss_velocity = np.asarray(observation["rocket_sensors"][9:12], dtype=float)
+        state_velocity = np.asarray(info["rocket_states"], dtype=float)[3:6]
+
+        np.testing.assert_allclose(gnss_velocity, state_velocity, atol=1e-6)
+
+    def test_the_two_horizontal_axes_are_not_interchangeable(self):
+        """X is east and Y is north, and a vertical launch cannot tell them apart.
+
+        Every other case here launches straight up, so the reported X and Y both
+        sit at zero and swapping them changes nothing. Fly at an angle until the
+        two are far apart, then compare each against its own true component.
+
+        60 degrees on a heading of 30 was picked by measuring: it separates the
+        two by 24.8 m before the flight ends. 45 degrees comes down after 0.11 m,
+        and a heading of 45 keeps X and Y equal by construction, which would have
+        looked like a working test and proved nothing.
+        """
+        self._launch(inclination=60.0, heading=30.0)
+        observation, info = None, None
+        for _ in range(600):
+            observation, _reward, terminated, truncated, info = self.env.step(
+                self._idle()
+            )
+            state = np.asarray(info["rocket_states"], dtype=float)
+            if abs(state[0] - state[1]) > 5.0:
+                break
+            if terminated or truncated:
+                self.fail("the flight ended before the two axes separated")
+
+        state = np.asarray(info["rocket_states"], dtype=float)[:3]
+        self.assertGreater(
+            abs(state[0] - state[1]),
+            5.0,
+            "the axes never separated, so a swap would still be invisible",
+        )
+
+        gnss = np.asarray(observation["rocket_sensors"][6:9], dtype=float)
+        np.testing.assert_allclose(gnss, state, atol=1e-6)
+
+    def test_the_gnss_accuracies_really_are_zero_here(self):
+        """The precondition for the exact comparisons above.
+
+        If scenario 0 ever gains sensor noise, those become flaky rather than
+        wrong, and this says which it is.
+        """
+        sensors = self.parameters["rocket"]["sensors"]
+
+        for key in (
+            "gnss_position_accuracy",
+            "gnss_altitude_accuracy",
+            "gnss_velocity_accuracy",
+        ):
+            with self.subTest(setting=key):
+                self.assertEqual(float(sensors[key]), 0.0)
 
     def _idle(self):
         """A step that disturbs nothing, which is not the same as commanding zero.
@@ -87,11 +174,11 @@ class TestCoordinateDatum(unittest.TestCase):
             return 1.0
         return float(flight.rocket.throttle_control.actuator_output)
 
-    def _launch(self):
+    def _launch(self, inclination=90.0, heading=0.0):
         action = self._idle()
         action["launch"] = np.array(1, dtype=action["launch"].dtype)
         action["launch_inclination_heading"] = np.array(
-            [90.0, 0.0], dtype=action["launch_inclination_heading"].dtype
+            [inclination, heading], dtype=action["launch_inclination_heading"].dtype
         )
         self.env.step(action)
         return self.env.initial_solution
