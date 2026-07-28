@@ -28,11 +28,22 @@ to the pull request that made the change.
 
 ### Changed
 
+- **Breaking, every agent loop:** running out of the precomputed horizon is
+  reported as `truncated` rather than `terminated`. v0.0.2 returned
+  `terminated=True` for both endings, so a loop written as
+  `while not terminated:` never ends on the horizon: it keeps calling `step()`
+  and the environment reads past the end of the balloon trajectories. Use
+  `while not (terminated or truncated):` and keep the fourth value `step()`
+  returns. `terminated` now means only that the flight ended. For scenario 1 the
+  horizon is the usual ending (#94, #102, #104).
 - **Breaking, custom scenarios:** `rocket.control.gimbal_range` is now
   `max_gimbal_angle`, and the three time-constant keys above are required. A
   scenario file written for v0.0.2 raises `KeyError: 'max_gimbal_angle'` on the
   first launch action. Rename the key and add the three fields as `null` to keep
   the previous behaviour (#39).
+- The observation and the whitelisted `given_parameters` handed to an agent are
+  copies. Writing into them used to reach the environment's own state, which was
+  a scoring hole rather than an API detail (#99).
 - Diagnostics go through the `logging` module instead of `print` (#51).
 - ActiveRocketPy updated to the RocketPy v1.13 line (#60), with `uv.lock`
   relocked to match (#62).
@@ -40,6 +51,22 @@ to the pull request that made the change.
 
 ### Fixed
 
+- The log line for running out of time said "Terminated", and a truncated
+  episode drew no final frame unless its last step happened to land on the
+  render cadence. Both read `terminated` from when that one flag also covered
+  the clock (#104).
+- A balloon Monte Carlo that returns fewer trajectories than were asked for is
+  refused. A keyboard interrupt is caught upstream and returns what it has, and
+  exactly one returned trajectory broadcast into a full hundred-balloon world in
+  which every balloon flew the same path, scoring normally against a world that
+  was never simulated (#101).
+- The Monte Carlo workspace is removed after a successful run instead of leaving
+  around 169 MB per run in the system temp directory, and kept when a run fails
+  so there is something to read (#96).
+- Two swept segments are classified as parallel by the angle between them rather
+  than by how long they are. A millimetre-scale pair at ninety degrees was
+  called parallel and reported 1.5005 m where the real distance is 1.4995 m,
+  which against a 1.5 m balloon radius is a pop reported as a miss (#98).
 - The documented coordinate frame was wrong about Z. X and Y are east and north
   of the launch point, but Z is altitude above sea level, not height above the
   pad, in `balloon_states`, the GNSS sensors and the rocket state alike. A

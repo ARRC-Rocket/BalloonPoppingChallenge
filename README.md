@@ -154,13 +154,27 @@ python -m unittest discover tests
 
 ## Gymnasium Environment Operation
 
-There are three stages in the operation of the Gymnasium environment: reset, stepping, and termination.
+There are three stages in the operation of the Gymnasium environment: reset, stepping, and ending the episode.
 
 1. **Reset**: The environment is reset using `env.reset()`, which sets up the initial conditions for the rocket and balloons as given in the [scenario_0_parameters.yaml](./BalloonPoppingGymEnv/envs/scenario_parameters/scenario_0_parameters.yaml) files. Scenario 0 places its balloons at fixed heights directly; every other scenario simulates each balloon trajectory with the [monte-carlo simulation of ActiveRocketPy](./ActiveRocketPy/rocketpy/simulation/monte_carlo.py). Either way the trajectories are stored in the environment up front.
 
-2. **Stepping**: The agent takes an action (e.g., launch, roll, throttle and TVC commands) and calls `env.step(action)`, which advances the simulation by one time step. The environment returns the new observations, reward, termination flag, and additional info.
+2. **Stepping**: The agent takes an action (e.g., launch, roll, throttle and TVC commands) and calls `env.step(action)`, which advances the simulation by one time step. The environment returns five values: the new observation, the reward, `terminated`, `truncated`, and additional info.
 
-3. **Termination**: The episode ends when maximum simulation time is reached or the rocket hits the ground.
+3. **Ending the episode**: There are two ways for an episode to end, and Gymnasium reports them separately.
+
+   `terminated` means the flight itself ended, which here is the rocket reaching the ground. `truncated` means the episode ran out of the precomputed horizon, so it was the clock that stopped it rather than anything about the rocket. For scenario 1 the horizon is the usual ending.
+
+   **An agent loop has to stop on either**, so it looks like this:
+
+   ```python
+   terminated = False
+   truncated = False
+   while not (terminated or truncated):
+       action = agent.get_action(observation)
+       observation, reward, terminated, truncated, info = env.step(action)
+   ```
+
+   Waiting on `terminated` alone does not end on the horizon: the loop keeps calling `env.step()`, and the environment reads past the end of the precomputed balloon trajectories. Keeping the two apart also matters to a learning agent, which should bootstrap the value of the final state when the episode was truncated and not when it terminated.
 
 The actions, observations, info, reward in this environment are:
 

@@ -219,6 +219,48 @@ class TestTheRunnersInThisRepository(unittest.TestCase):
                 self.assertIsNone(unpack_problem(loop), f"{path} line {loop.lineno}")
 
 
+class TestTheLoopTheReadmeShows(unittest.TestCase):
+    """The README snippet is what a competitor copies, and it is not a .py file.
+
+    So the scan above cannot see it, and it went stale in exactly the way the
+    runners did: it described a single "termination flag" and said the episode
+    ends when the time limit is reached or the rocket lands, without saying that
+    those are now two different flags and that a loop has to watch both.
+    """
+
+    @staticmethod
+    def _python_blocks(text):
+        blocks = []
+        collecting = None
+        for line in text.splitlines():
+            if collecting is None:
+                if line.strip() in ("```python", "```py"):
+                    collecting = []
+                continue
+            if line.strip() == "```":
+                blocks.append("\n".join(collecting))
+                collecting = None
+            else:
+                # Snippets in the README are indented under a list item.
+                collecting.append(line[3:] if line.startswith("   ") else line)
+        return blocks
+
+    def test_the_readme_shows_an_episode_loop(self):
+        """Or the check below holds over nothing at all."""
+        blocks = self._python_blocks((REPO_ROOT / "README.md").read_text("utf-8"))
+        loops = [loop for block in blocks for loop in episode_loops(ast.parse(block))]
+
+        self.assertTrue(loops, "the README shows no loop driving env.step()")
+
+    def test_the_loop_the_readme_shows_is_one_that_works(self):
+        blocks = self._python_blocks((REPO_ROOT / "README.md").read_text("utf-8"))
+        for block in blocks:
+            for loop in episode_loops(ast.parse(block)):
+                with self.subTest(line=loop.lineno):
+                    self.assertIsNone(guard_problem(loop))
+                    self.assertIsNone(unpack_problem(loop))
+
+
 class TestTheCheckerItself(unittest.TestCase):
     """The checker is the thing that can be wrong without anything noticing.
 
