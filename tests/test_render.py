@@ -16,6 +16,8 @@ package itself is mocked, so it does not need to be installed.
 
 import importlib.util
 import sys
+
+import numpy as np
 from dataclasses import dataclass
 import unittest
 from pathlib import Path
@@ -163,8 +165,23 @@ class TestVpythonRendersAllBalloons(unittest.TestCase):
         ]
         with patch.dict(sys.modules, {"vpython": fake_vpython}):
             env.reset(seed=0)
-            for index, position in enumerate(asymmetric):
-                env._balloon_states[index, :3] = position
+            # A genuinely later frame, not an in-place edit of the current one.
+            # reset assigns `_balloon_states = _balloon_flights[:, :, 0]`, which
+            # is a view, so writing through it also rewrites frame 0. A renderer
+            # pinned to `_balloon_flights[:, :, 0]` then reads the asymmetric
+            # values it should not have and passes, while every frame after the
+            # first step would leave the balloons at their initial positions.
+            frame = 1
+            self.assertLess(frame, env._balloon_flights.shape[2])
+            env.current_step = frame
+            env._balloon_flights[:, :3, frame] = asymmetric
+            env._balloon_states = env._balloon_flights[:, :, frame]
+            # Guard the fixture: frame 0 has to stay distinguishable, or the
+            # oracle is aliasing itself again.
+            self.assertFalse(
+                np.array_equal(env._balloon_flights[:, :3, 0], np.array(asymmetric))
+            )
+
             env._render_frame()
 
         for index, (drawn, position) in enumerate(
