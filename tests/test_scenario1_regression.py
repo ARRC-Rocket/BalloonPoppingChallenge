@@ -261,6 +261,45 @@ class TestTheToleranceShape(unittest.TestCase):
 
         self._compare(actual, expected)
 
+    def test_a_non_finite_value_in_a_tolerated_extra_row_fails(self):
+        """The row the count tolerance allows is still data.
+
+        Checking after the overlap slice discarded it, so a diverged tail in the
+        one extra row passed: exactly the case a golden master exists to catch.
+        """
+        expected = [[0.0, 0.0, 10.0]] * 5
+        actual = [[0.0, 0.0, 10.0]] * 5 + [[0.0, 0.0, float("nan")]]
+
+        with self.assertRaisesRegex(AssertionError, "non-finite"):
+            self._compare(actual, expected)
+
+    def test_a_non_finite_value_in_the_baseline_fails_too(self):
+        """Both sides, not only the fresh run.
+
+        A baseline regenerated while something was diverging would otherwise be
+        compared against happily.
+
+        The bad row is the extra one, and the message is pinned. Put it inside
+        the overlap and the displacement comes out infinite, so the cap check
+        raises AssertionError and a test that only asked for AssertionError
+        could not tell which check had fired. Measured: with the baseline left
+        unchecked, that version still passed.
+        """
+        expected = [[0.0, 0.0, 10.0], [0.0, 0.0, 20.0], [0.0, 0.0, float("inf")]]
+        actual = [[0.0, 0.0, 10.0], [0.0, 0.0, 20.0]]
+
+        with self.assertRaisesRegex(AssertionError, "baseline.*non-finite"):
+            self._compare(actual, expected)
+
+    def test_an_empty_overlap_is_an_assertion_not_a_crash(self):
+        """A row-count difference inside the tolerance can still leave nothing.
+
+        np.max over an empty array raises ValueError, which reads as a broken
+        test rather than a failed comparison.
+        """
+        with self.assertRaises(AssertionError):
+            self._compare(np.zeros((0, 3)), [[0.0, 0.0, 10.0]])
+
     def test_a_non_finite_value_fails_rather_than_being_skipped(self):
         """NaN comparisons are all false, so a check can pass by ignoring them.
 
@@ -304,18 +343,29 @@ class TestTheToleranceShape(unittest.TestCase):
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
 class TestTheCapStaysBelowTheRadius(unittest.TestCase):
-    """The cap is only meaningful while it is under the balloon radius.
+    """The cap is only meaningful while it is well under the balloon radius.
 
     Read from the scenario rather than written as 1.5 here, so raising the
     radius in the YAML cannot leave this claim quietly false.
     """
 
-    def test_the_vector_cap_is_smaller_than_the_balloon_radius(self):
+    def test_the_combined_worst_case_stays_under_the_balloon_radius(self):
+        """Twice the cap, because scenario 1 applies it to two trajectories.
+
+        The rocket and the balloons are compared separately, each against the
+        same cap. Pop detection depends on the distance between them, so two
+        independent errors of the full cap in opposite directions move that
+        distance by twice the cap. Comparing a single cap against the radius was
+        the wrong figure: at a metre the combined worst case was 2 m against a
+        1.5 m radius.
+        """
         for scenario in (0, SCENARIO_NUMBER):
             with self.subTest(scenario=scenario):
                 parameters, _ = load_scenario_parameters(scenario)
 
-                self.assertLess(POSITION_VECTOR_ATOL, parameters["balloon"]["radius"])
+                self.assertLess(
+                    2 * POSITION_VECTOR_ATOL, parameters["balloon"]["radius"]
+                )
 
 
 if __name__ == "__main__":

@@ -28,12 +28,25 @@ import numpy as np
 # at apogee. That is not a bound on trajectory error, it is a bound on distance
 # from sea level.
 #
-# One metre is sized from the measured drift instead. Two runs on one machine
-# are bit identical, and regenerating on different hardware moves the last few
-# significant digits, well under a millimetre. TestTheCapStaysBelowTheRadius
-# keeps this honest against the scenario's configured radius. Raising it past
-# a metre would bring back the case the per-coordinate floor used to cover.
-POSITION_VECTOR_ATOL = 1.0
+# Half a metre, sized from the measured drift. Two runs on one machine are bit
+# identical, and so are runs on numpy 2.4.5/scipy 1.17.1 versus numpy
+# 2.5.1/scipy 1.18.0, which is the spread between the lockfile and what CI
+# resolves. Cross-machine regeneration moves the last few significant digits.
+# So this is several orders of magnitude of headroom either way.
+#
+# Half rather than a whole metre because scenario 1 applies this cap to the
+# rocket and to the balloons separately. Pop detection depends on the distance
+# between them, and two independent errors of the full cap in opposite
+# directions move that distance by twice the cap. At half a metre the combined
+# worst case is 1 m, under the 1.5 m radius; at a whole metre it was 2 m, over
+# it. TestTheCapStaysBelowTheRadius asserts the doubled figure.
+#
+# That comparison is a sanity check on the size of the bound, not a proof that
+# a score cannot change. Pop detection sweeps between timesteps while this
+# compares downsampled samples, so a bound on sampled positions does not bound
+# every swept segment. It says the tolerance is far tighter than the scale at
+# which scoring behaviour turns over, which is what it is for.
+POSITION_VECTOR_ATOL = 0.5
 
 
 def assert_positions_match(test_case, actual, expected, label, row_count_abs_tol):
@@ -43,16 +56,28 @@ def assert_positions_match(test_case, actual, expected, label, row_count_abs_tol
     off pass a per-axis floor of a metre while the point has moved 1.71 m, which
     is more than the balloon radius the score depends on.
 
+    Non-finite values are rejected across the *whole* of both arrays, before
+    anything is sliced away. Checking after the slice looked equivalent and was
+    not: a diverged value in the one extra row the count tolerance allows was
+    discarded before it could reach the norm, so the comparison passed on
+    exactly the tail a golden master exists to catch.
+
     The row count is checked first, so a truncated trajectory cannot pass
     vacuously on its shorter prefix, and the comparison then runs over the
     overlap. Subtracting the full arrays would raise a broadcasting ValueError
     on exactly the one-row difference the count tolerance exists to allow.
-
-    A NaN anywhere in ``actual`` gives a NaN norm, and NaN fails the comparison
-    rather than passing it.
     """
     actual = np.asarray(actual, dtype=float)
     expected = np.asarray(expected, dtype=float)
+
+    for name, values in ((label, actual), (f"{label} baseline", expected)):
+        finite = np.isfinite(values)
+        if not finite.all():
+            bad = np.flatnonzero(~finite.reshape(len(values), -1).all(axis=1))
+            raise AssertionError(
+                f"{name} positions contain a non-finite value, rows "
+                f"{bad[:5].tolist()}{'...' if bad.size > 5 else ''}"
+            )
 
     test_case.assertLessEqual(
         abs(len(actual) - len(expected)),
@@ -62,6 +87,8 @@ def assert_positions_match(test_case, actual, expected, label, row_count_abs_tol
     )
 
     overlap = min(len(expected), len(actual))
+    # A tolerated row-count difference must not become an empty comparison.
+    test_case.assertGreater(overlap, 0, f"{label} has no overlapping rows")
     actual = actual[:overlap]
     expected = expected[:overlap]
 
