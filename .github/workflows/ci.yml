@@ -2,7 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # develop as well as main. Work reaches the integration branch by merge and
+    # occasionally by direct push, and neither used to run anything here, so a
+    # regression could sit on develop until some later pull request inherited it.
+    branches: [main, develop]
   pull_request:
   workflow_dispatch:
 
@@ -40,8 +43,15 @@ jobs:
         run: ruff format --check BalloonPoppingGymEnv/ tests/
 
   test:
-    name: Tests and coverage
+    name: Tests and coverage (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      # Competitors run this on their own machines, and pyproject.toml claims
+      # >=3.10, so the floor is tested rather than only asserted. ActiveRocketPy
+      # already runs its own CI on 3.10.
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.14"]
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       # Run the opt-in slow regression tests (e.g. the scenario #1 Monte Carlo
@@ -56,7 +66,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.14"
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: requirements-dev.txt
 
@@ -79,13 +89,13 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: coverage-xml
+          name: coverage-xml-py${{ matrix.python-version }}
           path: coverage.xml
           if-no-files-found: warn
 
       # Skipped until a CODECOV_TOKEN repository secret is configured.
       - name: Upload coverage to Codecov
-        if: ${{ env.CODECOV_TOKEN != '' }}
+        if: ${{ env.CODECOV_TOKEN != '' && matrix.python-version == '3.14' }}
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
