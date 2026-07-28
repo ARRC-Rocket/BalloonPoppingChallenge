@@ -34,39 +34,45 @@ while not terminated:
 
     time = np.append(time, observation["simulation_time"])
     # ground truth velocity
-    velocity_gt = np.append(velocity_gt, info["rocket_states"][3:6].reshape(-1, 1), axis=1)
+    velocity_gt = np.append(
+        velocity_gt, info["rocket_states"][3:6].reshape(-1, 1), axis=1
+    )
     # estimated velocity
     velocity_est = np.append(velocity_est, agent.states[3:6].reshape(-1, 1), axis=1)
     # ground truth attitude
-    attitude_gt = np.append(attitude_gt, info["rocket_states"][6:10].reshape(-1, 1), axis=1)
+    attitude_gt = np.append(
+        attitude_gt, info["rocket_states"][6:10].reshape(-1, 1), axis=1
+    )
     # estimated attitude
     attitude_est = np.append(attitude_est, agent.states[6:10].reshape(-1, 1), axis=1)
-    
 
-    print(f"simulation_time: {observation['simulation_time']:.2f} sec, total reward: {info['popped_count']:.2f}", end='\r')
+    print(
+        f"simulation_time: {observation['simulation_time']:.2f} sec, total reward: {info['popped_count']:.2f}",
+        end="\r",
+    )
 
 plt.subplot(2, 1, 1)
-plt.plot(time, attitude_gt[0], 'r-', label='e0_attitude_gt')
-plt.plot(time, attitude_gt[1], 'g-', label='e1_attitude_gt')
-plt.plot(time, attitude_gt[2], 'b-', label='e2_attitude_gt')
-plt.plot(time, attitude_gt[3], 'm-', label='e3_attitude_gt')
-plt.plot(time, attitude_est[0], 'r--', label='e0_attitude_est')
-plt.plot(time, attitude_est[1], 'g--', label='e1_attitude_est')
-plt.plot(time, attitude_est[2], 'b--', label='e2_attitude_est')
-plt.plot(time, attitude_est[3], 'm--', label='e3_attitude_est')
-plt.xlabel('Time (s)')
-plt.ylabel('Attitude (quaternion)')
+plt.plot(time, attitude_gt[0], "r-", label="e0_attitude_gt")
+plt.plot(time, attitude_gt[1], "g-", label="e1_attitude_gt")
+plt.plot(time, attitude_gt[2], "b-", label="e2_attitude_gt")
+plt.plot(time, attitude_gt[3], "m-", label="e3_attitude_gt")
+plt.plot(time, attitude_est[0], "r--", label="e0_attitude_est")
+plt.plot(time, attitude_est[1], "g--", label="e1_attitude_est")
+plt.plot(time, attitude_est[2], "b--", label="e2_attitude_est")
+plt.plot(time, attitude_est[3], "m--", label="e3_attitude_est")
+plt.xlabel("Time (s)")
+plt.ylabel("Attitude (quaternion)")
 plt.legend()
 
 plt.subplot(2, 1, 2)
-plt.plot(time, velocity_gt[0], 'r-', label='x_velocity_gt')
-plt.plot(time, velocity_gt[1], 'g-', label='y_velocity_gt')
-plt.plot(time, velocity_gt[2], 'b-', label='z_velocity_gt')
-plt.plot(time, velocity_est[0], 'r--', label='x_velocity_est')
-plt.plot(time, velocity_est[1], 'g--', label='y_velocity_est')
-plt.plot(time, velocity_est[2], 'b--', label='z_velocity_est')
-plt.xlabel('Time (s)')
-plt.ylabel('Velocity (m/s)')
+plt.plot(time, velocity_gt[0], "r-", label="x_velocity_gt")
+plt.plot(time, velocity_gt[1], "g-", label="y_velocity_gt")
+plt.plot(time, velocity_gt[2], "b-", label="z_velocity_gt")
+plt.plot(time, velocity_est[0], "r--", label="x_velocity_est")
+plt.plot(time, velocity_est[1], "g--", label="y_velocity_est")
+plt.plot(time, velocity_est[2], "b--", label="z_velocity_est")
+plt.xlabel("Time (s)")
+plt.ylabel("Velocity (m/s)")
 plt.legend()
 plt.tight_layout()
 plt.show()
