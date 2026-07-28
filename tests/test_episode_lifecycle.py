@@ -69,6 +69,76 @@ class TestNeverLaunchingAgent(unittest.TestCase):
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestWhatATruncatedEpisodeReports(unittest.TestCase):
+    """Two things the split between the two causes left behind.
+
+    Splitting ``terminated`` from ``truncated`` was correct, and both of these
+    read ``terminated`` back when that one flag also covered the clock. Neither
+    moved with it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.scenario_params, _ = load_scenario_parameters(SCENARIO_NUMBER)
+
+    def _run_to_the_horizon(self, env):
+        action = _idle_action(env)
+        terminated = truncated = False
+        while not (terminated or truncated):
+            _observation, _reward, terminated, truncated, _info = env.step(action)
+        return terminated, truncated
+
+    def test_running_out_of_time_is_logged_as_truncation(self):
+        """It still said "Terminated: Reached max time".
+
+        Which is the one line an operator reads to find out why a run stopped,
+        and it named the case the flags now deliberately do not.
+        """
+        env = BalloonPoppingEnv(render_mode=None, parameters=self.scenario_params)
+        env.reset(seed=self.scenario_params["scenario"]["random_seed"])
+
+        with self.assertLogs("BalloonPoppingGymEnv", level="INFO") as captured:
+            _terminated, truncated = self._run_to_the_horizon(env)
+
+        self.assertTrue(truncated)
+        messages = [record.getMessage() for record in captured.records]
+        self.assertIn("Truncated: Reached max time", messages)
+        self.assertNotIn("Terminated: Reached max time", messages)
+
+    def test_the_last_frame_of_a_truncated_episode_is_drawn(self):
+        """Frames are drawn on a 0.1 s cadence, or when the episode ends.
+
+        While the clock counted as termination, an episode that ran out of
+        horizon always drew its final frame. Afterwards the gate only fired on
+        ``terminated``, so a truncated episode whose last step misses the
+        cadence stopped drawing one. Scenario 1 ends this way normally.
+        """
+        env = BalloonPoppingEnv(render_mode=None, parameters=self.scenario_params)
+        env.reset(seed=self.scenario_params["scenario"]["random_seed"])
+
+        drawn_at = []
+        original = env._render_frame
+        env._render_frame = lambda *args, **kwargs: (
+            drawn_at.append(env.current_step),
+            original(*args, **kwargs),
+        )[1]
+
+        _terminated, truncated = self._run_to_the_horizon(env)
+
+        self.assertTrue(truncated)
+        cadence = int(0.1 / self.scenario_params["simulation"]["time_step"])
+        # Or the old gate would have drawn this frame anyway and the assertion
+        # below would hold whichever version is in place.
+        self.assertNotEqual(
+            env.current_step % cadence,
+            0,
+            "the final step lands on the render cadence, so this cannot tell "
+            "the two versions apart",
+        )
+        self.assertEqual(drawn_at[-1], env.current_step)
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
 class TestAFinishedFlightTerminates(unittest.TestCase):
     """The other end of the pair, so neither flag is simply hard-coded.
 

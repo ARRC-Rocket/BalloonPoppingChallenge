@@ -374,7 +374,7 @@ class BalloonPoppingEnv(gym.Env):
         # An episode is done iff reaches max time or end of trajectory
         _timeout = self.current_step >= self.num_timesteps - 1
         if _timeout:
-            logger.info("Terminated: Reached max time")
+            logger.info("Truncated: Reached max time")
             # An agent is free never to launch, in which case there is no flight
             # to post-process and these calls would raise instead of ending the
             # episode.
@@ -406,7 +406,12 @@ class BalloonPoppingEnv(gym.Env):
         _remainder = np.remainder(
             self.current_step, 0.1 / self.simulation_parameters["time_step"]
         )  # print every 0.1 sec
-        if _remainder == 0 or terminated:
+        # Both endings, not only termination. This used to read ``terminated``
+        # while that flag covered the clock as well, so an episode ending on the
+        # horizon always drew its last frame. Splitting the two causes quietly
+        # took that away from every truncated episode whose final step does not
+        # land on the 0.1 s cadence, which for scenario 1 is the usual ending.
+        if _remainder == 0 or terminated or truncated:
             self._render_frame()
 
         return observation, reward, terminated, truncated, info
