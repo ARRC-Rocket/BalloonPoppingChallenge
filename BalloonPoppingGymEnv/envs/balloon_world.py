@@ -71,6 +71,10 @@ class BalloonPoppingEnv(gym.Env):
         self._rocket_sensors = np.full(12, np.nan)
         # (posX, posY, posZ, velX, velY, velZ, e0, e1, e2, e3, w1, w2, w3)
         self._rocket_states = np.full(13, np.nan)
+        # Where the next pop sweep starts. Tracked separately from
+        # ``_rocket_states`` because the flight only produces a state on the step
+        # after the launch action, while the sweep has to start at the pad.
+        self._sweep_origin = None
         # save trajectories for logging
         self.trajectories = None
 
@@ -190,6 +194,7 @@ class BalloonPoppingEnv(gym.Env):
         self._balloon_states = self._balloon_flights[:, :, 0]
         self._rocket_sensors = np.full(12, np.nan)
         self._rocket_states = np.full(13, np.nan)
+        self._sweep_origin = None
         self.trajectories = None
 
         self.rocket_launched = False
@@ -209,7 +214,6 @@ class BalloonPoppingEnv(gym.Env):
 
     def step(self, action):
         previous_balloon_positions = self._balloon_states[:, :3].copy()
-        previous_rocket_position = self._rocket_states[:3].copy()
         self.current_step += 1
 
         #  Update the balloon states
@@ -232,6 +236,7 @@ class BalloonPoppingEnv(gym.Env):
                     self.current_step * self.simulation_parameters["time_step"]
                 )
                 self.__init_rocket_simulation()
+                self._sweep_origin = np.asarray(self.initial_solution[1:4], dtype=float)
         else:  # Apply action to step the rocket simulation and get sensor measurements
             self._rocket_flight.rocket.roll_control.roll_torque = action["roll"]
             self._rocket_flight.rocket.thrust_vector_control.gimbal_angle_x = action[
@@ -249,16 +254,9 @@ class BalloonPoppingEnv(gym.Env):
             self._rocket_states = self._rocket_flight.y_sol[:]
             _rocket_finished = self._rocket_flight._step_state["finished"]
 
-            # detect pops. On the first simulated step the previous position is
-            # still the all-NaN placeholder, because the flight is built on the
-            # launch action and only produces a state on the step after it. Every
-            # NaN comparison is false, so without this the launch-to-first-sample
-            # interval could never register a hit; fall back to the launch state.
-            if not np.isfinite(previous_rocket_position).all():
-                previous_rocket_position = np.asarray(
-                    self.initial_solution[1:4], dtype=float
-                )
-            self._detect_pops(previous_balloon_positions, previous_rocket_position)
+            # detect pops over the interval the rocket just flew
+            self._detect_pops(previous_balloon_positions, self._sweep_origin)
+            self._sweep_origin = self._rocket_states[:3].copy()
 
         # Append rocket and balloon states to trajectories for logging
         step_record = {
@@ -469,10 +467,12 @@ class BalloonPoppingEnv(gym.Env):
                     self._balloon_states[:, 2],
                     c="magenta",
                 )
+                # Arrays, not scalars: plot documents xs/ys as array-like, and
+                # the update below has to keep the same types (see #89).
                 self.render_rocket = self.render_canvas.plot(
-                    self._rocket_states[0],
-                    self._rocket_states[1],
-                    self._rocket_states[2],
+                    np.array([self._rocket_states[0]]),
+                    np.array([self._rocket_states[1]]),
+                    np.array([self._rocket_states[2]]),
                     "s",
                     color="blue",
                 )
@@ -502,10 +502,18 @@ class BalloonPoppingEnv(gym.Env):
                 self._balloon_states[:, 2],
             )
             self.render_balloons.set_facecolors(colors)
-            self.render_rocket[0].set_data(
-                [self._rocket_states[0]], [self._rocket_states[1]]
+            # Arrays rather than lists. Line3D.draw reaches for `_verts3d[0].shape`
+            # when a coordinate is invalid for the axis scale, and the rocket
+            # state is all-NaN until the launch action builds the flight, so
+            # every frame before launch takes that branch. With lists it raises
+            # `'list' object has no attribute 'shape'` on Matplotlib 3.11 and
+            # loses the run (#89). Finite coordinates never reach the branch,
+            # which is why lists went unnoticed.
+            self.render_rocket[0].set_data_3d(
+                np.array([self._rocket_states[0]]),
+                np.array([self._rocket_states[1]]),
+                np.array([self._rocket_states[2]]),
             )
-            self.render_rocket[0].set_3d_properties([self._rocket_states[2]])
             self.render_canvas.set_title(
                 f"Time: {self.current_step * self.simulation_parameters['time_step']:.2f} sec\nTotal Reward: {self._popped_count}"
             )

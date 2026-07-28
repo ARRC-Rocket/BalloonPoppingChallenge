@@ -13,7 +13,7 @@ Clone the repository and initialize the `ActiveRocketPy` submodule:
 ```shell
 git clone https://github.com/ARRC-Rocket/BalloonPoppingChallenge.git
 cd BalloonPoppingChallenge
-git submodule update --init
+git submodule update --init --recursive --checkout
 ```
 
 Then set up the environment with **uv** (recommended) or with **pip**.
@@ -69,10 +69,21 @@ python -m pip install -r requirements.txt
 
 ```shell
 cd BalloonPoppingChallenge
-git pull origin main
-git submodule update --remote --merge
-uv sync   # re-sync the environment (pip users: python -m pip install -r requirements.txt)
+git switch main
+git pull --ff-only origin main
+git submodule update --init --recursive --checkout
+uv sync --locked   # pip users: python -m pip install -r requirements.txt
 ```
+
+> `git pull origin main` on its own merges main into whatever branch you happen to be on, so the branch is named and `--ff-only` refuses anything that is not a straight fast-forward rather than making a merge commit out of an update.
+>
+> `--checkout` puts ActiveRocketPy back on the commit this repository records. It is the default only while nothing sets `submodule.ActiveRocketPy.update` locally; with that set to `merge` or `rebase`, `--init --recursive` leaves the submodule wherever it already was. Measured: with `update = merge` the submodule stayed on the newer commit and the recorded one was merged into it.
+>
+> Do not add `--remote`. That follows ActiveRocketPy's own branch instead of the recorded commit, and the mismatch is quiet until it is not: an ActiveRocketPy ahead of the pin renamed part of the actuator API, and the run stopped with `AttributeError` partway through.
+>
+> The lockfile does not catch this. ActiveRocketPy is an editable path dependency, so `uv.lock` records its version and its dependencies, not its source commit; a source-only change to the simulator leaves `uv lock --check` green. The recorded submodule commit is the only thing pinning the simulator itself.
+>
+> `--locked` covers the other half. A plain `uv sync` rewrites `uv.lock` when it no longer matches, which turns a drifted checkout into a working one that is no longer the released environment. `--locked` stops and says so instead. On a clean release checkout the two behave identically.
 
 ## Examples
 
@@ -136,7 +147,7 @@ python -m unittest discover tests
   - Both the rocket and the balloon move during a timestep, and each sweeps a path. The two swept paths are compared **independently**: the closest approach between them counts even when the rocket and the balloon reach that point at different moments within the timestep. A balloon therefore pops when the two paths come within its radius of each other, not only when the two bodies are there at the same instant.
     - This is the intended rule rather than an approximation to be corrected. It rests on two assumptions: that the timestep is small enough for the difference to be minor, and that in reality a rocket whose center of dry mass passes through a balloon has some means of popping it. Requiring the same instant instead would mean interpolating both paths within the timestep, which adds a modelling choice of its own without being clearly more faithful.
     - One consequence worth knowing: the result depends on `simulation.time_step`, so scores are comparable between runs at the same timestep and not across different ones. The dependence is not simply "a longer step pops more". A longer step does sweep a longer path, but it also replaces more of the real curved trajectory with a single straight chord, and a balloon sitting on the outside of a curve can be closer to the true path than to the chord that cuts across it.
-  - Balloons release will be determined depends on the scenario parameters.
+  - Balloon releases are scheduled by the scenario parameters.
   - There will be a single launch, and the aim is to pop as many balloons as possible.
   - Launch time, inclination, and heading are determined by the agent.
   - There will be disturbances, e.g., sensor noise, wind in the environment.
@@ -145,7 +156,7 @@ python -m unittest discover tests
 
 There are three stages in the operation of the Gymnasium environment: reset, stepping, and termination.
 
-1. **Reset**: The environment is reset using `env.reset()`, which sets up the initial conditions for the rocket and balloons as given in the [scenario_0_parameter.yaml](./BalloonPoppingGymEnv/envs/scenario_parameters/scenario_0_parameters.yaml) files. Scenario 0 places its balloons at fixed heights directly; every other scenario simulates each balloon trajectory with the [monte-carlo simulation of ActiveRocketPy](./ActiveRocketPy/rocketpy/simulation/monte_carlo.py). Either way the trajectories are stored in the environment up front.
+1. **Reset**: The environment is reset using `env.reset()`, which sets up the initial conditions for the rocket and balloons as given in the [scenario_0_parameters.yaml](./BalloonPoppingGymEnv/envs/scenario_parameters/scenario_0_parameters.yaml) files. Scenario 0 places its balloons at fixed heights directly; every other scenario simulates each balloon trajectory with the [monte-carlo simulation of ActiveRocketPy](./ActiveRocketPy/rocketpy/simulation/monte_carlo.py). Either way the trajectories are stored in the environment up front.
 
 2. **Stepping**: The agent takes an action (e.g., launch, roll, throttle and TVC commands) and calls `env.step(action)`, which advances the simulation by one time step. The environment returns the new observations, reward, termination flag, and additional info.
 
@@ -183,7 +194,7 @@ The actions, observations, info, reward in this environment are:
 
 ## Known Limitations
 
-- The mass properties are pre-calculated before flight according to max flow rate and burn time. Throttle commands does not affect the change of the mass properties in-flight. It is equivalent to throttling the Isp of rocket engine while the flow rate remains constant. The engine is cut off when burn time is reached
+- The mass properties are pre-calculated before flight according to max flow rate and burn time. Throttle commands do not affect how the mass properties change in flight. Reducing throttle is equivalent to reducing the engine's specific impulse while the flow rate stays constant. The engine cuts off when the burn time is reached.
 
 ## Agent Development
 
@@ -245,7 +256,7 @@ Keywords: GNC, autonomous rocket, optimization, path-finding.
 ### Competition Rules
 
 - The participant will develop agents in [/agents folder](./BalloonPoppingGymEnv/agents/) to control a rocket.
-- The agent will be initialized with the given paramter of each scenario.
+- The agent will be initialized with the given parameters of each scenario.
 - At each time step, the agent should only take the observations provided by the environment to output control commands (e.g., launch, roll, throttle and TVC commands). The agent should not have access to any other information about the environment or the simulator.
 - Other than the agent, all other components of the simulator are fixed and provided by the organizer. Participants are not allowed to modify any other part of the codebase for the evaluation.
 - Questions about the rules and software can be asked in the [GitHub Issues](https://github.com/ARRC-Rocket/BalloonPoppingChallenge/issues). The organizer will hold regular meetings to answer questions and provide updates.
@@ -256,7 +267,7 @@ Keywords: GNC, autonomous rocket, optimization, path-finding.
 Submit your results to: [https://balloonpoppingchallenge.arrcrocket.org/](https://balloonpoppingchallenge.arrcrocket.org/).
 To generate the required .pkl file for submission, please follow these steps:
 
-1. Register for the competition [with this form](https://docs.google.com/forms/d/e/1FAIpQLSegCqnI4t-R_6Nxtbkf-XJ-V3L5-_DlyDxmSU_FY2Qa1lvLXQ/viewform). Organizors will send the `team_name` and `team_secret` through email.
+1. Register for the competition [with this form](https://docs.google.com/forms/d/e/1FAIpQLSegCqnI4t-R_6Nxtbkf-XJ-V3L5-_DlyDxmSU_FY2Qa1lvLXQ/viewform). Organizers will send the `team_name` and `team_secret` through email.
 2. Edit [eval_cfg.yaml](./BalloonPoppingGymEnv/evaluation/configs/example_eval_cfg.yaml)
 
     ```yaml
