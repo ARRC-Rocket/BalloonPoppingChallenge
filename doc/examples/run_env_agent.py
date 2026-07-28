@@ -75,7 +75,13 @@ def run_for_development():
 
 
 def run_for_evaluation():
+    from BalloonPoppingGymEnv.console_logging import configure_console_logging
     from BalloonPoppingGymEnv.evaluation.evaluate import evaluate_scenario
+
+    # Without this the completion and score lines go nowhere: evaluate_scenario
+    # logs them, and logging prints nothing until an entry point asks it to. The
+    # CLI does this for itself, which is why the comment below holds.
+    configure_console_logging()
 
     # Load agent class dynamically from specified module path.
     # Equivalent to run command: python evaluate.py <path_to_eval_config.yaml>

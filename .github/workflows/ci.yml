@@ -2,7 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # develop as well as main. Work reaches the integration branch by merge and
+    # occasionally by direct push, and neither used to run anything here, so a
+    # regression could sit on develop until some later pull request inherited it.
+    branches: [main, develop]
   pull_request:
   workflow_dispatch:
 
