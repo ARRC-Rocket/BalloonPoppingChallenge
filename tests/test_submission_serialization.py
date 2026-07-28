@@ -153,8 +153,13 @@ class TestTheProductionBoundary(unittest.TestCase):
         agent = _example_agent(given)
         observation, _ = env.reset(seed=parameters["scenario"]["random_seed"])
         terminated = False
-        while not terminated:
-            observation, _reward, terminated, _truncated, _info = env.step(
+        truncated = False
+        # Both flags. Scenario 0 lands at step 5896 of 9999 so ``terminated``
+        # is what fires here, but discarding ``truncated`` is the loop that
+        # keeps calling step() past the end of the precomputed horizon, and the
+        # scenario this runs is one line away from being a different one.
+        while not (terminated or truncated):
+            observation, _reward, terminated, truncated, _info = env.step(
                 agent.get_action(observation)
             )
         cls.env = env
