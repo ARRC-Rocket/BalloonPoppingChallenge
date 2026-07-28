@@ -98,7 +98,41 @@ class TestCoordinateDatum(unittest.TestCase):
         # One step of a vertical launch: still over the pad, and small either way
         # compared with the site's latitude and longitude, or with any offset
         # large enough to matter to an agent.
-        np.testing.assert_allclose(gnss_xy, [0.0, 0.0], rtol=0, atol=1.0)
+        # One step of a vertical launch with zero GNSS noise: measured at
+        # under a millimetre, so a centimetre is already generous. A metre
+        # would have allowed most of a real targeting error.
+        np.testing.assert_allclose(gnss_xy, [0.0, 0.0], rtol=0, atol=0.01)
+
+    def test_the_horizontal_bearing_matches_the_commanded_heading(self):
+        """An anchor outside both public channels.
+
+        Every other horizontal check compares the observation against the
+        reported state. Neither is independent of the other, so a relabelling
+        that swaps X and Y in both of them agrees with itself and passes.
+
+        The launch action is the third opinion. Heading is measured clockwise
+        from north, so X is east and Y is north: a launch on 30 degrees has to
+        travel into the northeast quadrant with more north than east. A swap
+        puts it at 60, a negation puts it in another quadrant.
+        """
+        heading = 30.0
+        self._launch(inclination=60.0, heading=heading)
+        info = None
+        for _ in range(600):
+            _obs, _r, terminated, truncated, info = self.env.step(self._idle())
+            state = np.asarray(info["rocket_states"], dtype=float)
+            if np.hypot(state[0], state[1]) > 20.0:
+                break
+            if terminated or truncated:
+                self.fail("the flight ended before it travelled horizontally")
+
+        east, north = np.asarray(info["rocket_states"], dtype=float)[:2]
+        self.assertGreater(east, 0.0, "a heading of 30 goes east of the pad")
+        self.assertGreater(north, 0.0, "a heading of 30 goes north of the pad")
+        self.assertGreater(north, east, "30 degrees is more north than east")
+
+        bearing = float(np.degrees(np.arctan2(east, north))) % 360.0
+        self.assertAlmostEqual(bearing, heading, delta=5.0)
 
     def test_the_reported_altitude_is_anchored_to_the_site_elevation(self):
         """An absolute anchor, because the two public channels agreeing is not one.
