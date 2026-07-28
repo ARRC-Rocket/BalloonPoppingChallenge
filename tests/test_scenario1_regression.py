@@ -34,6 +34,7 @@ an ImportError then fails loudly instead of skipping. Run it with::
 import json
 import os
 import unittest
+from typing import NamedTuple
 from pathlib import Path
 
 import numpy as np
@@ -100,6 +101,17 @@ STEP_COUNT_ABS_TOL = 2
 ROW_COUNT_ABS_TOL = 1
 
 
+class RunResult(NamedTuple):
+    """What one scenario run reports, so callers stop unpacking a bare tuple."""
+
+    rocket_positions: np.ndarray
+    balloon_positions: np.ndarray
+    popped_count: int
+    status_counts: dict
+    terminated: bool
+    truncated: bool
+
+
 def run_scenario_1():
     """Run scenario #1 with the fixed agent and seed.
 
@@ -131,7 +143,25 @@ def run_scenario_1():
     balloon_states = np.array(
         [step["balloon_states"] for step in env.trajectories], dtype=float
     )
-    return rocket_states[:, :3], balloon_states[:, :, :3], int(env._popped_count)
+    # Status counts, because the trajectories cannot see them: the balloon
+    # positions come from the array precomputed at reset, so the release
+    # machinery can stop working entirely without a single sampled position
+    # moving. Deleting the ground-to-released update leaves all seven golden
+    # master tests green, which is why this is returned and asserted.
+    final_status = np.asarray(env._balloon_status[:, 0], dtype=int)
+    status_counts = {
+        "ground": int(np.sum(final_status == 0)),
+        "released": int(np.sum(final_status == 1)),
+        "popped": int(np.sum(final_status == 2)),
+    }
+    return RunResult(
+        rocket_positions=rocket_states[:, :3],
+        balloon_positions=balloon_states[:, :, :3],
+        popped_count=int(env._popped_count),
+        status_counts=status_counts,
+        terminated=bool(terminated),
+        truncated=bool(truncated),
+    )
 
 
 def post_launch_rocket_positions(positions):
@@ -180,15 +210,46 @@ class TestScenario1Regression(unittest.TestCase):
     def setUpClass(cls):
         with open(BASELINE_PATH, encoding="utf-8") as baseline_file:
             cls.baseline = json.load(baseline_file)
-        rocket_positions, balloon_positions, cls.popped = run_scenario_1()
-        cls.num_steps = rocket_positions.shape[0]
-        cls.rocket_positions = post_launch_rocket_positions(rocket_positions)
-        cls.balloon_positions = downsample_balloon_positions(balloon_positions)
+        cls.run_result = run_scenario_1()
+        cls.popped = cls.run_result.popped_count
+        cls.num_steps = cls.run_result.rocket_positions.shape[0]
+        cls.rocket_positions = post_launch_rocket_positions(
+            cls.run_result.rocket_positions
+        )
+        cls.balloon_positions = downsample_balloon_positions(
+            cls.run_result.balloon_positions
+        )
 
     def test_popped_count_matches_baseline(self):
         # Pin the semantic count, not just the (regenerable) baseline.
         self.assertEqual(self.baseline["popped_count"], EXPECTED_POPPED_COUNT)
         self.assertEqual(self.popped, EXPECTED_POPPED_COUNT)
+
+    def test_the_release_and_pop_states_match_the_baseline(self):
+        """The status machinery, which no sampled position can see.
+
+        Balloon positions come from the array precomputed at reset, so removing
+        the ground-to-released update in ``step`` leaves every sampled position,
+        the step count and the expected score of zero exactly as they were. All
+        seven golden master tests stay green with scenario 1's release machinery
+        deleted, which this closes.
+        """
+        expected = self.baseline["final_balloon_status_counts"]
+
+        self.assertEqual(self.run_result.status_counts, expected)
+        # A zero-pop scenario still has to have released its balloons; asserting
+        # the dict alone would pass a baseline regenerated against the same bug.
+        self.assertGreater(
+            expected["released"] + expected["popped"],
+            0,
+            "scenario 1 should release balloons during the episode",
+        )
+
+    def test_the_episode_terminates_rather_than_truncating(self):
+        # Gymnasium gives these different meanings, and the runner only loops on
+        # `terminated or truncated`, so swapping them keeps the step count intact.
+        self.assertTrue(self.run_result.terminated)
+        self.assertFalse(self.run_result.truncated)
 
     def test_flight_duration_matches_baseline(self):
         expected = self.baseline["num_steps_full"]
