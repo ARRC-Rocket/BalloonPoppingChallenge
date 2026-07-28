@@ -273,6 +273,34 @@ class TestTheToleranceShape(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "non-finite"):
             self._compare(actual, expected)
 
+    def test_a_baseline_that_lost_coordinates_cannot_broadcast(self):
+        """(T, 1) against (T, 3) is a valid NumPy subtraction, not an error.
+
+        The trailing axis of length one is stretched to three, the displacement
+        comes out zero, and a baseline missing Y and Z passes.
+        """
+        with self.assertRaisesRegex(AssertionError, "XYZ|shape"):
+            self._compare(np.zeros((4, 3)), np.zeros((4, 1)))
+
+    def test_both_sides_losing_z_is_not_a_two_dimensional_oracle(self):
+        """A regenerated baseline degrades in step with the run.
+
+        Both at (T, 2) subtracts and takes a norm without complaint, and the
+        comparison silently stops covering the third axis.
+        """
+        with self.assertRaisesRegex(AssertionError, "XYZ"):
+            self._compare(np.zeros((4, 2)), np.zeros((4, 2)))
+
+    def test_an_empty_balloon_axis_is_an_assertion(self):
+        # np.max over an empty result raises ValueError, which reads as a broken
+        # test rather than a trajectory with no balloons in it.
+        with self.assertRaises(AssertionError):
+            self._compare(np.zeros((4, 0, 3)), np.zeros((4, 0, 3)))
+
+    def test_a_shape_that_disagrees_with_the_baseline_fails(self):
+        with self.assertRaisesRegex(AssertionError, "does not match baseline"):
+            self._compare(np.zeros((4, 2, 3)), np.zeros((4, 3, 3)))
+
     def test_a_non_finite_value_in_the_baseline_fails_too(self):
         """Both sides, not only the fresh run.
 

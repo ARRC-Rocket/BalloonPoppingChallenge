@@ -70,6 +70,28 @@ def assert_positions_match(test_case, actual, expected, label, row_count_abs_tol
     actual = np.asarray(actual, dtype=float)
     expected = np.asarray(expected, dtype=float)
 
+    # The schema, before anything is subtracted. NumPy broadcasts a trailing
+    # axis of length 1 against one of length 3, so a baseline that lost Y and Z
+    # compares successfully against a full trajectory. And if both sides become
+    # (T, 2), the norm runs happily over two axes and the 3D oracle quietly
+    # becomes a 2D one, which is exactly what a regenerated baseline would
+    # freeze in place.
+    for name, values in ((label, actual), (f"{label} baseline", expected)):
+        if values.ndim not in (2, 3) or values.shape[-1] != 3:
+            raise AssertionError(
+                f"{name} positions must be (T, 3) or (T, N, 3) ending in XYZ, "
+                f"got {values.shape}"
+            )
+        if 0 in values.shape:
+            raise AssertionError(f"{name} positions have an empty axis: {values.shape}")
+
+    test_case.assertEqual(
+        actual.shape[1:],
+        expected.shape[1:],
+        f"{label} position shape {actual.shape[1:]} does not match baseline "
+        f"{expected.shape[1:]}",
+    )
+
     for name, values in ((label, actual), (f"{label} baseline", expected)):
         finite = np.isfinite(values)
         if not finite.all():
