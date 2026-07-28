@@ -29,7 +29,7 @@ INTEGRITY_CHECK_MAX_BYTES = 1_000_000
 # file really was edited.
 INTEGRITY_MISMATCH_MESSAGE = (
     "evaluate.py does not match the official copy on main. Your submission was "
-    "still saved. A checkout from any revision other than current main reports "
+    "still saved. A checkout from a revision other than current main can report "
     "this too, so check whether you edited the file before treating it as a "
     "problem."
 )
@@ -105,6 +105,22 @@ def _check_evaluate_integrity():
             if status != 200:
                 print(f"Could not check evaluate.py: unexpected HTTP status {status}")
                 return
+
+            # urlopen follows redirects on its own, so a proxy or captive portal
+            # that lands on its own 200 page arrives here looking successful.
+            final_url = response.geturl()
+            if final_url != INTEGRITY_CHECK_URL:
+                print(f"Could not check evaluate.py: redirected to {final_url}")
+                return
+
+            # http.client asks for identity and cannot decode anything else, so
+            # a coded body would be hashed in its coded form.
+            encoding = response.headers.get("Content-Encoding")
+            if encoding not in (None, "", "identity"):
+                print(f"Could not check evaluate.py: Content-Encoding {encoding}")
+                return
+
+            chunked = bool(getattr(response, "chunked", False))
             declared = response.headers.get("Content-Length")
             # One byte over the cap, so an oversized body is detectable.
             raw = response.read(INTEGRITY_CHECK_MAX_BYTES + 1)
@@ -115,12 +131,25 @@ def _check_evaluate_integrity():
             )
             return
 
-        # A peer that announces a length and then closes early hands back a short
-        # body without raising, and hashing that would accuse the competitor of
-        # editing a file they never touched. A length that will not parse, or
-        # parses negative, says the framing itself cannot be trusted, which is
-        # the same conclusion.
-        if declared is not None:
+        # Completeness has to come from the framing, and there are only two
+        # kinds that carry it. A chunked body ends at a terminator http.client
+        # validates, raising on a short stream. A declared length can be
+        # compared against what arrived. A response with neither is delimited
+        # by the connection closing, and RFC 9112 is explicit that such a body
+        # cannot be told apart from one cut short mid-transfer: read() hands
+        # back whatever turned up and nothing raises. Hashing that would accuse
+        # a competitor of editing a file they never touched.
+        if chunked:
+            pass
+        elif declared is None:
+            print(
+                "Could not check evaluate.py: the reference copy arrived without a "
+                "length to check it against"
+            )
+            return
+        else:
+            # A length that will not parse, or parses negative, says the framing
+            # cannot be trusted, which is the same conclusion.
             try:
                 expected = int(declared)
             except ValueError:

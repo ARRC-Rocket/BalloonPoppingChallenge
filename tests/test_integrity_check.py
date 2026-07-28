@@ -78,14 +78,32 @@ class _IntegrityHelpers:
     class _Response:
         """Minimal stand-in for the urlopen context manager."""
 
-        def __init__(self, payload, declared=None, status=200):
+        def __init__(
+            self,
+            payload,
+            declared=None,
+            status=200,
+            url=None,
+            chunked=False,
+            headers=None,
+        ):
             self._payload = payload
-            # Defaults to 200 because that is the only status the check accepts;
-            # every other case has to opt in.
+            # Defaults are the shape of a healthy response, so every other case
+            # has to opt in rather than be reached by omission.
             self.status = status
-            self.headers = {
-                "Content-Length": str(len(payload) if declared is None else declared)
-            }
+            self.chunked = chunked
+            self._url = utils.INTEGRITY_CHECK_URL if url is None else url
+            if headers is not None:
+                self.headers = headers
+            else:
+                self.headers = {
+                    "Content-Length": str(
+                        len(payload) if declared is None else declared
+                    )
+                }
+
+        def geturl(self):
+            return self._url
 
         def __enter__(self):
             return self
@@ -345,6 +363,79 @@ class TestOnlyAFull200Counts(_IntegrityHelpers, unittest.TestCase):
         said = self._pack_with(b"# actually different\n", status=200)
 
         self.assertIn(utils.INTEGRITY_MISMATCH_MESSAGE, said)
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestTheBodyMustBeDelimited(_IntegrityHelpers, unittest.TestCase):
+    """Completeness comes from the framing, and only two kinds carry it.
+
+    A chunked body ends at a terminator http.client validates. A declared
+    length can be compared against what arrived. A response with neither is
+    delimited by the connection closing, and RFC 9112 says such a body cannot
+    be told apart from one cut short: read() returns whatever turned up and
+    nothing raises.
+    """
+
+    def test_a_close_delimited_partial_body_is_not_a_mismatch(self):
+        official = self._local_bytes()
+        response = self._Response(official[: len(official) // 2], headers={})
+
+        said = self._pack_and_capture(response)
+
+        self.assertIn("without a length", said)
+        self.assertNotIn(utils.INTEGRITY_MISMATCH_MESSAGE, said)
+
+    def test_a_chunked_response_needs_no_declared_length(self):
+        # The control. Refusing everything without a Content-Length would pass
+        # the case above while breaking a perfectly good chunked transfer.
+        response = self._Response(
+            self._local_bytes(), chunked=True, headers={"Transfer-Encoding": "chunked"}
+        )
+
+        said = self._pack_and_capture(response)
+
+        self.assertNotIn(utils.INTEGRITY_MISMATCH_MESSAGE, said)
+        self.assertNotIn("without a length", said)
+
+    def test_a_chunked_response_that_differs_still_reports_a_mismatch(self):
+        response = self._Response(
+            b"# actually different\n",
+            chunked=True,
+            headers={"Transfer-Encoding": "chunked"},
+        )
+
+        self.assertIn(
+            utils.INTEGRITY_MISMATCH_MESSAGE, self._pack_and_capture(response)
+        )
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestTheResponseMustComeFromTheRightPlace(_IntegrityHelpers, unittest.TestCase):
+    """urlopen follows redirects, so a 200 is not proof of origin."""
+
+    def test_a_redirect_to_somewhere_else_is_not_a_mismatch(self):
+        response = self._Response(
+            b"<html>sign in to your network</html>",
+            url="https://captive.example.invalid/login",
+        )
+
+        said = self._pack_and_capture(response)
+
+        self.assertIn("redirected to", said)
+        self.assertNotIn(utils.INTEGRITY_MISMATCH_MESSAGE, said)
+
+    def test_a_coded_body_is_not_a_mismatch(self):
+        # The client asks for identity and cannot decode anything else, so a
+        # coded body would be hashed in its coded form.
+        response = self._Response(
+            b"\x1f\x8b\x08 not really gzip",
+            headers={"Content-Length": "20", "Content-Encoding": "gzip"},
+        )
+
+        said = self._pack_and_capture(response)
+
+        self.assertIn("Content-Encoding", said)
+        self.assertNotIn(utils.INTEGRITY_MISMATCH_MESSAGE, said)
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
