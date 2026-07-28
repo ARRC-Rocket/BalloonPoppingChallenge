@@ -50,10 +50,47 @@ class TestSegmentDistanceSquaredBatch(unittest.TestCase):
         result = self._distance_squared([0, 0, 0], [0, 0, 0], [[-1, 5, 0]], [[1, 5, 0]])
         np.testing.assert_allclose(result, [25.0], atol=1e-9)
 
+    def test_degenerate_segment_a_clamps_to_each_end_of_b(self):
+        """The clip in that branch, which the case above cannot reach.
+
+        Its point projects to the middle of B, so the clip has nothing to do
+        and deleting it leaves the answer at 25. Measured: it survived.
+
+        These two project outside B in each direction, where an unclipped
+        projection walks along the infinite line to the point itself and
+        returns zero.
+        """
+        beyond_the_end = self._distance_squared(
+            [5, 0, 0], [5, 0, 0], [[0, 0, 0]], [[1, 0, 0]]
+        )
+        np.testing.assert_allclose(beyond_the_end, [16.0], atol=1e-9)
+
+        before_the_start = self._distance_squared(
+            [-4, 0, 0], [-4, 0, 0], [[0, 0, 0]], [[1, 0, 0]]
+        )
+        np.testing.assert_allclose(before_the_start, [16.0], atol=1e-9)
+
     def test_degenerate_segment_b_is_a_point(self):
         # B collapses to (0, 4, 0); nearest point on A is the origin -> 16.
         result = self._distance_squared([-1, 0, 0], [1, 0, 0], [[0, 4, 0]], [[0, 4, 0]])
         np.testing.assert_allclose(result, [16.0], atol=1e-9)
+
+    def test_degenerate_segment_b_clamps_to_each_end_of_a(self):
+        """The same gap on the other side, and it survived for the same reason.
+
+        The case above puts B's point opposite the middle of A. Both of these
+        put it past an end, so the projection has to be clamped back onto the
+        segment rather than run off along the line.
+        """
+        beyond_the_end = self._distance_squared(
+            [0, 0, 0], [1, 0, 0], [[5, 0, 0]], [[5, 0, 0]]
+        )
+        np.testing.assert_allclose(beyond_the_end, [16.0], atol=1e-9)
+
+        before_the_start = self._distance_squared(
+            [0, 0, 0], [1, 0, 0], [[-4, 0, 0]], [[-4, 0, 0]]
+        )
+        np.testing.assert_allclose(before_the_start, [16.0], atol=1e-9)
 
     def test_colinear_segments_clamp_to_endpoints(self):
         # Colinear but disjoint along x; closest points are the facing
