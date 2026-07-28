@@ -18,7 +18,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-	"ruff>0.9",
+	# Exact, not a floor. CI pins 0.15.20 and a different release disagrees about
+	# formatting, so a floating dev dependency means `make format` and CI can
+	# reach opposite conclusions on the same file.
+	"ruff==0.15.20",
 	"pytest>=8.0",
 	"pytest-cov>=5.0",
 ]
@@ -31,3 +34,8 @@ activerocketpy = { path = "ActiveRocketPy", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["BalloonPoppingGymEnv"]
+
+[tool.ruff]
+# Ruff's own guard for this: it exits with an error rather than silently applying a
+# different release's rules. Keep it in step with the CI pin and the dev extra.
+required-version = "==0.15.20"

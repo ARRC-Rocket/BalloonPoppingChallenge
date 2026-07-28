@@ -37,10 +37,10 @@ jobs:
         run: python -m pip install "ruff==0.15.20"
 
       - name: Lint
-        run: ruff check BalloonPoppingGymEnv/ tests/
+        run: ruff check BalloonPoppingGymEnv/ tests/ doc/examples/
 
       - name: Format check
-        run: ruff format --check BalloonPoppingGymEnv/ tests/
+        run: ruff format --check BalloonPoppingGymEnv/ tests/ doc/examples/
 
   test:
     name: Tests and coverage (Python ${{ matrix.python-version }})
