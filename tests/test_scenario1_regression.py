@@ -196,6 +196,14 @@ def post_launch_rocket_positions(positions):
     them would let a broken tail slip past the comparison).
     """
     positions = np.asarray(positions, dtype=float)
+    # The shape, before the finite check. Both runners slice rocket_states to
+    # its first three columns, so a state schema that lost one produces (T, 2)
+    # rather than raising, and the regenerator would write that as the new
+    # expected value. Same silent blessing the balloon helper refuses.
+    if positions.ndim != 2 or positions.shape[1] != 3 or positions.shape[0] == 0:
+        raise AssertionError(
+            f"rocket positions must have shape (T, 3), got {positions.shape}"
+        )
     finite_rows = np.isfinite(positions).all(axis=1)
     launched = np.flatnonzero(finite_rows)
     if launched.size == 0:
@@ -218,7 +226,25 @@ def downsample_balloon_positions(positions):
     held at their initial Monte Carlo position (not NaN), so no NaN masking is
     needed; the slice is purely a size reduction along the time axis. Returns
     ``(T, num_balloons, 3)``.
+
+    A non-finite value here means a diverged balloon flight, so it raises rather
+    than travelling into the comparison or, worse, into a regenerated baseline as
+    a bare ``NaN`` token. The rocket helper already refuses one; this did not.
+
+    The shape is checked as well, because a finite array is not necessarily a
+    well formed one. ``(T, N, 2)`` from a state schema that lost a column, or an
+    empty time or balloon axis, all pass the finite check and survive the slice
+    unchanged. In a comparison the shape mismatch would surface, but this same
+    helper feeds the *regenerator*, where a malformed array becomes the new
+    expected value and the mismatch disappears with it.
     """
+    positions = np.asarray(positions, dtype=float)
+    if positions.ndim != 3 or positions.shape[2] != 3 or 0 in positions.shape[:2]:
+        raise AssertionError(
+            f"balloon positions must have shape (T, N, 3), got {positions.shape}"
+        )
+    if not np.isfinite(positions).all():
+        raise AssertionError("balloon positions contain a non-finite value")
     return positions[::BALLOON_TIME_STRIDE, ::BALLOON_INDEX_STRIDE, :]
 
 
