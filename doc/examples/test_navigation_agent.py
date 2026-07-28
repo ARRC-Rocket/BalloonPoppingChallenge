@@ -21,6 +21,7 @@ agent = NavigationAgent(given_parameters, **agent_kwargs)
 # use seed=None to randomize environment
 observation, info = env.reset(seed=scenario_parameters["scenario"]["random_seed"])
 terminated = False
+truncated = False
 
 attitude_gt = np.full((4, 1), np.nan)
 attitude_est = np.full((4, 1), np.nan)
@@ -28,9 +29,9 @@ velocity_gt = np.full((3, 1), np.nan)
 velocity_est = np.full((3, 1), np.nan)
 time = np.full(1, np.nan)
 
-while not terminated:
+while not (terminated or truncated):
     action = agent.get_action(observation)
-    observation, reward, terminated, _, info = env.step(action)
+    observation, reward, terminated, truncated, info = env.step(action)
 
     time = np.append(time, observation["simulation_time"])
     # ground truth velocity
