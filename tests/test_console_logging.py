@@ -15,9 +15,12 @@ logging.
 """
 
 import ast
+import importlib.util
 import io
 import json
 import logging
+import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -41,13 +44,27 @@ class _LoggingStateMixin:
     """Put the package logger back exactly as it was, handlers included."""
 
     def preserve_logging_state(self):
+        """Detach what was there, rather than snapshot and overwrite.
+
+        Putting a saved list back is not a restoration if something closed one
+        of its handlers in the meantime, and that is exactly what
+        ``configure_console_logging`` does to a console handler it is replacing.
+        A process that had already configured console logging would get its
+        handler back closed. Detaching first means the helper only ever sees
+        handlers this test installed.
+        """
         package_logger = logging.getLogger(PACKAGE_LOGGER_NAME)
         handlers = list(package_logger.handlers)
         level = package_logger.level
         propagate = package_logger.propagate
+        for handler in handlers:
+            package_logger.removeHandler(handler)
 
         def restore():
-            package_logger.handlers[:] = handlers
+            for existing in list(package_logger.handlers):
+                package_logger.removeHandler(existing)
+            for handler in handlers:
+                package_logger.addHandler(handler)
             package_logger.setLevel(level)
             package_logger.propagate = propagate
 
@@ -59,6 +76,9 @@ class TestTheConsoleFormat(_LoggingStateMixin, unittest.TestCase):
     def setUp(self):
         self.package_logger = self.preserve_logging_state()
         self.stream = io.StringIO()
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.directory = directory.name
 
     def test_a_record_arrives_as_its_bare_message(self):
         # basicConfig's default is levelname:name:message, which turned
@@ -162,31 +182,39 @@ class TestTheConsoleFormat(_LoggingStateMixin, unittest.TestCase):
         self.assertEqual(self.stream.getvalue(), "Total reward: 7\n")
         self.assertEqual(host_stream.getvalue(), "")
 
-    def test_nothing_is_printed_until_an_entry_point_asks(self):
-        """The library default, and the reason the examples must call this.
+    def test_importing_the_package_configures_no_logging(self):
+        """The library default, in a process that has done nothing else.
 
-        Emit a real INFO record with no handler configured and capture stdout, so
-        this fails if the package ever starts configuring logging for its
-        process. An earlier version asserted no logs at WARNING while emitting
-        INFO, which could not fail either way.
+        The previous version of this cleared the package and root handlers and
+        then checked that nothing printed, which removed the very configuration
+        it was meant to detect: adding a configure call at import time left it
+        passing. A fresh interpreter is the only place this contract is
+        observable.
         """
-        self.package_logger.handlers[:] = []
-        self.package_logger.setLevel(logging.NOTSET)
-        self.package_logger.propagate = True
-        root = logging.getLogger()
-        previous_handlers, previous_level = list(root.handlers), root.level
-        self.addCleanup(root.setLevel, previous_level)
-        self.addCleanup(root.handlers.__setitem__, slice(None), previous_handlers)
-        root.handlers[:] = []
-        root.setLevel(logging.WARNING)
+        report = Path(self.directory) / "state.json"
+        code = (
+            "import json, logging, sys\n"
+            "import BalloonPoppingGymEnv.evaluation.evaluate  # noqa: F401\n"
+            "logger = logging.getLogger('BalloonPoppingGymEnv')\n"
+            "logger.info('a record no entry point asked to see')\n"
+            f"open({str(report)!r}, 'w').write(json.dumps("
+            "{'handlers': [type(h).__name__ for h in logger.handlers],"
+            " 'root_handlers': [type(h).__name__ for h in logging.getLogger().handlers]}))\n"
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
 
-        captured = io.StringIO()
-        with redirect_stdout(captured):
-            logging.getLogger(f"{PACKAGE_LOGGER_NAME}.evaluation.evaluate").info(
-                "Total reward: 7"
-            )
-
-        self.assertEqual(captured.getvalue(), "")
+        self.assertEqual(completed.returncode, 0, completed.stderr[-2000:])
+        self.assertEqual(completed.stdout, "", "importing the package wrote to stdout")
+        self.assertEqual(completed.stderr, "", "importing the package wrote to stderr")
+        state = json.loads(report.read_text(encoding="utf-8"))
+        self.assertEqual(state["handlers"], [], "import installed a handler")
+        self.assertEqual(state["root_handlers"], [])
 
 
 class TestTheCommandLine(_LoggingStateMixin, unittest.TestCase):
@@ -265,6 +293,10 @@ class TestTheCommandLine(_LoggingStateMixin, unittest.TestCase):
 class TestTheEntryPointsConfigureIt(unittest.TestCase):
     """Every caller of evaluate_scenario, not only the CLI.
 
+    The notebook is still read with ``ast``, because a notebook cell cannot be
+    executed here without running the scenario it configures. The example is
+    executed, which is strictly stronger.
+
     evaluate_scenario logs its completion and score lines, so a caller that does
     not configure logging shows nothing. That is what happened to the notebook
     and to run_for_evaluation when the prints became logger calls.
@@ -283,21 +315,30 @@ class TestTheEntryPointsConfigureIt(unittest.TestCase):
         ]
 
     def test_the_example_configures_logging_before_evaluating(self):
-        tree = ast.parse(EXAMPLE_SCRIPT.read_text(encoding="utf-8"))
-        function = next(
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.FunctionDef) and node.name == "run_for_evaluation"
-        )
-        names = self._call_names(function)
+        """Run it, rather than read it.
 
-        self.assertIn("configure_console_logging", names)
-        self.assertIn("evaluate_scenario", names)
-        self.assertLess(
-            names.index("configure_console_logging"),
-            names.index("evaluate_scenario"),
-            "configuring after the run prints nothing",
+        Reading the AST proves a call node exists and is lexically first. It
+        cannot tell that from a call under ``if False:``. Executing the function
+        with both ends replaced records what actually happens.
+        """
+        spec = importlib.util.spec_from_file_location(
+            "_run_env_agent_under_test", EXAMPLE_SCRIPT
         )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        order = []
+        with mock.patch(
+            "BalloonPoppingGymEnv.console_logging.configure_console_logging",
+            side_effect=lambda *a, **k: order.append("configure"),
+        ):
+            with mock.patch(
+                "BalloonPoppingGymEnv.evaluation.evaluate.evaluate_scenario",
+                side_effect=lambda *a, **k: order.append("evaluate"),
+            ):
+                module.run_for_evaluation()
+
+        self.assertEqual(order, ["configure", "evaluate"])
 
     def test_the_notebook_configures_logging_before_evaluating(self):
         notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
