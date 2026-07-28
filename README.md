@@ -71,10 +71,12 @@ python -m pip install -r requirements.txt
 cd BalloonPoppingChallenge
 git pull origin main
 git submodule update --init --recursive
-uv sync   # re-sync the environment (pip users: python -m pip install -r requirements.txt)
+uv sync --locked   # pip users: python -m pip install -r requirements.txt
 ```
 
 > `--init --recursive` checks out the ActiveRocketPy commit this release was tested and locked against. Adding `--remote` instead would move the submodule to whatever is newest on its own branch, which is how a checkout ends up running a simulator the pinned lockfile never saw. That mismatch is quiet until it is not: an ActiveRocketPy ahead of the pin renamed part of the actuator API, and the result was `AttributeError: 'Rocket' object has no attribute 'add_tvc'` partway through a run.
+>
+> `--locked` for the same reason. A plain `uv sync` rewrites `uv.lock` when it no longer matches, which turns a drifted checkout into a working one that is no longer the released environment. `--locked` stops and says so instead. On a clean release checkout the two behave identically.
 
 ## Examples
 
