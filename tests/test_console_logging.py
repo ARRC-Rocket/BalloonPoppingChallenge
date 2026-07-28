@@ -740,7 +740,7 @@ class TestTheRecordsProductionActuallyEmits(unittest.TestCase):
         self.assertEqual(steps, env.num_timesteps - 1)
         self.assertEqual(
             [record.getMessage() for record in caught.records],
-            ["Terminated: Reached max time"],
+            ["Truncated: Reached max time"],
         )
         for record in caught.records:
             self.assertEqual(record.levelno, logging.INFO)
