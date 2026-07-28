@@ -26,9 +26,21 @@ import time is available before that. What is asserted below is the narrower
 and still worthwhile thing: the data the environment hands out is a copy, so
 holding onto it does not hold onto the environment.
 
-Running the agent somewhere else would not close that either, because the
-evaluator runs on the competitor's own machine. What covers it is checking the
-submission afterwards, which is what ``scripts/verify_submission.py`` is for.
+Two separate limits, which are worth not running together. Running the agent in
+another process, or a suitably constrained container, would close this
+particular path: the evaluator's frame and its ``env`` object would no longer be
+in the agent's interpreter to reach for. What it would not do is make a result
+produced on the competitor's own machine tamper resistant, since the machine
+owner still controls the parent process, the runtime, the filesystem and the
+file that gets uploaded.
+
+For that second one the answer is checking the submission afterwards. #97
+proposes a script for it, which is not on this branch. It is worth being exact
+about the size of that too: it regenerates the balloons from the shipped
+scenario and asks whether the claimed pops were anywhere the rocket says it
+went, so it catches this no-launch forged score and several related edits. It
+does not verify the rocket trajectory itself, which stays the competitor's
+claim.
 """
 
 import copy
@@ -220,33 +232,61 @@ class TestWhatTheEnvironmentHandsOutIsDetached(unittest.TestCase):
 _MUTABLE_CONTAINERS = (list, dict, set, bytearray)
 
 
-def _shared_objects(given, scenario, path=""):
-    """Paths where the two trees hold the same mutable object.
+def _reachable_mutables(root):
+    """Every mutable container reachable from ``root``, by identity and path.
 
-    Identity is tested before descending. The earlier version descended first,
-    which left two ways through: a shared list was never opened, so a shallow
-    copy that gave the outer list a new identity hid everything under it, and a
-    shared dict took the recursion branch and was never reported at all, so a
-    shared dict of plain numbers came back clean.
+    Iterative and with a ``seen`` set, so a structure that refers to itself
+    terminates instead of recursing until the stack runs out. ``deepcopy`` keeps
+    a memo for exactly that reason, and a helper written to check ``deepcopy``
+    should survive the same input.
     """
-    where = path or "<root>"
-    if given is scenario and isinstance(given, _MUTABLE_CONTAINERS):
-        return [where]
+    found = {}
+    seen = set()
+    stack = [(root, "<root>")]
+    while stack:
+        value, path = stack.pop()
+        if id(value) in seen:
+            continue
+        seen.add(id(value))
+        if isinstance(value, _MUTABLE_CONTAINERS):
+            found[id(value)] = path
+        if isinstance(value, dict):
+            stack.extend((child, f"{path}.{key}") for key, child in value.items())
+        elif isinstance(value, (list, tuple)):
+            stack.extend(
+                (child, f"{path}[{index}]") for index, child in enumerate(value)
+            )
+    return found
 
-    if isinstance(given, dict) and isinstance(scenario, dict):
+
+def _shared_objects(given, scenario):
+    """Paths in ``given`` holding a mutable object that ``scenario`` also holds.
+
+    Both trees are walked in full and compared by identity, rather than walking
+    them together and comparing matching positions. Walking together looked
+    equivalent and was not: it only ever compared a key against the same key and
+    an index against the same index, so it saw nothing when the same object sat
+    under a different key, at a shifted index, or past the end of the shorter
+    side of a ``zip``. Measured, all three came back clean:
+
         shared = []
-        for key in given:
-            if key in scenario:
-                shared += _shared_objects(given[key], scenario[key], f"{where}.{key}")
-        return shared
+        _shared_objects({"a": shared}, {"b": shared})          -> []
+        _shared_objects({"a": [None, shared]}, {"a": [shared]}) -> []
+        _shared_objects({"a": [1, shared]}, {"a": [1]})        -> []
 
-    if isinstance(given, (list, tuple)) and isinstance(scenario, (list, tuple)):
-        shared = []
-        for index, (mine, theirs) in enumerate(zip(given, scenario)):
-            shared += _shared_objects(mine, theirs, f"{where}[{index}]")
-        return shared
+    Which is the whole property this is for. The point is not that a particular
+    key was copied, it is that nothing the agent is handed is an object the
+    environment still reads.
 
-    return []
+    A tuple is descended into rather than reported, since holding the same tuple
+    is harmless and holding a list inside one is not.
+    """
+    theirs = _reachable_mutables(scenario)
+    return sorted(
+        path
+        for identity, path in _reachable_mutables(given).items()
+        if identity in theirs
+    )
 
 
 class TestTheWalkerFindsSharingItIsPointedAt(unittest.TestCase):
@@ -280,6 +320,48 @@ class TestTheWalkerFindsSharingItIsPointedAt(unittest.TestCase):
         found = _shared_objects({"a": list(original)}, {"a": original})
 
         self.assertEqual(found, ["<root>.a[0]", "<root>.a[1]"])
+
+    def test_sharing_under_a_different_key_is_reported(self):
+        """Walking the two trees together never compared these at all.
+
+        The property is that nothing handed out is an object the environment
+        still reads, not that a particular key was copied.
+        """
+        shared = [1, 2]
+
+        self.assertEqual(_shared_objects({"a": shared}, {"b": shared}), ["<root>.a"])
+
+    def test_sharing_at_a_shifted_index_is_reported(self):
+        shared = [1, 2]
+
+        found = _shared_objects({"a": [None, shared]}, {"a": [shared]})
+
+        self.assertEqual(found, ["<root>.a[1]"])
+
+    def test_sharing_past_the_shorter_sequence_is_reported(self):
+        """zip() stopped at the shorter side and never looked at the rest.
+
+        Both sides have to actually hold the object for this to be sharing.
+        ``{"a": [1, shared]}`` against ``{"a": [1]}`` is not a case: only one
+        side holds it, and an empty result there is the right answer.
+        """
+        shared = [1, 2]
+
+        found = _shared_objects({"a": [0, 0, shared]}, {"a": [shared]})
+
+        self.assertEqual(found, ["<root>.a[2]"])
+
+    def test_a_structure_that_refers_to_itself_terminates(self):
+        """It recursed until the stack ran out.
+
+        No scenario YAML does this today, and a helper written to check
+        ``deepcopy`` should survive what ``deepcopy`` itself handles.
+        """
+        original = []
+        original.append(original)
+
+        self.assertEqual(_shared_objects(copy.deepcopy(original), original), [])
+        self.assertEqual(_shared_objects(original, original), ["<root>"])
 
     def test_a_deep_copy_is_reported_clean(self):
         """Or reporting everything would pass the tests above."""
