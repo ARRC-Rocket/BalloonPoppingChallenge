@@ -1,0 +1,35 @@
+# Categories for the release notes GitHub generates from merged pull requests.
+#
+# The generator already writes each entry as "<title> by @author in #<pr>", plus a
+# New Contributors section and a compare link, which is where the contributor
+# names come from. This file only groups those entries by label, the way
+# Kubernetes groups its notes under "Changes by Kind".
+#
+# Labels drive the grouping, so a pull request lands in "Other Changes" unless it
+# carries one. Everything below except breaking-change is a label this repository
+# already has.
+changelog:
+  exclude:
+    labels:
+      - duplicate
+      - invalid
+      - question
+      - wontfix
+  categories:
+    # Competitors' agents break when the observation space, the action space, the
+    # scoring or the submission format changes, so this goes first and on its own.
+    - title: Breaking Changes
+      labels:
+        - breaking-change
+    - title: Features
+      labels:
+        - enhancement
+    - title: Bug Fixes
+      labels:
+        - bug
+    - title: Documentation
+      labels:
+        - documentation
+    - title: Other Changes
+      labels:
+        - "*"

@@ -1,0 +1,14 @@
+# Machine-readable form of the BibTeX entry in README.md, so GitHub can render a
+# "Cite this repository" button and reference managers can import it directly.
+# Keep the two in step: this file is not a second source of truth.
+cff-version: 1.2.0
+message: If you run Balloon Popping Challenge in your research, please cite it as below.
+title: "Balloon Popping Challenge: A 6-DoF Rocket GNC Simulation Gymnasium Environment"
+type: software
+authors:
+  - family-names: Chen
+    given-names: Zuo-Ren
+  - name: Advanced Rocket Research Center (ARRC)
+repository-code: https://github.com/ARRC-Rocket/BalloonPoppingChallenge
+url: https://github.com/ARRC-Rocket/BalloonPoppingChallenge
+license: MIT
