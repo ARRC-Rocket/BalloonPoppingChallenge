@@ -89,6 +89,7 @@ class RunResult:
     positions: np.ndarray
     popped: int
     pop_step: np.ndarray
+    status_history: np.ndarray
     terminated: bool
     truncated: bool
 
@@ -115,13 +116,26 @@ def run_scenario_0():
         [step["balloon_status"] for step in env.trajectories], dtype=int
     )
     popped_now = status_history == 2
+    has_popped = popped_now.any(axis=0)
+    # A simulation step, not a row number. ``step()`` increments ``current_step``
+    # before it appends the record and ``reset()`` appends nothing, so row i is
+    # step i+1. Read the step back out of the record's own clock rather than
+    # writing that offset down here, so this keeps meaning what its name says if
+    # the logging ever starts somewhere else. The same offset is already carried
+    # by scenario 1's release timing and by the submission checker.
+    record_step = np.rint(
+        np.asarray([step["time"] for step in env.trajectories], dtype=float)
+        / scenario_params["simulation"]["time_step"]
+    ).astype(int)
     # -1 for a balloon that never popped, so a run that pops fewer is a visible
     # difference rather than a shorter list.
-    pop_step = np.where(popped_now.any(axis=0), popped_now.argmax(axis=0), -1)
+    pop_step = np.full(status_history.shape[1], -1, dtype=int)
+    pop_step[has_popped] = record_step[popped_now.argmax(axis=0)[has_popped]]
     return RunResult(
         positions=rocket_states[:, :3],
         popped=int(env._popped_count),
         pop_step=pop_step,
+        status_history=status_history,
         terminated=bool(terminated),
         truncated=bool(truncated),
     )
@@ -182,6 +196,14 @@ class TestScenario0Regression(unittest.TestCase):
         Compared exactly rather than with a tolerance. These are step indices
         into a deterministic run, so a single step of difference is a real
         change to when a balloon was reached and worth looking at.
+
+        Exact means exact on the platform the baseline was taken on. Two runs on
+        one machine are bit identical and both CI Pythons agree, but a pop step
+        is the first sample inside a radius, so a different libm or a different
+        CPU path could in principle move one by a step. This is a golden master
+        for the CI reference platform, not a claim about arbitrary hardware; if
+        it ever fires on a new platform, check the neighbouring steps before
+        concluding the geometry changed.
         """
         expected = np.asarray(self.baseline["pop_step"], dtype=int)
         actual = self.run_result.pop_step
@@ -200,14 +222,39 @@ class TestScenario0Regression(unittest.TestCase):
         once, the exact comparison would keep passing forever. Ten static
         balloons stacked 40 m apart cannot all be reached in one step, so the
         steps have to differ.
+
+        All ten distinct, rather than merely more than one. "More than one"
+        rejects only the single mutation where every balloon pops together;
+        nine on one step and one later would still pass, and so would a run
+        that took them five at a time. The balloons are 40 m apart and the
+        rocket covers about 1.4 m in a step, so a step that reaches two of them
+        is not a tighter tolerance, it is a different simulation.
         """
         pop_step = self.run_result.pop_step
 
         self.assertTrue((pop_step >= 0).all(), "a balloon never popped")
-        self.assertGreater(
+        self.assertEqual(
             len(np.unique(pop_step)),
-            1,
-            "every balloon popped on the same step, which the geometry forbids",
+            EXPECTED_POPPED_COUNT,
+            "two balloons popped on the same step, which 40 m of spacing forbids",
+        )
+
+    def test_no_balloon_goes_back_to_unpopped(self):
+        """Only the first 2 is compared above, so the rest of the history is free.
+
+        ``pop_step`` reads the first step each balloon shows as popped and the
+        count reads the end state, so a status that went 1 -> 2 -> 1 -> 2 leaves
+        both of them unchanged and every other test here passing. Scenario 1
+        already pins this; the same hole was open on this side.
+        """
+        history = self.run_result.status_history
+
+        backwards = np.argwhere(np.diff(history, axis=0) < 0)
+        self.assertEqual(
+            backwards.tolist()[:5],
+            [],
+            f"{len(backwards)} balloon status transitions go backwards, first "
+            f"few at (step, balloon) {backwards.tolist()[:5]}",
         )
 
     def test_the_episode_ends_because_the_flight_ended(self):
@@ -216,6 +263,13 @@ class TestScenario0Regression(unittest.TestCase):
         Both flags come back from ``step`` and were both discarded, so swapping
         them was invisible. Which one is set decides whether an agent should
         bootstrap from the final state.
+
+        This discriminates because the two flags now carry different causes:
+        ``terminated`` is the flight finishing and ``truncated`` is running out
+        of precomputed horizon. While ``step`` still reported the clock as
+        termination, these two assertions were also satisfied by an episode that
+        simply ran out of time, and would not have established what the name
+        says.
         """
         self.assertTrue(self.run_result.terminated)
         self.assertFalse(self.run_result.truncated)
