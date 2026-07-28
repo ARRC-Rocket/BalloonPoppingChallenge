@@ -13,7 +13,7 @@ Clone the repository and initialize the `ActiveRocketPy` submodule:
 ```shell
 git clone https://github.com/ARRC-Rocket/BalloonPoppingChallenge.git
 cd BalloonPoppingChallenge
-git submodule update --init
+git submodule update --init --recursive --checkout
 ```
 
 Then set up the environment with **uv** (recommended) or with **pip**.
@@ -69,14 +69,21 @@ python -m pip install -r requirements.txt
 
 ```shell
 cd BalloonPoppingChallenge
-git pull origin main
-git submodule update --init --recursive
+git switch main
+git pull --ff-only origin main
+git submodule update --init --recursive --checkout
 uv sync --locked   # pip users: python -m pip install -r requirements.txt
 ```
 
-> `--init --recursive` checks out the ActiveRocketPy commit this release was tested and locked against. Adding `--remote` instead would move the submodule to whatever is newest on its own branch, which is how a checkout ends up running a simulator the pinned lockfile never saw. That mismatch is quiet until it is not: an ActiveRocketPy ahead of the pin renamed part of the actuator API, and the result was `AttributeError: 'Rocket' object has no attribute 'add_tvc'` partway through a run.
+> `git pull origin main` on its own merges main into whatever branch you happen to be on, so the branch is named and `--ff-only` refuses anything that is not a straight fast-forward rather than making a merge commit out of an update.
 >
-> `--locked` for the same reason. A plain `uv sync` rewrites `uv.lock` when it no longer matches, which turns a drifted checkout into a working one that is no longer the released environment. `--locked` stops and says so instead. On a clean release checkout the two behave identically.
+> `--checkout` puts ActiveRocketPy back on the commit this repository records. It is the default only while nothing sets `submodule.ActiveRocketPy.update` locally; with that set to `merge` or `rebase`, `--init --recursive` leaves the submodule wherever it already was. Measured: with `update = merge` the submodule stayed on the newer commit and the recorded one was merged into it.
+>
+> Do not add `--remote`. That follows ActiveRocketPy's own branch instead of the recorded commit, and the mismatch is quiet until it is not: an ActiveRocketPy ahead of the pin renamed part of the actuator API, and the run stopped with `AttributeError` partway through.
+>
+> The lockfile does not catch this. ActiveRocketPy is an editable path dependency, so `uv.lock` records its version and its dependencies, not its source commit; a source-only change to the simulator leaves `uv lock --check` green. The recorded submodule commit is the only thing pinning the simulator itself.
+>
+> `--locked` covers the other half. A plain `uv sync` rewrites `uv.lock` when it no longer matches, which turns a drifted checkout into a working one that is no longer the released environment. `--locked` stops and says so instead. On a clean release checkout the two behave identically.
 
 ## Examples
 
