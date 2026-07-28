@@ -165,7 +165,13 @@ def downsample_balloon_positions(positions):
     held at their initial Monte Carlo position (not NaN), so no NaN masking is
     needed; the slice is purely a size reduction along the time axis. Returns
     ``(T, num_balloons, 3)``.
+
+    A non-finite value here means a diverged balloon flight, so it raises rather
+    than travelling into the comparison or, worse, into a regenerated baseline as
+    a bare ``NaN`` token. The rocket helper already refuses one; this did not.
     """
+    if not np.isfinite(positions).all():
+        raise AssertionError("balloon positions contain a non-finite value")
     return positions[::BALLOON_TIME_STRIDE, ::BALLOON_INDEX_STRIDE, :]
 
 

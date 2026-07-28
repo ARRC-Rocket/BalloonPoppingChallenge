@@ -9,10 +9,11 @@ The baseline is tied to the current repository + ActiveRocketPy submodule state,
 so it must be regenerated whenever the rocket physics is intentionally updated.
 """
 
-import json
 from pathlib import Path
 
 from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
+
+from tests.baselines.baseline_io import write_baseline
 
 from tests.test_scenario0_regression import (
     AGENT_KWARGS,
@@ -38,8 +39,7 @@ def main():
         "popped_count": int(popped),
         "rocket_position_downsampled": post_launch_positions(positions).tolist(),
     }
-    with open(OUTPUT_PATH, "w", encoding="utf-8") as output_file:
-        json.dump(baseline, output_file, indent=2)
+    write_baseline(baseline, OUTPUT_PATH)
     print(
         f"wrote {OUTPUT_PATH} "
         f"(steps={baseline['num_steps_full']}, popped={baseline['popped_count']})"

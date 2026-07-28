@@ -11,10 +11,11 @@ submodule state, so it must be regenerated whenever the rocket or balloon
 physics is intentionally updated.
 """
 
-import json
 from pathlib import Path
 
 from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
+
+from tests.baselines.baseline_io import write_baseline
 
 from tests.test_scenario1_regression import (
     AGENT_KWARGS,
@@ -50,8 +51,7 @@ def main():
             balloon_positions
         ).tolist(),
     }
-    with open(OUTPUT_PATH, "w", encoding="utf-8") as output_file:
-        json.dump(baseline, output_file, indent=2)
+    write_baseline(baseline, OUTPUT_PATH)
     rocket_rows = len(baseline["rocket_position_downsampled"])
     balloon_shape = (
         len(baseline["balloon_position_downsampled"]),
