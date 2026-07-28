@@ -238,7 +238,56 @@ class TestScenario1Regression(unittest.TestCase):
             f"{label} position exceeds max({POSITION_ATOL} m, "
             f"{POSITION_RTOL:.0%} of |expected|) by {worst:.4g} m",
         )
+        # Per-coordinate alone is not enough: three axes each 0.99 m off all pass
+        # a 1 m floor while the point has actually moved 1.71 m, which is more than
+        # the 1.5 m balloon radius the score depends on. Bound the displacement
+        # vector as well, so the two together limit both a single axis relative to
+        # its own magnitude and the total error.
+        vector_error = np.linalg.norm(actual - expected, axis=-1)
+        vector_allowed = np.maximum(
+            POSITION_ATOL, POSITION_RTOL * np.linalg.norm(expected, axis=-1)
+        )
+        worst_vector = float(np.max(vector_error - vector_allowed))
+        self.assertLessEqual(
+            worst_vector,
+            0.0,
+            f"{label} 3D position error exceeds max({POSITION_ATOL} m, "
+            f"{POSITION_RTOL:.0%} of |expected|) by {worst_vector:.4g} m",
+        )
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheToleranceShape(unittest.TestCase):
+    """The per-coordinate floor alone allows more than the balloon radius.
+
+    Pure arithmetic on the helper, so it needs no simulation stack and runs
+    everywhere. Three axes each just inside a 1 m floor put the point 1.71 m away,
+    and scenario 1's balloon radius is 1.5 m, so the score could move while the
+    oracle stayed quiet.
+    """
+
+    def _helper(self):
+        case = TestScenario1Regression("test_popped_count_matches_baseline")
+        return case._assert_within_floor
+
+    def test_three_axes_just_inside_the_floor_are_rejected(self):
+        expected = np.zeros((1, 3))
+        actual = np.full((1, 3), 0.99)
+
+        # Each coordinate is within max(1.0, 3% of 0) = 1.0 m ...
+        np.testing.assert_array_less(np.abs(actual - expected), POSITION_ATOL)
+        # ... while the point has moved further than a balloon radius.
+        self.assertGreater(float(np.linalg.norm(actual - expected)), 1.5)
+
+        with self.assertRaises(AssertionError):
+            self._helper()(actual, expected, "test")
+
+    def test_a_displacement_inside_the_floor_is_accepted(self):
+        expected = np.zeros((1, 3))
+        actual = np.full((1, 3), 0.5)
+        self.assertLess(float(np.linalg.norm(actual - expected)), POSITION_ATOL)
+
+        self._helper()(actual, expected, "test")

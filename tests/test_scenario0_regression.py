@@ -159,6 +159,22 @@ class TestScenario0Regression(unittest.TestCase):
             f"rocket position exceeds max({POSITION_ATOL} m, "
             f"{POSITION_RTOL:.0%} of |expected|) by {worst:.4g} m",
         )
+        # Per-coordinate alone is not enough: three axes each 0.99 m off all pass
+        # a 1 m floor while the point has actually moved 1.71 m, which is more than
+        # the 1.5 m balloon radius the score depends on. Bound the displacement
+        # vector as well, so the two together limit both a single axis relative to
+        # its own magnitude and the total error.
+        vector_error = np.linalg.norm(actual - expected, axis=-1)
+        vector_allowed = np.maximum(
+            POSITION_ATOL, POSITION_RTOL * np.linalg.norm(expected, axis=-1)
+        )
+        worst_vector = float(np.max(vector_error - vector_allowed))
+        self.assertLessEqual(
+            worst_vector,
+            0.0,
+            f"rocket 3D position error exceeds max({POSITION_ATOL} m, "
+            f"{POSITION_RTOL:.0%} of |expected|) by {worst_vector:.4g} m",
+        )
 
 
 if __name__ == "__main__":
