@@ -45,7 +45,8 @@ SLOW_TIME_CONSTANT = 0.10
 SETTLE_STEPS = 120
 
 Actuator = namedtuple(
-    "Actuator", "name time_constant_key rate_limit_key read command initial"
+    "Actuator",
+    "name time_constant_key rate_limit_key read read_public command initial",
 )
 
 
@@ -74,6 +75,7 @@ ACTUATORS = (
         "gimbal_time_constant",
         "gimbal_rate_limit",
         lambda rocket: rocket.thrust_vector_control.x,
+        lambda rocket: rocket.thrust_vector_control.gimbal_angle_x,
         lambda action: _set_vector(action, 0),
         0.0,
     ),
@@ -82,6 +84,7 @@ ACTUATORS = (
         "gimbal_time_constant",
         "gimbal_rate_limit",
         lambda rocket: rocket.thrust_vector_control.y,
+        lambda rocket: rocket.thrust_vector_control.gimbal_angle_y,
         lambda action: _set_vector(action, 1),
         0.0,
     ),
@@ -90,6 +93,7 @@ ACTUATORS = (
         "roll_torque_time_constant",
         "torque_rate_limit",
         lambda rocket: rocket.roll_control,
+        lambda rocket: rocket.roll_control.roll_torque,
         lambda action: _set_scalar(action, "roll"),
         0.0,
     ),
@@ -98,6 +102,7 @@ ACTUATORS = (
         "throttle_time_constant",
         "throttle_rate_limit",
         lambda rocket: rocket.throttle_control,
+        lambda rocket: rocket.throttle_control.throttle,
         lambda action: _set_scalar(action, "throttle"),
         1.0,
     ),
@@ -140,8 +145,21 @@ def _launched_env(**time_constants):
     return env, action, parameters
 
 
-def _drive(env, action, actuator, value, steps):
-    """Hold ``value`` on one actuator for ``steps`` steps, others left where they are."""
+def _drive(env, action, actuator, value, steps, test_case=None):
+    """Hold ``value`` on one actuator for ``steps`` steps, others left where they are.
+
+    Records the Flight-facing property, not the underlying ``actuator_output``.
+    Those are the same value through a passthrough today, but they are not the
+    same contract: the environment writes ``roll_torque``, ``throttle`` and
+    ``gimbal_angle_x/y``, and the equations of motion read those. A regression
+    confined to one of those getters leaves ``actuator_output`` filtering
+    correctly while the flight uses the wrong number. Measured: making
+    ``roll_torque`` return zero whenever a time constant is set passed all 10
+    tests here and all 61 in the suite.
+
+    When a test case is supplied the two are compared every step, so the
+    passthrough itself is pinned rather than assumed.
+    """
     outputs = []
     for _ in range(steps):
         held = copy.deepcopy(action)
@@ -149,7 +167,16 @@ def _drive(env, action, actuator, value, steps):
         _hold_current_commands(env, held)
         actuator.command(held)(value)
         env.step(held)
-        outputs.append(float(actuator.read(env._rocket_flight.rocket).actuator_output))
+        rocket = env._rocket_flight.rocket
+        public = float(actuator.read_public(rocket))
+        if test_case is not None:
+            test_case.assertAlmostEqual(
+                public,
+                float(actuator.read(rocket).actuator_output),
+                places=12,
+                msg=f"{actuator.name}: the flight-facing value left actuator_output",
+            )
+        outputs.append(public)
     return outputs
 
 
@@ -229,7 +256,9 @@ class TestActuatorDynamics(unittest.TestCase):
                         **{actuator.time_constant_key: TIME_CONSTANT}
                     )
                     command = _command_within_limit(parameters, actuator, sign)
-                    outputs = _drive(env, action, actuator, command, SETTLE_STEPS)
+                    outputs = _drive(
+                        env, action, actuator, command, SETTLE_STEPS, test_case=self
+                    )
                     span = command - actuator.initial
 
                     first_fraction = (outputs[0] - actuator.initial) / span
@@ -267,7 +296,7 @@ class TestActuatorDynamics(unittest.TestCase):
             with self.subTest(actuator=actuator.name):
                 env, action, parameters = _launched_env()
                 command = _command_within_limit(parameters, actuator)
-                for output in _drive(env, action, actuator, command, 2):
+                for output in _drive(env, action, actuator, command, 2, test_case=self):
                     self.assertAlmostEqual(output, command, places=6)
 
     def test_a_larger_time_constant_gives_a_slower_response(self):
@@ -293,7 +322,9 @@ class TestActuatorDynamics(unittest.TestCase):
                         **{actuator.time_constant_key: time_constant}
                     )
                     command = _command_within_limit(parameters, actuator)
-                    outputs = _drive(env, action, actuator, command, steps)
+                    outputs = _drive(
+                        env, action, actuator, command, steps, test_case=self
+                    )
 
                     fraction = (outputs[-1] - actuator.initial) / (
                         command - actuator.initial
@@ -331,56 +362,72 @@ class TestActuatorDynamics(unittest.TestCase):
         two stages are applied in and the point where the second takes over.
         """
         for actuator in ACTUATORS:
-            with self.subTest(actuator=actuator.name):
-                env, action, parameters = _launched_env(
-                    **{actuator.time_constant_key: TIME_CONSTANT}
+            for sign in (1.0, -1.0):
+                with self.subTest(actuator=actuator.name, sign=sign):
+                    self._check_handover(actuator, sign)
+
+    def _check_handover(self, actuator, sign):
+        env, action, parameters = _launched_env(
+            **{actuator.time_constant_key: TIME_CONSTANT}
+        )
+        step = parameters["simulation"]["time_step"]
+        limit = _per_step_limit(parameters, actuator)
+        alpha = step / (TIME_CONSTANT + step)
+        start = actuator.initial
+        if actuator.name == "throttle":
+            # It starts at the top of its range, so it needs room to go up.
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=r".*exceeds rate limit.*")
+                reached = _drive(
+                    env,
+                    action,
+                    actuator,
+                    actuator.initial - 20 * limit,
+                    20,
+                    test_case=self,
                 )
-                step = parameters["simulation"]["time_step"]
-                limit = _per_step_limit(parameters, actuator)
-                alpha = step / (TIME_CONSTANT + step)
-                sign = -1.0 if actuator.name == "throttle" else 1.0
-                command = actuator.initial + sign * 10 * limit
+            start = reached[-1]
+        command = start + sign * 10 * limit
 
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    outputs = _drive(env, action, actuator, command, SETTLE_STEPS)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=r".*exceeds rate limit.*")
+            outputs = _drive(
+                env, action, actuator, command, SETTLE_STEPS, test_case=self
+            )
 
-                expected = []
-                output = actuator.initial
-                for _ in range(SETTLE_STEPS):
-                    filtered = alpha * command + (1 - alpha) * output
-                    change = filtered - output
-                    if abs(change) > limit:
-                        filtered = output + math.copysign(limit, change)
-                    output = filtered
-                    expected.append(output)
+        expected = []
+        output = start
+        for _ in range(SETTLE_STEPS):
+            filtered = alpha * command + (1 - alpha) * output
+            change = filtered - output
+            if abs(change) > limit:
+                filtered = output + math.copysign(limit, change)
+            output = filtered
+            expected.append(output)
 
-                np.testing.assert_allclose(outputs, expected, rtol=1e-9, atol=1e-9)
+        np.testing.assert_allclose(outputs, expected, rtol=1e-9, atol=1e-9)
 
-                # And the shape that reference describes, stated outright so a
-                # reader does not have to run the loop in their head.
-                sizes = [
-                    abs(later - earlier)
-                    for earlier, later in zip([actuator.initial] + outputs, outputs)
-                ]
-                released = next(
-                    i for i, size in enumerate(sizes) if size < limit - 1e-9
-                )
-                self.assertGreater(released, 0, "the limit never bound at all")
-                # Starting 10 limits away and stepping by exactly one limit while
-                # the limiter binds, the distance before step i is (10 - i) limits
-                # and the filtered demand is alpha times that. It drops *below*
-                # the limit at the first i with 10 - i < 1/alpha, and the step
-                # where the two are exactly equal is still a full one.
-                self.assertEqual(released, math.floor(10 - 1 / alpha) + 1)
-                for earlier, later in zip(sizes[released:], sizes[released + 1 :]):
-                    self.assertLessEqual(later, earlier + 1e-12)
-                self.assertAlmostEqual(outputs[-1], command, delta=abs(command) * 1e-3)
-                self.assertLessEqual(
-                    max(sign * (value - command) for value in outputs),
-                    1e-9,
-                    "the response overshot",
-                )
+        # And the shape that reference describes, stated outright so a
+        # reader does not have to run the loop in their head.
+        sizes = [
+            abs(later - earlier) for earlier, later in zip([start] + outputs, outputs)
+        ]
+        released = next(i for i, size in enumerate(sizes) if size < limit - 1e-9)
+        self.assertGreater(released, 0, "the limit never bound at all")
+        # Starting 10 limits away and stepping by exactly one limit while
+        # the limiter binds, the distance before step i is (10 - i) limits
+        # and the filtered demand is alpha times that. It drops *below*
+        # the limit at the first i with 10 - i < 1/alpha, and the step
+        # where the two are exactly equal is still a full one.
+        self.assertEqual(released, math.floor(10 - 1 / alpha) + 1)
+        for earlier, later in zip(sizes[released:], sizes[released + 1 :]):
+            self.assertLessEqual(later, earlier + 1e-12)
+        self.assertAlmostEqual(outputs[-1], command, delta=abs(command) * 1e-3)
+        self.assertLessEqual(
+            max(sign * (value - command) for value in outputs),
+            1e-9,
+            "the response overshot",
+        )
 
     def test_the_rate_limit_clips_both_directions(self):
         """Clipping is a sign-independent bound, and only one sign was covered.
@@ -402,13 +449,16 @@ class TestActuatorDynamics(unittest.TestCase):
                         # step at a time, then command from there.
                         interior_steps = 20
                         with warnings.catch_warnings():
-                            warnings.simplefilter("ignore")
+                            warnings.filterwarnings(
+                                "ignore", message=r".*exceeds rate limit.*"
+                            )
                             reached = _drive(
                                 env,
                                 action,
                                 actuator,
                                 actuator.initial - interior_steps * limit,
                                 interior_steps,
+                                test_case=self,
                             )
                         start = reached[-1]
                         self.assertGreater(start, 0.0)
@@ -448,6 +498,7 @@ class TestActuatorDynamics(unittest.TestCase):
                             actuator,
                             actuator.initial + sign * 10 * limit,
                             2,
+                            test_case=self,
                         )
                     self.assertAlmostEqual(
                         abs(outputs[0] - actuator.initial), limit, places=6
@@ -455,6 +506,55 @@ class TestActuatorDynamics(unittest.TestCase):
                     self.assertAlmostEqual(
                         abs(outputs[1] - actuator.initial), 2 * limit, places=6
                     )
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestTheDynamicsReachTheFlight(unittest.TestCase):
+    """The last link: the filtered value moves the rocket, not just the object.
+
+    Everything above ends at the actuator, or at the property the flight reads.
+    Neither says the equations of motion use it. A flight that read the raw
+    demand, or ignored the actuator entirely, would satisfy all of it.
+
+    Compared differentially rather than pinned: the same roll command with the
+    lag off and on, and the body roll rate at the same step. No trajectory is
+    frozen, so this does not become another golden master.
+    """
+
+    def _roll_rate_after(self, steps, time_constant):
+        env, action, parameters = _launched_env(roll_torque_time_constant=time_constant)
+        limit = _per_step_limit(parameters, ACTUATORS[2])
+        command = 0.5 * limit  # inside the rate limit, so only the lag differs
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=r".*exceeds rate limit.*")
+            _drive(env, action, ACTUATORS[2], command, steps, test_case=self)
+
+        rocket = env._rocket_flight.rocket
+        return (
+            abs(float(np.asarray(env._rocket_states, dtype=float)[12])),
+            float(rocket.roll_control.roll_torque),
+        )
+
+    def test_a_lagged_roll_command_spins_the_rocket_up_more_slowly(self):
+        steps = 12
+        immediate_rate, immediate_torque = self._roll_rate_after(steps, None)
+        lagged_rate, lagged_torque = self._roll_rate_after(steps, TIME_CONSTANT)
+
+        # State the premise, so a state assertion that fails is not ambiguous
+        # about whether the torque or the physics is at fault.
+        self.assertGreater(
+            immediate_torque,
+            lagged_torque,
+            "the lag did not reduce the commanded torque, so this proves nothing",
+        )
+        self.assertGreater(
+            immediate_rate,
+            lagged_rate,
+            "the roll torque never reached the equations of motion",
+        )
+        # And it is not simply that neither turned: something did happen.
+        self.assertGreater(immediate_rate, 0.0)
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")

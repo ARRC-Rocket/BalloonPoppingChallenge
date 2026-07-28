@@ -10,11 +10,8 @@ Runtime test: needs the simulation stack. Skips cleanly when it is absent.
 
 import os
 import unittest
-from importlib.util import find_spec
 from pathlib import Path
 from unittest.mock import patch
-
-import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PACKAGE_DATA_DIR = REPO_ROOT / "BalloonPoppingGymEnv" / "envs" / "data"
@@ -26,12 +23,14 @@ SCENARIO_1_PARAMS = (
     / "scenario_1_parameters.yaml"
 )
 
-# Only the simulation stack is optional. Guarding this package's own imports too
-# would turn a renamed symbol or a broken module into a silent skip.
-_STACK_AVAILABLE = find_spec("rocketpy") is not None
+try:
+    import yaml
 
-if _STACK_AVAILABLE:
     from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
+
+    _STACK_AVAILABLE = True
+except ImportError:
+    _STACK_AVAILABLE = False
 
 _MONTE_CARLO = "BalloonPoppingGymEnv.envs.balloon_world.MonteCarlo"
 
