@@ -10,8 +10,9 @@ import os
 import stat
 import tempfile
 
-# Used only when creating a baseline that does not exist yet. An existing file
-# keeps its own mode. Committed baselines are ordinary readable artifacts, unlike
+# Used only when creating a baseline that does not exist yet, and applied with
+# chmod rather than filtered through the umask. An existing file keeps its own
+# mode. Committed baselines are ordinary readable artifacts, unlike
 # the submission files written elsewhere in the project, which are deliberately
 # owner-only because they carry the team secret.
 NEW_BASELINE_MODE = 0o644
@@ -66,20 +67,20 @@ def write_baseline(baseline, output_path):
 
 
 def _mode_to_apply(output_path):
-    """The mode the replacement should carry: the old file's, or the default."""
+    """The mode the replacement should carry: the old file's, or the default.
+
+    The umask is deliberately not consulted. Reading it means setting it and
+    putting it back, and it is process-wide rather than per thread, so any
+    other thread creating a file in that window gets the wrong permissions.
+    Measured: with the process at 022 and one thread reading the umask this
+    way, an unrelated file opened with mode 0666 was created 0600 instead of
+    0644.
+
+    ``chmod`` sets permissions outright, so there is nothing to emulate. These
+    are committed repository artifacts and the policy for a new one is stated
+    above; an existing one keeps whatever it had.
+    """
     try:
         return stat.S_IMODE(os.stat(output_path).st_mode)
     except FileNotFoundError:
-        return NEW_BASELINE_MODE & ~_current_umask()
-
-
-def _current_umask():
-    """Read the umask without leaving it changed.
-
-    ``os.umask`` is the only way to read it, and it always sets. Restore it
-    immediately; a new baseline is rare enough that the brief window does not
-    matter here, and the alternative is ignoring the umask entirely.
-    """
-    mask = os.umask(0o077)
-    os.umask(mask)
-    return mask
+        return NEW_BASELINE_MODE
