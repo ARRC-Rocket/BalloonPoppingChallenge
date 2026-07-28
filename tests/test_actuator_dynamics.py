@@ -19,7 +19,9 @@ skip, but a broken import inside this package is a failure and must stay loud.
 """
 
 import copy
+import math
 import unittest
+import warnings
 from collections import namedtuple
 from importlib.util import find_spec
 
@@ -33,6 +35,12 @@ if _STACK_AVAILABLE:
 
 SCENARIO_NUMBER = 0
 TIME_CONSTANT = 0.05
+# Two time constants far enough apart that their responses cannot be confused.
+# One value alone proves only that a lag of that size works: an implementation
+# storing the requested constant correctly while computing every coefficient from
+# a hard-coded 0.05 passes a whole suite written around 0.05.
+FAST_TIME_CONSTANT = 0.02
+SLOW_TIME_CONSTANT = 0.10
 # Long enough for a first-order lag with this time constant to settle.
 SETTLE_STEPS = 120
 
@@ -261,6 +269,160 @@ class TestActuatorDynamics(unittest.TestCase):
                 command = _command_within_limit(parameters, actuator)
                 for output in _drive(env, action, actuator, command, 2):
                     self.assertAlmostEqual(output, command, places=6)
+
+    def test_a_larger_time_constant_gives_a_slower_response(self):
+        """The scenario's value has to be the one driving the filter.
+
+        Every other dynamics test here uses a single time constant, so a
+        coefficient computed from a hard-coded 0.05 satisfies all of them while
+        ignoring what the scenario asked for. Two constants compared at the same
+        elapsed time is what separates those.
+
+        The expectation is the exact discrete response, ``1 - (1 - alpha)**n``
+        with ``alpha = dt / (tau + dt)``, derived from the scenario's own time
+        step and requested constant. Not the continuous ``1 - exp(-t/tau)``: at
+        the few steps needed to keep the two responses well apart, the two differ
+        by more than any tolerance worth calling tight.
+        """
+        steps = 2
+        for actuator in ACTUATORS:
+            with self.subTest(actuator=actuator.name):
+                responses = {}
+                for time_constant in (FAST_TIME_CONSTANT, SLOW_TIME_CONSTANT):
+                    env, action, parameters = _launched_env(
+                        **{actuator.time_constant_key: time_constant}
+                    )
+                    command = _command_within_limit(parameters, actuator)
+                    outputs = _drive(env, action, actuator, command, steps)
+
+                    fraction = (outputs[-1] - actuator.initial) / (
+                        command - actuator.initial
+                    )
+                    responses[time_constant] = fraction
+
+                    alpha = parameters["simulation"]["time_step"] / (
+                        time_constant + parameters["simulation"]["time_step"]
+                    )
+                    self.assertAlmostEqual(fraction, 1 - (1 - alpha) ** steps, places=6)
+
+                fast = responses[FAST_TIME_CONSTANT]
+                slow = responses[SLOW_TIME_CONSTANT]
+                self.assertGreater(
+                    fast,
+                    slow,
+                    "the configured time constant is not driving the response",
+                )
+                # Separated, not merely ordered: a filter ignoring the request
+                # would put both at the same fraction.
+                self.assertGreater(fast / slow, 2.0)
+
+    def test_the_rate_limit_hands_back_to_the_lag(self):
+        """The whole transition, sample by sample, not the first two.
+
+        The documented composition is: filter the command, then rate-limit the
+        *filtered* change. That produces full-limit steps only while the filtered
+        demand outruns the limit, then a first-order decay. Asserting that a
+        handover merely happens is not enough: a limiter that rate-limits the raw
+        command instead takes full steps for twice as long and then decays the
+        same way, so it hands back too, just later.
+
+        Compared against a reference written straight from that description. It
+        shares no code with the actuator, so agreeing with it pins the order the
+        two stages are applied in and the point where the second takes over.
+        """
+        for actuator in ACTUATORS:
+            with self.subTest(actuator=actuator.name):
+                env, action, parameters = _launched_env(
+                    **{actuator.time_constant_key: TIME_CONSTANT}
+                )
+                step = parameters["simulation"]["time_step"]
+                limit = _per_step_limit(parameters, actuator)
+                alpha = step / (TIME_CONSTANT + step)
+                sign = -1.0 if actuator.name == "throttle" else 1.0
+                command = actuator.initial + sign * 10 * limit
+
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    outputs = _drive(env, action, actuator, command, SETTLE_STEPS)
+
+                expected = []
+                output = actuator.initial
+                for _ in range(SETTLE_STEPS):
+                    filtered = alpha * command + (1 - alpha) * output
+                    change = filtered - output
+                    if abs(change) > limit:
+                        filtered = output + math.copysign(limit, change)
+                    output = filtered
+                    expected.append(output)
+
+                np.testing.assert_allclose(outputs, expected, rtol=1e-9, atol=1e-9)
+
+                # And the shape that reference describes, stated outright so a
+                # reader does not have to run the loop in their head.
+                sizes = [
+                    abs(later - earlier)
+                    for earlier, later in zip([actuator.initial] + outputs, outputs)
+                ]
+                released = next(
+                    i for i, size in enumerate(sizes) if size < limit - 1e-9
+                )
+                self.assertGreater(released, 0, "the limit never bound at all")
+                # Starting 10 limits away and stepping by exactly one limit while
+                # the limiter binds, the distance before step i is (10 - i) limits
+                # and the filtered demand is alpha times that. It drops *below*
+                # the limit at the first i with 10 - i < 1/alpha, and the step
+                # where the two are exactly equal is still a full one.
+                self.assertEqual(released, math.floor(10 - 1 / alpha) + 1)
+                for earlier, later in zip(sizes[released:], sizes[released + 1 :]):
+                    self.assertLessEqual(later, earlier + 1e-12)
+                self.assertAlmostEqual(outputs[-1], command, delta=abs(command) * 1e-3)
+                self.assertLessEqual(
+                    max(sign * (value - command) for value in outputs),
+                    1e-9,
+                    "the response overshot",
+                )
+
+    def test_the_rate_limit_clips_both_directions(self):
+        """Clipping is a sign-independent bound, and only one sign was covered.
+
+        The large-command test drives TVC and roll positive and throttle
+        negative, so an implementation clipping only ``change > max_change``
+        keeps every gimbal and roll case green.
+        """
+        for actuator in ACTUATORS:
+            for sign in (1.0, -1.0):
+                with self.subTest(actuator=actuator.name, sign=sign):
+                    env, action, parameters = _launched_env()
+                    limit = _per_step_limit(parameters, actuator)
+                    start = actuator.initial
+
+                    if actuator.name == "throttle":
+                        # It starts at the top of its range, so there is no room
+                        # upwards. Walk it into the interior first, one legal
+                        # step at a time, then command from there.
+                        interior_steps = 20
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            reached = _drive(
+                                env,
+                                action,
+                                actuator,
+                                actuator.initial - interior_steps * limit,
+                                interior_steps,
+                            )
+                        start = reached[-1]
+                        self.assertGreater(start, 0.0)
+                        self.assertLess(start, 1.0)
+
+                    with self.assertWarnsRegex(UserWarning, "exceeds rate limit"):
+                        outputs = _drive(
+                            env, action, actuator, start + sign * 10 * limit, 2
+                        )
+
+                    self.assertAlmostEqual(abs(outputs[0] - start), limit, places=6)
+                    self.assertAlmostEqual(abs(outputs[1] - start), 2 * limit, places=6)
+                    # The direction has to follow the command, not a fixed sign.
+                    self.assertEqual(np.sign(outputs[0] - start), sign)
 
     def test_the_rate_limit_bounds_a_large_command(self):
         """A command far past the limit is bound by it, which hides the lag.
