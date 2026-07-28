@@ -75,6 +75,46 @@ class _IntegrityHelpers:
         self.created.append(path)
         return path
 
+    class _Response:
+        """Minimal stand-in for the urlopen context manager."""
+
+        def __init__(self, payload, declared=None, status=200):
+            self._payload = payload
+            # Defaults to 200 because that is the only status the check accepts;
+            # every other case has to opt in.
+            self.status = status
+            self.headers = {
+                "Content-Length": str(len(payload) if declared is None else declared)
+            }
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def read(self, amount=None):
+            return self._payload if amount is None else self._payload[:amount]
+
+    def _local_bytes(self):
+        local = os.path.join(os.path.dirname(self.results_dir), "evaluate.py")
+        with open(local, "rb") as handle:
+            return handle.read()
+
+    def _pack_and_capture(self, response=None, **response_kwargs):
+        """Pack once with a stubbed response and return everything printed."""
+        if response is None:
+            response = self._Response(b"", **response_kwargs)
+        before = set(glob.glob(os.path.join(self.results_dir, "*_submission.*")))
+        with mock.patch.object(utils.urllib.request, "urlopen", return_value=response):
+            with mock.patch("builtins.print") as printed:
+                utils.pack_for_submission(self.eval_cfg, _fake_env(), {"scenario": {}})
+        new = set(glob.glob(os.path.join(self.results_dir, "*_submission.*"))) - before
+        # Every path here is advisory, so the submission must exist regardless.
+        self.assertEqual(len(new), 1, "packing should still produce a submission")
+        self.created.append(new.pop())
+        return " ".join(str(call) for call in printed.call_args_list)
+
     def _pack_path_after(self, call):
         before = set(glob.glob(os.path.join(self.results_dir, "*_submission.*")))
         call()
@@ -131,24 +171,6 @@ class TestIntegrityCheckFailsOpen(_IntegrityHelpers, unittest.TestCase):
 class TestIntegrityCheckBounds(_IntegrityHelpers, unittest.TestCase):
     """The check is bounded, and every expected failure leaves packing alone."""
 
-    class _Response:
-        """Minimal stand-in for the urlopen context manager."""
-
-        def __init__(self, payload, declared=None):
-            self._payload = payload
-            self.headers = {
-                "Content-Length": str(len(payload) if declared is None else declared)
-            }
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc_info):
-            return False
-
-        def read(self, amount=None):
-            return self._payload if amount is None else self._payload[:amount]
-
     def _pack_with_response(self, payload):
         return self._pack_returning(lambda *a, **k: self._Response(payload))
 
@@ -161,11 +183,6 @@ class TestIntegrityCheckBounds(_IntegrityHelpers, unittest.TestCase):
         path = new.pop()
         self.created.append(path)
         return path
-
-    def _local_bytes(self):
-        local = os.path.join(os.path.dirname(self.results_dir), "evaluate.py")
-        with open(local, "rb") as handle:
-            return handle.read()
 
     def test_reading_the_local_file_can_fail_without_losing_the_submission(self):
         """The local read used to sit outside the guarded block."""
@@ -267,6 +284,91 @@ class TestIntegrityCheckBounds(_IntegrityHelpers, unittest.TestCase):
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestOnlyAFull200Counts(_IntegrityHelpers, unittest.TestCase):
+    """urlopen accepts the whole 2xx range, and most of it is not the file.
+
+    ``HTTPErrorProcessor`` raises only outside ``200 <= code < 300``, so a 203
+    rewritten by an intermediary, a 204 with no body, and a 206 carrying one
+    slice all arrive as ordinary successful responses. Hashing any of them
+    reports a mismatch for a file the competitor never touched, which is the one
+    thing this check must not do.
+    """
+
+    def _pack_with(self, payload, **response_kwargs):
+        return self._pack_and_capture(self._Response(payload, **response_kwargs))
+
+    def test_a_partial_response_is_not_a_mismatch(self):
+        # The dangerous one: a 206 declares the length of its own partial body
+        # and matches it, so the completeness check passes and the truncated
+        # bytes reach the digest comparison.
+        official = self._local_bytes()
+        partial = official[: len(official) // 2]
+
+        said = self._pack_with(partial, status=206)
+
+        self.assertNotIn(utils.INTEGRITY_MISMATCH_MESSAGE, said)
+        self.assertIn("unexpected HTTP status 206", said)
+
+    def test_a_transformed_response_is_not_a_mismatch(self):
+        said = self._pack_with(b"# rewritten by a proxy\n", status=203)
+
+        self.assertNotIn(utils.INTEGRITY_MISMATCH_MESSAGE, said)
+        self.assertIn("unexpected HTTP status 203", said)
+
+    def test_an_empty_response_is_not_a_mismatch(self):
+        said = self._pack_with(b"", status=204)
+
+        self.assertNotIn(utils.INTEGRITY_MISMATCH_MESSAGE, said)
+
+    def test_a_missing_status_attribute_is_not_a_mismatch(self):
+        # Whatever the object is, if it cannot say it is a 200 the check is
+        # unavailable rather than a finding about the local file.
+        response = self._Response(b"anything")
+        del response.status
+
+        said = self._pack_and_capture(response)
+
+        self.assertNotIn(utils.INTEGRITY_MISMATCH_MESSAGE, said)
+
+    # Two methods rather than two packs in one. The submission filename resolves
+    # to the second, so packing twice inside one test reuses the name and the
+    # "one new file" assertion sees none. Separate methods get a fresh tearDown.
+    def test_a_matching_200_is_quiet(self):
+        # The control for the four above: refusing every response outright would
+        # pass them all.
+        said = self._pack_with(self._local_bytes(), status=200)
+
+        self.assertNotIn(utils.INTEGRITY_MISMATCH_MESSAGE, said)
+        self.assertNotIn("unexpected HTTP status", said)
+
+    def test_a_differing_200_still_reports_a_mismatch(self):
+        said = self._pack_with(b"# actually different\n", status=200)
+
+        self.assertIn(utils.INTEGRITY_MISMATCH_MESSAGE, said)
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestUnusableFramingIsNotAMismatch(_IntegrityHelpers, unittest.TestCase):
+    """A Content-Length that will not parse says the framing cannot be trusted."""
+
+    def _pack_with_declared(self, payload, declared):
+        return self._pack_and_capture(self._Response(payload, declared=declared))
+
+    def test_a_non_numeric_content_length(self):
+        said = self._pack_with_declared(b"# different\n", "not-a-number")
+
+        self.assertNotIn(utils.INTEGRITY_MISMATCH_MESSAGE, said)
+        self.assertIn("unusable Content-Length", said)
+
+    def test_a_negative_content_length(self):
+        # Parses, so the old code took it as a length and found len(raw) >= -5.
+        said = self._pack_with_declared(b"# different\n", -5)
+
+        self.assertNotIn(utils.INTEGRITY_MISMATCH_MESSAGE, said)
+        self.assertIn("unusable Content-Length", said)
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
 class TestSubmissionIsDurableFirst(_IntegrityHelpers, unittest.TestCase):
     """The advisory check runs only once the result is safely on disk.
 
@@ -278,24 +380,26 @@ class TestSubmissionIsDurableFirst(_IntegrityHelpers, unittest.TestCase):
 
     def test_the_submission_is_complete_when_the_check_runs(self):
         seen = {}
+        pattern = os.path.join(self.results_dir, "*_submission.*")
+        # Only files this call creates. Submissions are gitignored, so a working
+        # tree that has produced one before already has files matching the
+        # pattern, and globbing the directory outright would count those, or read
+        # one of them instead of the file under test. CI checks out clean, which
+        # is why an unbounded glob stays green there.
+        before = set(glob.glob(pattern))
 
         def inspect_at_call_time():
-            found = glob.glob(os.path.join(self.results_dir, "*_submission.*"))
-            seen["count"] = len(found)
-            if found:
-                with open(found[0], "rb") as handle:
+            created = set(glob.glob(pattern)) - before
+            seen["count"] = len(created)
+            if len(created) == 1:
+                with open(next(iter(created)), "rb") as handle:
                     seen["payload"] = pickle.load(handle)
 
         with mock.patch.object(
             utils, "_check_evaluate_integrity", side_effect=inspect_at_call_time
         ):
-            before = set(glob.glob(os.path.join(self.results_dir, "*_submission.*")))
             utils.pack_for_submission(self.eval_cfg, _fake_env(), {"scenario": {}})
-            new = (
-                set(glob.glob(os.path.join(self.results_dir, "*_submission.*")))
-                - before
-            )
-            self.created.extend(new)
+            self.created.extend(set(glob.glob(pattern)) - before)
 
         self.assertEqual(seen.get("count"), 1, "no submission on disk yet")
         # Written, closed and complete, not just created.

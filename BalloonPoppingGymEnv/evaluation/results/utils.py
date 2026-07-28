@@ -20,12 +20,18 @@ INTEGRITY_CHECK_MAX_BYTES = 1_000_000
 # A mismatch is a fact about two files, not a finding about the competitor. The
 # old wording ("evaluate.py should not be modified") reads as an accusation, and
 # it fires for a reason nobody controls: the reference is whatever sits on main,
-# so anyone running a version ahead of main sees it having edited nothing. It is
-# a constant so the tests can key on it instead of on a phrase (see #35).
+# so anyone whose checkout is not current main sees it having edited nothing. It
+# is a constant so the tests can key on it instead of on a phrase (see #35).
+#
+# "A different revision", not "ahead of main": #35 covers both directions. An
+# untouched older release starts reporting this the moment main moves on, and
+# telling that competitor only about being ahead invites them to conclude the
+# file really was edited.
 INTEGRITY_MISMATCH_MESSAGE = (
     "evaluate.py does not match the official copy on main. Your submission was "
-    "still saved. A version that is ahead of main reports this too, so check "
-    "whether you edited the file before treating it as a problem."
+    "still saved. A checkout from any revision other than current main reports "
+    "this too, so check whether you edited the file before treating it as a "
+    "problem."
 )
 
 
@@ -41,7 +47,7 @@ def save_trajectories(trajectories):
 
 
 def _normalized_digest(raw_bytes):
-    """MD5 of ``raw_bytes`` after dropping a UTF-8 BOM and normalizing line endings.
+    """SHA-256 of ``raw_bytes``, less a UTF-8 BOM and with line endings normalized.
 
     ``pack_for_submission`` compares the local ``evaluate.py`` against the copy on
     main. A Windows checkout can add a UTF-8 BOM or CRLF/CR endings that would flag
@@ -88,9 +94,50 @@ def _check_evaluate_integrity():
         with urllib.request.urlopen(
             INTEGRITY_CHECK_URL, timeout=INTEGRITY_CHECK_TIMEOUT
         ) as response:
+            # urlopen treats the whole 2xx range as success, so nothing above
+            # raises for a 203 an intermediary rewrote, a 204 with no body, or a
+            # 206 carrying one slice of the file. Only 200 is the representation
+            # of the target resource, and the completeness check below cannot
+            # stand in for this: a well-formed 206 declares the length of its
+            # own partial body, matches it, and would be hashed as if it were
+            # the whole file.
+            status = getattr(response, "status", None)
+            if status != 200:
+                print(f"Could not check evaluate.py: unexpected HTTP status {status}")
+                return
             declared = response.headers.get("Content-Length")
             # One byte over the cap, so an oversized body is detectable.
             raw = response.read(INTEGRITY_CHECK_MAX_BYTES + 1)
+
+        if len(raw) > INTEGRITY_CHECK_MAX_BYTES:
+            print(
+                "Could not check evaluate.py: the reference copy is unexpectedly large"
+            )
+            return
+
+        # A peer that announces a length and then closes early hands back a short
+        # body without raising, and hashing that would accuse the competitor of
+        # editing a file they never touched. A length that will not parse, or
+        # parses negative, says the framing itself cannot be trusted, which is
+        # the same conclusion.
+        if declared is not None:
+            try:
+                expected = int(declared)
+            except ValueError:
+                print("Could not check evaluate.py: unusable Content-Length")
+                return
+            if expected < 0:
+                print("Could not check evaluate.py: unusable Content-Length")
+                return
+            if len(raw) < expected:
+                print(
+                    "Could not check evaluate.py: the reference copy arrived incomplete"
+                )
+                return
+
+        # Inside the try with the local digest, so a build that refuses this hash
+        # reports an unavailable check from either side rather than only one.
+        remote_digest = _normalized_digest(raw)
     except (OSError, http.client.HTTPException, ValueError) as exc:
         # URLError, HTTPError, socket timeouts and DNS failures are all OSError.
         # ValueError covers a hash the interpreter refuses to provide, which is
@@ -98,23 +145,7 @@ def _check_evaluate_integrity():
         print(f"Could not check evaluate.py against the official copy: {exc}")
         return
 
-    if len(raw) > INTEGRITY_CHECK_MAX_BYTES:
-        print("Could not check evaluate.py: the reference copy is unexpectedly large")
-        return
-
-    # A peer that announces a length and then closes early hands back a short
-    # body without raising, and hashing that would accuse the competitor of
-    # editing a file they never touched.
-    if declared is not None:
-        try:
-            expected = int(declared)
-        except ValueError:
-            expected = None
-        if expected is not None and len(raw) < expected:
-            print("Could not check evaluate.py: the reference copy arrived incomplete")
-            return
-
-    if _normalized_digest(raw) != local_digest:
+    if remote_digest != local_digest:
         print(INTEGRITY_MISMATCH_MESSAGE)
 
 
