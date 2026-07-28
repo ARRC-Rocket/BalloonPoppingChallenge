@@ -16,6 +16,7 @@ iteration to keep this guard small and its tolerances simple.
 
 import json
 import unittest
+from importlib.util import find_spec
 from pathlib import Path
 
 import numpy as np
@@ -25,12 +26,15 @@ import numpy as np
 # imports are deliberately left outside that guard: once the stack is present, an
 # ImportError from them is a real regression (a renamed or removed symbol, a
 # broken internal import) and must fail the run instead of skipping it silently.
-try:
+# ``find_spec`` answers "is the package installed", which is the only case that
+# justifies a skip. The import itself stays outside any guard: ``import rocketpy``
+# runs the package's own ``__init__``, so an ImportError raised there means an
+# installed but broken stack, which is exactly what these tests exist to catch and
+# must fail rather than skip.
+_STACK_AVAILABLE = find_spec("rocketpy") is not None
+
+if _STACK_AVAILABLE:
     import rocketpy  # noqa: F401
-except ImportError:
-    _STACK_AVAILABLE = False
-else:
-    _STACK_AVAILABLE = True
 
     from BalloonPoppingGymEnv.agents.example_agents import AttitudeRateControlAgent
     from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
