@@ -126,10 +126,20 @@ def _hold_current_commands(env, action):
         actuator.command(action)(current)
 
 
-def _launched_env(**time_constants):
-    """Build scenario 0 with the given time constants and send the launch action."""
+def _launched_env(time_step=None, **time_constants):
+    """Build scenario 0 with the given time constants and send the launch action.
+
+    ``time_step`` can be overridden because scenario 0 ships 0.01 s, which makes
+    ``1 / time_step`` exactly 100. Every expectation derived from it then agrees
+    with a controller sampling rate hard-coded to 100, and the wiring this file
+    exists to check becomes unobservable. Measured: replacing all three
+    ``sampling_rate=1 / time_step`` expressions with the literal 100 passed the
+    whole file.
+    """
     parameters, _ = load_scenario_parameters(SCENARIO_NUMBER)
     parameters = copy.deepcopy(parameters)
+    if time_step is not None:
+        parameters["simulation"]["time_step"] = time_step
     parameters["rocket"]["control"].update(time_constants)
 
     env = BalloonPoppingEnv(render_mode=None, parameters=parameters)
@@ -209,15 +219,44 @@ class TestActuatorWiring(unittest.TestCase):
     def test_demand_rate_matches_the_scenario_timestep(self):
         """The environment steps every ``time_step``, so the actuators must too.
 
-        Without this, halving the configured sampling rate would leave every
-        behaviour test below green while the real response is wrong.
+        Driven at a step scenario 0 does not ship. Its 0.01 s makes
+        ``1 / time_step`` exactly 100, so every expectation derived from it also
+        matches a sampling rate hard-coded to 100, and this test would say
+        nothing. 0.025 s gives 40 Hz, which no plausible literal produces.
         """
-        env, _action, parameters = _launched_env()
-        expected = 1.0 / parameters["simulation"]["time_step"]
-        rocket = env._rocket_flight.rocket
+        for time_step, expected in ((0.025, 40.0), (0.005, 200.0)):
+            with self.subTest(time_step=time_step):
+                env, _action, parameters = _launched_env(time_step=time_step)
+
+                self.assertEqual(parameters["simulation"]["time_step"], time_step)
+                rocket = env._rocket_flight.rocket
+                for actuator in ACTUATORS:
+                    with self.subTest(actuator=actuator.name):
+                        self.assertEqual(actuator.read(rocket).demand_rate, expected)
+
+    def test_the_response_follows_the_scenario_timestep_too(self):
+        """Not just the stored rate: the filter has to use it.
+
+        Storing the right demand_rate while updating at some other cadence would
+        satisfy the assertion above. The discrete response depends on the step
+        through ``alpha = dt / (tau + dt)``, so driving at a non-default step
+        and predicting from it covers the behaviour rather than the attribute.
+        """
+        time_step = 0.025
+        steps = 2
         for actuator in ACTUATORS:
             with self.subTest(actuator=actuator.name):
-                self.assertEqual(actuator.read(rocket).demand_rate, expected)
+                env, action, parameters = _launched_env(
+                    time_step=time_step, **{actuator.time_constant_key: TIME_CONSTANT}
+                )
+                command = _command_within_limit(parameters, actuator)
+                outputs = _drive(env, action, actuator, command, steps, test_case=self)
+
+                alpha = time_step / (TIME_CONSTANT + time_step)
+                fraction = (outputs[-1] - actuator.initial) / (
+                    command - actuator.initial
+                )
+                self.assertAlmostEqual(fraction, 1 - (1 - alpha) ** steps, places=6)
 
     def test_non_null_time_constants_reach_every_actuator(self):
         env, _action, _parameters = _launched_env(
@@ -508,53 +547,114 @@ class TestActuatorDynamics(unittest.TestCase):
                     )
 
 
+# Which state the flight should move, and which it should leave alone. y_sol is
+# pos(3), vel(3), quaternion(4), body rates(3), so index 10 is the first body
+# rate. gimbal_angle_x drives that one and gimbal_angle_y the next; measured,
+# with the cross-axis staying at 1e-9 while the driven one reaches 0.86.
+FLIGHT_STATE = {"tvc_x": 10, "tvc_y": 11, "roll": 12, "throttle": 5}
+CROSS_AXIS = {"tvc_x": 11, "tvc_y": 10}
+
+
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
 class TestTheDynamicsReachTheFlight(unittest.TestCase):
     """The last link: the filtered value moves the rocket, not just the object.
 
-    Everything above ends at the actuator, or at the property the flight reads.
-    Neither says the equations of motion use it. A flight that read the raw
-    demand, or ignored the actuator entirely, would satisfy all of it.
+    Everything else ends at the actuator, or at the property the flight reads.
+    Neither says the equations of motion use it. A flight that ignored an
+    actuator, or used it only when its dynamics were off, satisfied all of it,
+    and both shipped scenarios leave the time constants null so the golden
+    masters would not notice either.
 
-    Compared differentially rather than pinned: the same roll command with the
-    lag off and on, and the body roll rate at the same step. No trajectory is
-    frozen, so this does not become another golden master.
+    Compared differentially rather than pinned: the same command with the lag
+    off and on, and the driven state at the same step. No trajectory is frozen,
+    so this does not become another golden master.
+
+    Signed, not absolute. Reversing a moment's sign only on the path with
+    dynamics enabled leaves both magnitudes ordered the same way, so an
+    absolute comparison passes it.
     """
 
-    def _roll_rate_after(self, steps, time_constant):
-        env, action, parameters = _launched_env(roll_torque_time_constant=time_constant)
-        limit = _per_step_limit(parameters, ACTUATORS[2])
-        command = 0.5 * limit  # inside the rate limit, so only the lag differs
+    def _state_after(self, actuator, sign, time_constant, steps=30):
+        env, action, parameters = _launched_env(
+            **{actuator.time_constant_key: time_constant}
+        )
+        limit = _per_step_limit(parameters, actuator)
+        command = actuator.initial + sign * 12 * limit
 
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message=r".*exceeds rate limit.*")
-            _drive(env, action, ACTUATORS[2], command, steps, test_case=self)
+            _drive(env, action, actuator, command, steps, test_case=self)
 
+        state = np.asarray(env._rocket_states, dtype=float)
+        driven = float(state[FLIGHT_STATE[actuator.name]])
+        cross = (
+            float(state[CROSS_AXIS[actuator.name]])
+            if actuator.name in CROSS_AXIS
+            else None
+        )
         rocket = env._rocket_flight.rocket
-        return (
-            abs(float(np.asarray(env._rocket_states, dtype=float)[12])),
-            float(rocket.roll_control.roll_torque),
-        )
+        return driven, cross, float(actuator.read_public(rocket))
 
-    def test_a_lagged_roll_command_spins_the_rocket_up_more_slowly(self):
-        steps = 12
-        immediate_rate, immediate_torque = self._roll_rate_after(steps, None)
-        lagged_rate, lagged_torque = self._roll_rate_after(steps, TIME_CONSTANT)
+    def test_every_actuator_moves_its_own_state_and_the_lag_delays_it(self):
+        for actuator in ACTUATORS:
+            # Throttle starts at the top of its range, so down is the only way.
+            sign = -1.0 if actuator.name == "throttle" else 1.0
+            # Throttle down means less thrust, so the vertical velocity that
+            # results is still positive but smaller; the other three move their
+            # state the way they are commanded.
+            expected_sign = 1.0
+            with self.subTest(actuator=actuator.name):
+                # Commanding nothing, as the other end of the interval the
+                # lagged response has to fall inside.
+                held, _held_cross, _held_value = self._state_after(actuator, 0.0, None)
+                immediate, immediate_cross, immediate_value = self._state_after(
+                    actuator, sign, None
+                )
+                lagged, _lagged_cross, lagged_value = self._state_after(
+                    actuator, sign, TIME_CONSTANT
+                )
 
-        # State the premise, so a state assertion that fails is not ambiguous
-        # about whether the torque or the physics is at fault.
-        self.assertGreater(
-            immediate_torque,
-            lagged_torque,
-            "the lag did not reduce the commanded torque, so this proves nothing",
-        )
-        self.assertGreater(
-            immediate_rate,
-            lagged_rate,
-            "the roll torque never reached the equations of motion",
-        )
-        # And it is not simply that neither turned: something did happen.
-        self.assertGreater(immediate_rate, 0.0)
+                # The premise, stated so a state failure is not ambiguous about
+                # whether the command or the physics is at fault.
+                self.assertNotAlmostEqual(
+                    immediate_value,
+                    lagged_value,
+                    msg="the lag did not change the command, so this proves nothing",
+                )
+                # Something happened at all.
+                self.assertGreater(abs(immediate), 1e-3)
+                # The direction the command asked for, absolutely rather than
+                # relative to the other run. Reversing a moment's sign on both
+                # paths keeps every comparison below intact.
+                self.assertEqual(
+                    np.sign(immediate),
+                    expected_sign,
+                    "the state moved the opposite way from the command",
+                )
+                self.assertEqual(np.sign(immediate), np.sign(lagged))
+
+                # A lag delays a response; it neither deletes one nor skips it.
+                # The lagged state has to sit strictly between commanding
+                # nothing and commanding immediately, and both ends are needed.
+                #
+                # Without the floor, applying the actuator only when its
+                # dynamics are off passes everything else: measured, that left
+                # the lagged body rate at 1e-24. Without the ceiling, ignoring
+                # the actuator's value only when they are on passes too: for
+                # throttle that means full thrust, which moves the state the
+                # same way the lag does, only further.
+                self.assertGreater(abs(immediate - lagged), 0.01 * abs(immediate))
+                low, high = sorted((held, immediate))
+                self.assertGreater(
+                    lagged, low, "the lagged response overshot the commanded one"
+                )
+                self.assertLess(
+                    lagged, high, "the lagged response never left the held state"
+                )
+
+                if immediate_cross is not None:
+                    # The axis it must not move.
+                    self.assertLess(abs(immediate_cross), 1e-6 * abs(immediate))
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
