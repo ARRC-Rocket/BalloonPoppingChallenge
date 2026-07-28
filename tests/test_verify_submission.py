@@ -40,6 +40,8 @@ if _STACK_AVAILABLE:
     from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
     from verify_submission import (
         DEFAULT_TOLERANCE_METRES,
+        VELOCITY_CONSISTENCY_TOLERANCE,
+        check_the_rocket_path_is_a_trajectory,
         _load_canonical_scenario,
         check_claimed_pops_are_reachable,
         check_internal_consistency,
@@ -398,6 +400,152 @@ class TestTheIntervalsThePopCheckLooksAt(unittest.TestCase):
         balloons = [[[20.0, 0.0, self.ELEVATION]] for _ in range(3)]
 
         self.assertEqual(self._closest(rocket, status, balloons), [])
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestTheRocketPathHasToBeATrajectory(unittest.TestCase):
+    """The path is the competitor's claim, so ask what faking it costs.
+
+    Driven through the check directly, using a real run as the starting point,
+    because the point is what happens when that run is edited.
+    """
+
+    ELEVATION = 20.0
+
+    @classmethod
+    def setUpClass(cls):
+        cls.clean = _build_submission()
+        cls.canonical = {
+            "environment": {"elevation": cls.ELEVATION},
+            "simulation": {"time_step": 0.01},
+        }
+
+    def setUp(self):
+        self.submission = copy.deepcopy(self.clean)
+        self.records = self.submission["balloon_world_data"]["trajectories"]
+
+    def failures(self):
+        return [
+            finding.name
+            for finding in check_the_rocket_path_is_a_trajectory(
+                self.submission, self.canonical
+            )
+            if not finding.ok
+        ]
+
+    def _flown(self):
+        return [
+            record
+            for record in self.records
+            if np.isfinite(record["rocket_states"][:3]).all()
+        ]
+
+    def test_a_real_run_passes(self):
+        """The half that stops the rest passing by refusing everything."""
+        self.assertEqual(self.failures(), [])
+
+    def test_dragging_the_path_sideways_is_caught(self):
+        """The edit that would put the rocket on a balloon.
+
+        Positions move and the velocities beside them do not, which is the
+        whole point: they came out of one integration and no longer agree.
+        """
+        for offset, record in enumerate(self._flown()):
+            record["rocket_states"][0] += 0.5 * offset
+
+        self.assertIn("recorded velocity matches the path", self.failures())
+
+    def test_a_single_displaced_step_is_caught(self):
+        flown = self._flown()
+        flown[len(flown) // 2]["rocket_states"][1] += 2.0
+
+        self.assertIn("recorded velocity matches the path", self.failures())
+
+    def test_a_displacement_below_the_tolerance_is_not_an_accusation(self):
+        """The bound is measured, so it has to leave an honest run alone.
+
+        A whole tolerance of velocity error is far more than the 0.037 m/s an
+        honest run shows, and far less than editing the path costs.
+        """
+        flown = self._flown()
+        step = 0.01
+        nudge = 0.5 * VELOCITY_CONSISTENCY_TOLERANCE * step
+        flown[len(flown) // 2]["rocket_states"][1] += nudge
+
+        self.assertNotIn("recorded velocity matches the path", self.failures())
+
+    def test_an_attitude_that_is_not_a_rotation_is_caught(self):
+        for record in self._flown():
+            record["rocket_states"][6] *= 1.5
+
+        self.assertIn("attitude is a rotation", self.failures())
+
+    def test_a_flight_that_does_not_start_on_the_pad_is_caught(self):
+        for record in self._flown():
+            record["rocket_states"][2] += 500.0
+
+        self.assertIn("the flight starts on the pad", self.failures())
+
+    def _with_impact_tail(self, repeats=3):
+        """The rows a real landing leaves behind.
+
+        The fixture is a 40 step run that never reaches the ground, so it has
+        no tail at all, and every test above passes with or without the code
+        that handles one. A complete flight, which is what a competitor
+        actually uploads, ends with the state frozen at the impact position
+        while the recorded velocity is still the impact velocity.
+        """
+        last = copy.deepcopy(self.records[-1])
+        for _ in range(repeats):
+            self.records.append(copy.deepcopy(last))
+
+    def test_a_flight_that_landed_is_not_an_accusation(self):
+        """Measured: those rows differ from the recorded velocity by 139.6 m/s.
+
+        Against a 1 m/s tolerance, so without trimming them every complete and
+        honest submission is reported as a forged path. Nothing else here
+        covers it, because the fixture stops in mid air.
+        """
+        self._with_impact_tail()
+
+        self.assertEqual(self.failures(), [])
+
+    def test_the_tail_is_trimmed_rather_than_tolerated(self):
+        """The other half: the trim must not be a tolerance wide enough to
+        swallow the artefact, or it would swallow a forged path too."""
+        self._with_impact_tail()
+        flown = self._flown()
+        flown[len(flown) // 2]["rocket_states"][1] += 2.0
+
+        self.assertIn("recorded velocity matches the path", self.failures())
+
+    def test_a_run_that_never_launched_is_not_an_accusation(self):
+        for record in self.records:
+            record["rocket_states"] = [float("nan")] * len(record["rocket_states"])
+
+        self.assertEqual(self.failures(), [])
+
+    def test_verify_runs_this_check(self):
+        """The checks above call the function directly, which says nothing
+        about whether the tool does.
+
+        Measured: unwiring it from ``verify()`` left every one of them passing.
+        """
+        for offset, record in enumerate(self._flown()):
+            record["rocket_states"][0] += 0.5 * offset
+        official = copy.deepcopy(
+            self.clean["balloon_world_data"]["scenario_parameters"]
+        )
+        with patch(
+            "verify_submission._load_canonical_scenario",
+            lambda number: copy.deepcopy(official),
+        ):
+            findings = verify(self.submission, DEFAULT_TOLERANCE_METRES)
+
+        self.assertIn(
+            "recorded velocity matches the path",
+            [finding.name for finding in findings if not finding.ok],
+        )
 
 
 if __name__ == "__main__":

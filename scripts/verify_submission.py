@@ -23,15 +23,24 @@ a loop over a directory of submissions.
 
 What this does not do
 ---------------------
-It does not verify the rocket trajectory, and the score comes from the rocket
-trajectory. Checking that means replaying the agent, whose source is sitting in
+It does not reproduce the rocket trajectory, and the score comes from the rocket
+trajectory. Reproducing it means replaying the agent, whose source is sitting in
 the submission, and running a competitor's code server side is arbitrary code
 execution by design. That was decided against in the leaderboard's issue #4.
 
-So a submission that passes has balloons the simulator would have produced,
-and a rocket path that is still the competitor's claim. What it catches is the
-straightforward edit: moving balloons onto the rocket's real path to claim pops
-that never happened, or rewriting the score.
+What it does instead is ask what the path costs to fake. The recorded numbers
+still have to be a trajectory: position and velocity are recorded side by side
+out of the same integration, so they have to agree; the attitude quaternion has
+to be a rotation; the flight has to start on the pad. Dragging the path onto a
+set of balloons breaks the first of those by orders of magnitude, because a
+metre of displacement over one 0.01 s step is 100 m/s of velocity that is not
+recorded anywhere.
+
+So a submission that passes has balloons the simulator would have produced, a
+score consistent with its own record, claimed pops the recorded path could have
+reached, and a path that is at least a coherent flight. It is not proof the run
+happened. Anyone willing to integrate a plausible flight can still produce one,
+because the evaluation runs on their own machine.
 """
 
 from __future__ import annotations
@@ -556,6 +565,143 @@ def check_internal_consistency(submission):
     return findings
 
 
+# How far the velocity implied by the recorded positions may sit from the
+# velocity recorded next to them, in m/s.
+#
+# Measured on a real scenario-0 run rather than chosen. The environment records
+# position and velocity side by side in ``rocket_states``, and they come out of
+# the same integration, so on an honest run they agree to integration error: the
+# median disagreement is 1.5e-06 m/s and the largest anywhere in the interior is
+# 0.037 m/s, at the step where the solver changes its step size around burnout.
+#
+# A metre per second is around thirty times that, and still several orders of
+# magnitude below what editing the path costs. Moving a position by a metre over
+# one 0.01 s step implies 100 m/s of velocity that is not there.
+VELOCITY_CONSISTENCY_TOLERANCE = 1.0
+
+# ``rocket_states`` is position, velocity, quaternion, body rates.
+_POSITION = slice(0, 3)
+_VELOCITY = slice(3, 6)
+_QUATERNION = slice(6, 10)
+
+# The attitude quaternion is a rotation, so it is a unit vector. Measured
+# deviation on a real run: 5.3e-12.
+_QUATERNION_NORM_TOLERANCE = 1e-6
+
+# The pad is the origin of the launch frame, at the scenario's elevation.
+# Measured offset on a real run: 2e-09 m.
+_PAD_TOLERANCE_METRES = 0.05
+
+
+def check_the_rocket_path_is_a_trajectory(submission, canonical):
+    """The rocket path is the competitor's claim, so ask what it costs to fake.
+
+    Replaying the agent would settle it and is out of scope: the agent's source
+    is in the submission and running a competitor's code server side is
+    arbitrary code execution by design, which the leaderboard's issue #4 decided
+    against.
+
+    Short of that, the recorded numbers still have to be a trajectory rather
+    than a path drawn through the balloons. ``rocket_states`` carries position
+    and velocity side by side, out of the same integration, so they have to
+    agree; the quaternion has to be a rotation; and the flight has to start on
+    the pad. None of that is expensive to satisfy deliberately, and all of it is
+    expensive to satisfy *accidentally* while dragging the path onto a set of
+    balloons: a metre of displacement over one 0.01 s step is 100 m/s of
+    velocity that is not recorded anywhere.
+
+    So this does not establish that the run happened. It raises editing the
+    result from changing numbers to producing a consistent flight.
+
+    The trailing rows are dropped first. When the flight ends the environment
+    stops advancing the state but keeps recording it, so the last rows repeat a
+    position while still carrying the impact velocity, which is a real run
+    rather than a fabricated one. Measured: exactly two such rows, both at the
+    end.
+    """
+    world = submission["balloon_world_data"]
+    records = world["trajectories"]
+    states = np.asarray([record["rocket_states"] for record in records], dtype=float)
+    if states.ndim != 2 or states.shape[1] < 10:
+        return [
+            Finding(
+                "rocket state shape",
+                False,
+                f"expected (steps, 13) rocket states, got {states.shape}",
+            )
+        ]
+
+    flown = states[np.isfinite(states).all(axis=1)]
+    if len(flown) == 0:
+        return [Finding("rocket path", True, "the rocket never launched")]
+
+    position = flown[:, _POSITION]
+    # Trim the run of repeated positions at the end, which is the finished
+    # flight being recorded rather than advanced.
+    end = len(position)
+    while end > 1 and np.array_equal(position[end - 1], position[end - 2]):
+        end -= 1
+    flown, position = flown[:end], position[:end]
+    velocity, quaternion = flown[:, _VELOCITY], flown[:, _QUATERNION]
+
+    findings = []
+
+    norm_error = float(np.abs(np.linalg.norm(quaternion, axis=1) - 1.0).max())
+    findings.append(
+        Finding(
+            "attitude is a rotation",
+            norm_error <= _QUATERNION_NORM_TOLERANCE,
+            f"largest deviation of |quaternion| from 1 is {norm_error:.3e}",
+        )
+    )
+
+    pad = np.array([0.0, 0.0, float(canonical["environment"]["elevation"])])
+    pad_offset = float(np.linalg.norm(position[0] - pad))
+    findings.append(
+        Finding(
+            "the flight starts on the pad",
+            pad_offset <= _PAD_TOLERANCE_METRES,
+            f"first flown position is {pad_offset:.3g} m from the pad at {tuple(pad)}",
+        )
+    )
+
+    if len(position) < 3:
+        findings.append(
+            Finding(
+                "recorded velocity matches the path",
+                True,
+                f"only {len(position)} flown steps, too few to differentiate",
+            )
+        )
+        return findings
+
+    time_step = float(canonical["simulation"]["time_step"])
+    # Central difference, so this is second order and the curvature of the
+    # trajectory does not show up as disagreement.
+    differentiated = (position[2:] - position[:-2]) / (2.0 * time_step)
+    disagreement = np.linalg.norm(differentiated - velocity[1:-1], axis=1)
+    worst = float(disagreement.max())
+    findings.append(
+        Finding(
+            "recorded velocity matches the path",
+            worst <= VELOCITY_CONSISTENCY_TOLERANCE,
+            f"largest disagreement {worst:.4g} m/s over {len(disagreement)} "
+            f"steps (tolerance {VELOCITY_CONSISTENCY_TOLERANCE} m/s)",
+        )
+    )
+    if worst > VELOCITY_CONSISTENCY_TOLERANCE:
+        where = np.flatnonzero(disagreement > VELOCITY_CONSISTENCY_TOLERANCE)
+        findings.append(
+            Finding(
+                "rocket path",
+                False,
+                f"{where.size} steps record a velocity the positions do not "
+                f"support, first at flown step {int(where[0]) + 1}",
+            )
+        )
+    return findings
+
+
 def verify(submission, tolerance):
     for key in ("balloon_world_data", "leaderboard_info"):
         if key not in submission:
@@ -575,6 +721,10 @@ def verify(submission, tolerance):
     findings += check_internal_consistency(submission)
     if canonical is None:
         return findings
+
+    # Before the balloons, because it needs nothing from them and it is what
+    # says the rocket path is worth comparing anything against.
+    findings += check_the_rocket_path_is_a_trajectory(submission, canonical)
 
     trusted_positions = []
     findings += check_balloon_trajectories(
