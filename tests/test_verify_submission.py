@@ -41,6 +41,7 @@ if _STACK_AVAILABLE:
     from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
     from verify_submission import (
         DEFAULT_TOLERANCE_METRES,
+        CUMULATIVE_DRIFT_TOLERANCE_METRES,
         VELOCITY_CONSISTENCY_TOLERANCE,
         check_the_rocket_path_is_a_trajectory,
         _load_canonical_scenario,
@@ -610,6 +611,75 @@ class TestTheRocketPathHasToBeATrajectory(unittest.TestCase):
 
         self.assertIn("recorded velocity matches the path", self.failures())
 
+    def test_a_ragged_row_is_reported_rather_than_raised(self):
+        """The guard below the array was written for this and never saw it.
+
+        ``np.asarray(..., dtype=float)`` raises on a ragged list one line before
+        the shape check runs, so a submission whose rows are not all the same
+        length left ``verify()`` with an unhandled ValueError. That is
+        attacker-controlled input reaching an exception in the thing whose job is
+        judging attacker-controlled input, and ``main()`` wraps only the load, so
+        one such file ends the batch rather than failing on its own.
+        """
+        for row, bad in enumerate(([1.0, 2.0], "not a row", 7.0)):
+            with self.subTest(shape=repr(bad)):
+                self.submission = copy.deepcopy(self.clean)
+                self.records = self.submission["balloon_world_data"]["trajectories"]
+                self.records[len(self.records) // 2]["rocket_states"] = bad
+
+                self.assertIn("rocket state shape", self.failures())
+
+    def test_a_jump_on_the_first_interval_is_caught(self):
+        """The other end of the interior, and the other place an off-by-one hides.
+
+        The seam at the last interval has its own test; narrowing the two-sided
+        range at the front instead left every one of them passing.
+        """
+        self._flown()[0]["rocket_states"][0] += 5.0
+
+        self.assertIn("recorded velocity matches the path", self.failures())
+
+    def test_a_frozen_tail_of_an_odd_length_is_trimmed_exactly(self):
+        """Every fixture here had an even tail, so trimming two rows at a time
+        passed all of them.
+
+        Asserted on the count rather than on the verdict, because both trims
+        leave something that still looks like a flight: taking two at a time
+        also eats the impact row, and what remains is a shorter honest path.
+        Under-trimming is the expensive direction, since it leaves a frozen row
+        in the differentiation carrying the impact velocity, which is the
+        139.6 m/s false accusation this check was rewritten to stop.
+        """
+        self._with_impact_tail(frozen=3)
+
+        detail = next(
+            finding.detail
+            for finding in check_the_rocket_path_is_a_trajectory(
+                self.submission, self.canonical
+            )
+            if finding.name == "the flight ends where it stops"
+        )
+
+        self.assertEqual(self.failures(), [])
+        self.assertEqual(int(detail.split()[0]), 3)
+
+    def test_the_last_step_bound_stays_near_the_step_before_it(self):
+        """The multiplier, not just the slack beside it.
+
+        Widening it to 100 left every other test passing while a jump of a
+        hundred metres went through. A step may be a little longer than the one
+        before it and not several times longer.
+        """
+        previous = float(
+            np.linalg.norm(
+                np.asarray(self._flown()[-1]["rocket_states"][:3], dtype=float)
+                - np.asarray(self._flown()[-2]["rocket_states"][:3], dtype=float)
+            )
+        )
+        self._with_impact_tail(jump_metres=3.0 * previous + 0.2)
+
+        self.assertIn("the last step is not a jump", self.failures())
+
     def test_teleporting_and_then_freezing_is_caught(self):
         """Freeze the tail and the trim throws away the evidence.
 
@@ -693,7 +763,11 @@ class TestTheRocketPathHasToBeATrajectory(unittest.TestCase):
             records[middle]["rocket_states"]
         )
 
-        self.assertIn("rocket path", self.failures())
+        # The gap check's own name, not the shared "rocket path" this asserted
+        # before. A NaN row fails the velocity check too, which emits that name,
+        # so the old assertion held whether or not this check ran at all:
+        # measured, disabling the gap check left it passing.
+        self.assertIn("the flight has no gaps", self.failures())
 
     def test_a_state_that_is_not_thirteen_wide_is_refused(self):
         for record in self.records:
@@ -841,6 +915,60 @@ class TestACompleteFlightIsAccepted(unittest.TestCase):
             "recorded velocity matches the path",
             [finding.name for finding in self.findings(submission) if not finding.ok],
         )
+
+    def test_a_ramp_under_the_rate_bound_is_still_caught(self):
+        """The bound above is a rate; what is being defended is a distance.
+
+        Holding just under the per-step bound every step for the whole flight
+        buys 2.778 m of lateral drift with the velocity column untouched, which
+        is close to two balloon radii. The per-step rationale, that a metre in
+        one 0.01 s step implies 100 m/s that is not there, is true of an
+        impulsive edit and costs a ramp nothing.
+
+        Measured here at a twentieth of the rate bound, where the per-step check
+        has nothing to say and the running total does. The tail keeps its last
+        offset so the trim still fires and the ramp is the only thing changed.
+        """
+        submission = self.submission()
+        records = submission["balloon_world_data"]["trajectories"]
+        flown = [
+            record
+            for record in records
+            if np.isfinite(record["rocket_states"][:3]).all()
+        ]
+        position = np.asarray(
+            [record["rocket_states"][:3] for record in flown], dtype=float
+        )
+        end = len(position)
+        while end > 1 and np.array_equal(position[end - 1], position[end - 2]):
+            end -= 1
+        step = 0.05 * VELOCITY_CONSISTENCY_TOLERANCE * 0.01
+        for index, record in enumerate(flown):
+            record["rocket_states"][0] += min(index, end - 1) * step
+
+        findings = {finding.name: finding.ok for finding in self.findings(submission)}
+
+        self.assertTrue(
+            findings["recorded velocity matches the path"],
+            "the per-step check was expected to have nothing to say here",
+        )
+        self.assertFalse(findings["the path does not drift away from its velocity"])
+
+    def test_the_honest_run_does_not_drift(self):
+        """The half that stops the above being satisfied by refusing everything.
+
+        Integration error alternates in sign rather than pointing anywhere, so
+        it does not accumulate: measured, the largest running total over a whole
+        flight is 1.04e-04 m on scenario 0 and 8.55e-05 m on scenario 1.
+        """
+        detail = next(
+            finding.detail
+            for finding in self.findings(self.submission())
+            if finding.name == "the path does not drift away from its velocity"
+        )
+        drift = float(detail.split()[3])
+
+        self.assertLess(drift, 0.01 * CUMULATIVE_DRIFT_TOLERANCE_METRES)
 
 
 if __name__ == "__main__":

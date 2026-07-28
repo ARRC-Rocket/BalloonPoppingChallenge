@@ -579,6 +579,24 @@ def check_internal_consistency(submission):
 # over one 0.01 s step implies 100 m/s of velocity that is not there.
 VELOCITY_CONSISTENCY_TOLERANCE = 0.05
 
+# How far the positions may end up from where the recorded velocities put them,
+# in metres, counted from the start of the flight.
+#
+# The bound above is a rate and the thing being defended is a distance, and over
+# a flight those are not the same statement. Staying at 95% of the rate bound
+# every step for 58.5 s buys 2.778 m of lateral displacement with the velocity
+# column untouched, which is measured, not argued, and is close to two balloon
+# radii. The per-step rationale, that a metre in one 0.01 s step implies 100 m/s
+# that is not there, holds for one impulsive edit and costs a ramp nothing.
+#
+# So the unexplained displacement is also accumulated. On an honest run it does
+# not accumulate, because integration error alternates in sign rather than
+# pointing anywhere: measured, the largest running total over a whole flight is
+# 1.04e-04 m on scenario 0 and 8.55e-05 m on scenario 1. Five centimetres is
+# around 500 times that and 3% of one balloon radius, so what is left is not
+# enough to reach anything.
+CUMULATIVE_DRIFT_TOLERANCE_METRES = 0.05
+
 # The last recorded interval is excluded from that check and given the one-sided
 # check below instead.
 #
@@ -664,7 +682,23 @@ def check_the_rocket_path_is_a_trajectory(submission, canonical):
     """
     world = submission["balloon_world_data"]
     records = world["trajectories"]
-    states = np.asarray([record["rocket_states"] for record in records], dtype=float)
+    # Built inside the guard rather than above it. The shape check below was
+    # written for exactly this and never saw it: numpy raises on a ragged list
+    # one line earlier, so a submission whose rows are not all the same length
+    # left verify() with an unhandled ValueError instead of a finding. That is
+    # attacker-controlled input reaching an exception in something whose whole
+    # job is judging attacker-controlled input, and main() only wraps the load,
+    # so one such file ends the batch.
+    try:
+        states = np.asarray(
+            [record["rocket_states"] for record in records], dtype=float
+        )
+    except (ValueError, TypeError) as error:
+        return [
+            Finding(
+                "rocket state shape", False, f"rocket states are not a table: {error}"
+            )
+        ]
     if states.ndim != 2 or states.shape[1] != _STATE_WIDTH:
         return [
             Finding(
@@ -712,8 +746,12 @@ def check_the_rocket_path_is_a_trajectory(submission, canonical):
     if not flying[first_flown:].all():
         gaps = np.flatnonzero(~flying[first_flown:]) + first_flown
         return [
+            # Named apart from "rocket path" on purpose. The velocity check emits
+            # that name too, and a NaN in the middle of a flight fails both, so a
+            # test asserting the name alone could not tell which one fired and
+            # deleting this check left it passing.
             Finding(
-                "rocket path",
+                "the flight has no gaps",
                 False,
                 f"the flight has {gaps.size} non-finite rows after it starts, "
                 f"first at row {int(gaps[0])}",
@@ -813,7 +851,8 @@ def _velocity_matches_the_path(position, velocity, time_step):
 
     displacement = position[1:] - position[:-1]
     mean_velocity = 0.5 * (velocity[1:] + velocity[:-1])
-    residual = np.linalg.norm(displacement / time_step - mean_velocity, axis=1)
+    unexplained = displacement - mean_velocity * time_step
+    residual = np.linalg.norm(unexplained / time_step, axis=1)
 
     findings = []
     interior = residual[:-1]
@@ -836,6 +875,16 @@ def _velocity_matches_the_path(position, velocity, time_step):
                 f"support, first at flown step {int(where[0])}",
             )
         )
+
+    drift = float(np.linalg.norm(np.cumsum(unexplained[:-1], axis=0), axis=1).max())
+    findings.append(
+        Finding(
+            "the path does not drift away from its velocity",
+            drift <= CUMULATIVE_DRIFT_TOLERANCE_METRES,
+            f"the positions run {drift:.4g} m away from where the recorded "
+            f"velocities put them (tolerance {CUMULATIVE_DRIFT_TOLERANCE_METRES} m)",
+        )
+    )
 
     travelled = float(np.linalg.norm(displacement[-1]))
     reachable = float(
