@@ -68,22 +68,26 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: requirements-dev.txt
+          cache-dependency-path: uv.lock
 
-      # CI installs with pip, so nothing else would notice uv.lock going stale
-      # against the ActiveRocketPy submodule. This fails when it does.
-      - name: Check the uv lockfile is current
+      # Install what the lockfile pins, so a green run is a statement about a
+      # known set of versions. This used to be `pip install -r
+      # requirements-dev.txt`, which carries no pins at all, next to a
+      # `uv lock --check` that passed and said nothing about what was then
+      # installed: the lockfile pinned matplotlib 3.10.9, numpy 2.4.5 and scipy
+      # 1.17.1 while CI resolved 3.11.1, 2.5.1 and 1.18.0. So local runs and CI
+      # runs were not testing the same software, and a release on PyPI could
+      # turn this red with nothing changed here.
+      #
+      # `--locked` also fails when uv.lock has gone stale against the
+      # ActiveRocketPy submodule, which is what the separate check was for.
+      - name: Install the locked dependencies
         run: |
           python -m pip install "uv==0.11.14"
-          uv lock --check
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          uv sync --locked --extra dev
 
       - name: Run tests with coverage
-        run: pytest tests/ --cov=BalloonPoppingGymEnv --cov-report=xml --cov-report=term
+        run: uv run pytest tests/ --cov=BalloonPoppingGymEnv --cov-report=xml --cov-report=term
 
       - name: Upload coverage artifact
         if: ${{ !cancelled() }}
@@ -101,3 +105,41 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.xml
           fail_ci_if_error: false
+
+  latest-dependencies:
+    name: Latest dependencies (early warning)
+    runs-on: ubuntu-latest
+    # The tests above install what the lockfile pins, which is the right thing
+    # for a gate: a green run means a known set of versions. It also means
+    # nothing here would notice a new release breaking the package.
+    #
+    # That is not hypothetical. Matplotlib 3.11 took out the default renderer
+    # for anyone on the README's pip path (#89), and the only reason CI saw it
+    # was that CI was on that path too.
+    #
+    # So the pip path keeps running, named for what it is, and does not block:
+    # a release on PyPI should tell us something rather than stop unrelated work
+    # from merging. Fast suite only, because it is looking for import and API
+    # breakage rather than trajectory drift.
+    continue-on-error: true
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install the newest dependencies pip will resolve
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Report what that resolved to
+        run: python -m pip list
+
+      - name: Run tests
+        run: pytest tests/ -q
