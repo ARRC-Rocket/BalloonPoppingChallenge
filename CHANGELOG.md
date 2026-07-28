@@ -3,13 +3,14 @@
 Notable changes to BalloonPoppingGymEnv, in the style of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-This tracks what a competitor would notice: environment behaviour, the action and
-observation spaces, the submission format, scoring, and the supported Python
-versions. Entries link to the pull request that made the change.
+This tracks what users and contributors would notice: environment behaviour, the
+action and observation spaces, the submission format, scoring, the supported
+Python versions, and the tooling needed to work on the repository. Entries link
+to the pull request that made the change.
 
-## [0.1.0] - 2026-07-DD
+## [Unreleased]
 
-*Changes on `develop` since v0.0.2. To be released in #61*
+*Changes on `develop` since v0.0.2. The release PR renames this section.*
 
 ### Added
 
@@ -27,13 +28,23 @@ versions. Entries link to the pull request that made the change.
 
 ### Changed
 
+- **Breaking, custom scenarios:** `rocket.control.gimbal_range` is now
+  `max_gimbal_angle`, and the three time-constant keys above are required. A
+  scenario file written for v0.0.2 raises `KeyError: 'max_gimbal_angle'` on the
+  first launch action. Rename the key and add the three fields as `null` to keep
+  the previous behaviour (#39).
 - Diagnostics go through the `logging` module instead of `print` (#51).
 - ActiveRocketPy updated to the RocketPy v1.13 line (#60), with `uv.lock`
-  relocked to match (#46, #62).
+  relocked to match (#62).
 - ruff is pinned in CI so formatting results are reproducible (#50).
 
 ### Fixed
 
+- The documented coordinate frame was wrong about Z. X and Y are east and north
+  of the launch point, but Z is altitude above sea level, not height above the
+  pad, in `balloon_states`, the GNSS sensors and the rocket state alike. A
+  balloon 10 m above the pad reads `elevation + 10`, and the rocket starts at
+  `z = elevation` (#68).
 - An agent that never sends a launch action now reaches the timeout and ends the
   episode instead of raising `AttributeError`, and the interval between launch
   and the first simulated sample takes part in pop detection rather than being
@@ -41,7 +52,7 @@ versions. Entries link to the pull request that made the change.
 - Submissions can be packed again: the sensor seeds are JSON-safe, where before
   `pack_for_submission` raised `TypeError` on a `SeedSequence` (#67).
 - The `evaluate.py` integrity check no longer reports a mismatch for a file that
-  differs only by a BOM or by line endings (#55).
+  differs only by a BOM, by line endings, or by a trailing newline (#55).
 - A network failure during the `evaluate.py` check no longer discards a
   submission that has already been simulated (#68).
 - Lint and pytest failures in the test suite (#40).

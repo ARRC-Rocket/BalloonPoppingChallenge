@@ -31,8 +31,11 @@ python -m venv .venv && source .venv/bin/activate
 python -m pip install -r requirements-dev.txt
 ```
 
-`uv sync --extra vpython` adds the optional vpython renderer. It is imported
-lazily on purpose, so never import it at module scope.
+For the optional vpython renderer, ask for both extras in one command:
+`uv sync --extra dev --extra vpython`. `uv sync` is exact, so running
+`--extra vpython` on its own afterwards uninstalls everything that only the
+`dev` extra brings in, ruff included. vpython is imported lazily on purpose, so
+never import it at module scope.
 
 ## Branches
 
@@ -117,6 +120,9 @@ turns into a round trip.
 
 ## Changes worth a changelog entry
 
-Anything a competitor would notice goes in `CHANGELOG.md` under `Unreleased`:
-environment behaviour, the action or observation space, the submission format,
-scoring, or the supported Python versions.
+Anything a user or a contributor would notice goes in `CHANGELOG.md` under
+`Unreleased`: environment behaviour, the action or observation space, the
+submission format, scoring, the supported Python versions, or the tooling
+needed to work on the repository. The release PR renames that section to the
+version being cut and adds its comparison link, so nothing here carries a
+placeholder date.
