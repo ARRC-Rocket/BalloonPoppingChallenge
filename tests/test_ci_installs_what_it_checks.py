@@ -35,17 +35,24 @@ SUPPORTED_PYTHON = {"3.10", "3.14"}
 
 
 def _commands(job):
-    """Every shell line the job runs, without comments.
+    """Every shell line the job runs, without comments or echoes.
 
-    Line by line and comment-stripped, so a mention inside a ``#`` line or an
-    ``echo`` cannot satisfy an assertion about what the job does.
+    Line by line, so a mention inside a ``#`` line cannot satisfy an assertion
+    about what the job does. ``echo`` is dropped for the same reason and it was
+    not, once: the docstring here claimed it was while the code only handled
+    ``#``. Measured, replacing the install and the pytest line with ``echo`` of
+    the same strings left all twelve tests passing, and that job would have gone
+    green having installed nothing and run nothing.
     """
     lines = []
     for step in job.get("steps", []):
         for line in step.get("run", "").splitlines():
             stripped = line.strip()
-            if stripped and not stripped.startswith("#"):
-                lines.append(stripped)
+            if not stripped or stripped.startswith("#"):
+                continue
+            if stripped.split()[0] in ("echo", "printf", ":", "true"):
+                continue
+            lines.append(stripped)
     return lines
 
 
@@ -117,6 +124,42 @@ class TestTheGatingJob(unittest.TestCase):
             "the gating job cannot fail a run",
         )
 
+    def test_no_step_of_it_swallows_its_own_failure(self):
+        """The same escape one level down, where the job-level check cannot see
+        it. Measured: putting ``continue-on-error: true`` on the pytest step
+        alone left every test here passing, and a red suite would have reported
+        the job green."""
+        for step in self.jobs[GATING_JOB].get("steps", []):
+            with self.subTest(step=step.get("name", step.get("uses", "?"))):
+                self.assertIn(step.get("continue-on-error"), (None, False))
+
+    def test_nothing_can_switch_it_off(self):
+        """A gate with a condition is a gate that can be conditioned away.
+
+        Measured: ``if: false`` on the job, and the subtler
+        ``if: github.event_name == 'schedule'``, each left every test here
+        passing while the job stopped running entirely. actionlint reports only
+        the literal ``false``, so this is asserted rather than delegated.
+        """
+        self.assertIsNone(
+            self.jobs[GATING_JOB].get("if"),
+            "the gating job runs unconditionally or it is not a gate",
+        )
+
+    def test_it_runs_the_tests_that_only_run_when_asked(self):
+        """The golden masters are behind an environment variable.
+
+        ``BPC_RUN_SLOW_TESTS`` is one line in the same ``env:`` block this
+        change edits, and deleting it is silent: measured, every test in this
+        file still passes, and the run drops from 325 passed with 2 skipped to
+        309 passed with 18 skipped. Among the eighteen are the scenario 0 and 1
+        regressions, which is the one thing standing between an ActiveRocketPy
+        change and a moved score.
+        """
+        environment = self.jobs[GATING_JOB].get("env", {})
+
+        self.assertEqual(str(environment.get("BPC_RUN_SLOW_TESTS", "")), "1")
+
 
 class TestTheEarlyWarningJob(unittest.TestCase):
     """Installing the newest dependencies is still worth doing, elsewhere.
@@ -161,3 +204,33 @@ class TestTheEarlyWarningJob(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWhatCountsAsSomethingTheJobDoes(unittest.TestCase):
+    """``_commands`` is the lens every assertion above looks through.
+
+    So it is tested rather than trusted. It already claimed in its docstring to
+    drop ``echo`` while doing no such thing, and a lens that quietly widens
+    turns every assertion above into a statement about nothing.
+    """
+
+    def test_a_real_command_is_kept(self):
+        job = {"steps": [{"run": "uv sync --locked --extra dev"}]}
+
+        self.assertEqual(_commands(job), ["uv sync --locked --extra dev"])
+
+    def test_a_commented_command_is_not_one(self):
+        job = {"steps": [{"run": "# uv sync --locked --extra dev"}]}
+
+        self.assertEqual(_commands(job), [])
+
+    def test_an_echoed_command_is_not_one(self):
+        """Measured: with the install and the pytest line replaced by ``echo``
+        of the same strings, every test in this file passed."""
+        for line in (
+            'echo "uv sync --locked --extra dev"',
+            "printf 'uv run --no-sync pytest'",
+            ": uv sync --locked",
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(_commands({"steps": [{"run": line}]}), [])
