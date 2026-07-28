@@ -568,16 +568,58 @@ def check_internal_consistency(submission):
 # How far the velocity implied by the recorded positions may sit from the
 # velocity recorded next to them, in m/s.
 #
-# Measured on a real scenario-0 run rather than chosen. The environment records
-# position and velocity side by side in ``rocket_states``, and they come out of
-# the same integration, so on an honest run they agree to integration error: the
-# median disagreement is 1.5e-06 m/s and the largest anywhere in the interior is
-# 0.037 m/s, at the step where the solver changes its step size around burnout.
+# Measured on real runs of both shipped scenarios rather than chosen. Over one
+# step the displacement is compared against the average of the two endpoint
+# velocities, which is exact for constant acceleration, so on an honest run the
+# two agree to integration error: the largest disagreement anywhere is
+# 0.002923 m/s, on both scenario 0 and scenario 1.
 #
-# A metre per second is around thirty times that, and still several orders of
-# magnitude below what editing the path costs. Moving a position by a metre over
-# one 0.01 s step implies 100 m/s of velocity that is not there.
-VELOCITY_CONSISTENCY_TOLERANCE = 1.0
+# Fifty millimetres per second is seventeen times that, and still three orders
+# of magnitude below what editing the path costs. Moving a position by a metre
+# over one 0.01 s step implies 100 m/s of velocity that is not there.
+VELOCITY_CONSISTENCY_TOLERANCE = 0.05
+
+# The last recorded interval is excluded from that check and given the one-sided
+# check below instead.
+#
+# The flight ends inside a step: the integrator stops at the ground, so the
+# final displacement is shorter than the recorded velocities imply and the
+# two-sided residual reads 45.3 m/s on scenario 0 and 51.3 m/s on scenario 1
+# while every other interval is under 0.003. That is the honest signature of a
+# run that landed, and it is one-sided: the rocket moved *less* than its speed
+# allowed. Dragging the path somewhere is the other direction, so what the final
+# interval still has to satisfy is an upper bound on how far it went.
+#
+# That bound is the *previous* displacement, not the recorded velocity, and the
+# difference matters. Sizing it from velocity reads ``velocity[-1]``, the one row
+# no two-sided comparison constrains, so inflating that one number inflates the
+# allowance with it: at 10000 m/s it buys a 105 m jump. Nor is the rest of the
+# velocity column pinned tightly enough to fall back on, since the two-sided
+# check only ever sees velocities through a mean of two, and an alternating
+# perturbation leaves every one of those means unchanged. Consecutive
+# displacements are position against position, which is the thing being
+# defended, and speed changes by at most a·dt across one 0.01 s step.
+#
+# Measured: the final displacement is 0.673 of the one before it on scenario 0
+# and 0.639 on scenario 1, and no interior ratio exceeds 0.9968.
+_FINAL_STEP_DISPLACEMENT_ALLOWANCE = 1.05
+
+# Floor in metres under that ratio, for the first steps off the pad where the
+# rocket is accelerating hard from nearly nothing and consecutive displacements
+# genuinely do multiply. Covers a run that ends there, where the ratio means
+# little and the distances are millimetres. What it concedes is 3% of the 1.5 m
+# balloon radius, on the one interval it applies to, so it cannot reach anything.
+_FINAL_STEP_SLACK_METRES = 0.05
+
+# How many repeated positions may sit at the end of the flight.
+#
+# The environment stops advancing the state when the flight finishes but keeps
+# recording it, so a landed run ends with a short run of identical positions.
+# Measured: exactly two, on both scenarios. The limit matters because those rows
+# are dropped before differentiating, and a rocket parked in a good spot pops
+# every balloon that drifts onto it. Without a limit, freezing the tail buys
+# unbounded unchecked time.
+_FROZEN_TAIL_LIMIT_ROWS = 8
 
 # ``rocket_states`` is position, velocity, quaternion, body rates.
 _POSITION = slice(0, 3)
@@ -690,6 +732,7 @@ def check_the_rocket_path_is_a_trajectory(submission, canonical):
     end = len(position)
     while end > 1 and np.array_equal(position[end - 1], position[end - 2]):
         end -= 1
+    frozen_rows = len(position) - end
     position = position[:end]
     velocity = flown[:end, _VELOCITY]
 
@@ -714,40 +757,99 @@ def check_the_rocket_path_is_a_trajectory(submission, canonical):
         )
     )
 
-    if len(position) < 3:
-        findings.append(
-            Finding(
-                "recorded velocity matches the path",
-                True,
-                f"only {len(position)} flown steps, too few to differentiate",
-            )
+    findings.append(
+        Finding(
+            "the flight ends where it stops",
+            frozen_rows <= _FROZEN_TAIL_LIMIT_ROWS,
+            f"{frozen_rows} repeated positions at the end of the flight "
+            f"(limit {_FROZEN_TAIL_LIMIT_ROWS})",
         )
-        return findings
+    )
 
     time_step = float(canonical["simulation"]["time_step"])
-    # Central difference, so this is second order and the curvature of the
-    # trajectory does not show up as disagreement.
-    differentiated = (position[2:] - position[:-2]) / (2.0 * time_step)
-    disagreement = np.linalg.norm(differentiated - velocity[1:-1], axis=1)
-    worst = float(disagreement.max())
+    findings += _velocity_matches_the_path(position, velocity, time_step)
+    return findings
+
+
+def _velocity_matches_the_path(position, velocity, time_step):
+    """Does each recorded step move the way the velocity beside it says?
+
+    Over one interval the displacement is compared against the mean of the two
+    endpoint velocities. That is the trapezoid rule: exact under constant
+    acceleration, second order otherwise, and above all a statement about *one
+    interval*, made from the two rows that bound it.
+
+    That last part is the point. This check used to differentiate with a central
+    difference, ``(p[k+1] - p[k-1]) / (2 dt)`` against ``v[k]``, which only ever
+    compares rows of the same parity. Adding a constant to every odd row is
+    therefore exactly invisible to it. Measured on a real flight: shifting all
+    the odd rows 1000 m sideways left this reporting a match, while the pop
+    check, which reads adjacent rows, walked the offset path. Comparing adjacent
+    rows has no such nullspace, needs no interior, and covers both endpoints.
+
+    The final interval is held to a weaker, one-sided rule against the step
+    before it. See ``_FINAL_STEP_DISPLACEMENT_ALLOWANCE``: a flight that lands
+    stops partway through its last step, so moving less than the step before is
+    normal there, and only moving *more* is evidence.
+
+    What this does not establish is that the flight obeyed any physics. A path
+    that hovers, with matching zeroed velocities, is self-consistent and passes,
+    and so does any other invented but consistent flight. Settling that needs the
+    agent replayed, which the docstring above explains is out of scope. The claim
+    here is only the one stated there: editing a result costs producing a
+    consistent flight rather than changing numbers.
+    """
+    if len(position) < 3:
+        # Not "the benefit of the doubt". A run this short is either a launch on
+        # the last step, which scores nothing, or a tail frozen down to nothing,
+        # which is the shape the check exists to catch.
+        return [
+            Finding(
+                "recorded velocity matches the path",
+                False,
+                f"only {len(position)} flown steps, too few to check the path",
+            )
+        ]
+
+    displacement = position[1:] - position[:-1]
+    mean_velocity = 0.5 * (velocity[1:] + velocity[:-1])
+    residual = np.linalg.norm(displacement / time_step - mean_velocity, axis=1)
+
+    findings = []
+    interior = residual[:-1]
+    worst = float(interior.max())
     findings.append(
         Finding(
             "recorded velocity matches the path",
             worst <= VELOCITY_CONSISTENCY_TOLERANCE,
-            f"largest disagreement {worst:.4g} m/s over {len(disagreement)} "
+            f"largest disagreement {worst:.4g} m/s over {interior.size} "
             f"steps (tolerance {VELOCITY_CONSISTENCY_TOLERANCE} m/s)",
         )
     )
-    if worst > VELOCITY_CONSISTENCY_TOLERANCE:
-        where = np.flatnonzero(disagreement > VELOCITY_CONSISTENCY_TOLERANCE)
+    if not worst <= VELOCITY_CONSISTENCY_TOLERANCE:
+        where = np.flatnonzero(~(interior <= VELOCITY_CONSISTENCY_TOLERANCE))
         findings.append(
             Finding(
                 "rocket path",
                 False,
                 f"{where.size} steps record a velocity the positions do not "
-                f"support, first at flown step {int(where[0]) + 1}",
+                f"support, first at flown step {int(where[0])}",
             )
         )
+
+    travelled = float(np.linalg.norm(displacement[-1]))
+    reachable = float(
+        np.linalg.norm(displacement[-2]) * _FINAL_STEP_DISPLACEMENT_ALLOWANCE
+        + _FINAL_STEP_SLACK_METRES
+    )
+    findings.append(
+        Finding(
+            "the last step is not a jump",
+            travelled <= reachable,
+            f"the last step covers {travelled:.4g} m against the {reachable:.4g} m "
+            f"the step before it allows",
+        )
+    )
     return findings
 
 
