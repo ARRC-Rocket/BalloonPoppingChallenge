@@ -134,9 +134,27 @@ NESTED_SCOPES = (
 # loop's step and gets asked for flags that are the inner loop's job, which is
 # how the idiomatic multi-episode runner came out reported.
 #
-# ``for`` is deliberately not a barrier here: a ``for`` is never an episode loop
-# itself, so a step inside one has no other owner, and stopping at it would only
-# lose the enclosing ``while``.
+# ``for`` is not a barrier, and the reason is narrower than "a ``for`` is never
+# an episode loop". Sometimes it is. A bounded runner,
+#
+#     while retries:
+#         for _ in range(max_steps):
+#             o, r, terminated, truncated, i = env.step(a)
+#             if terminated or truncated:
+#                 break
+#
+# is correct and gets its enclosing ``while retries:`` reported for a condition
+# that belongs to the inner loop. That is a known false positive, and a bounded
+# runner written without any enclosing ``while`` is not discovered at all.
+#
+# The repair, making ``for`` a barrier and judging a stepping ``for`` on its
+# exits the way ``while True`` is judged, was tried and is worse here. It reports
+# the two loops in tests/test_coordinate_contract.py, which step inside
+# ``for _ in range(600)`` and answer both flags with ``self.fail(...)``. Leaving
+# by raising is a real exit that ``_leaves_the_loop`` does not model, and
+# widening it to accept any call would accept most things. Neither missing shape
+# exists in this repository, and two correct loops do, so it stays as it is until
+# the exit rule can read a raise.
 STEP_BARRIERS = NESTED_SCOPES + (ast.While,)
 
 
@@ -910,3 +928,43 @@ class TestTheDiscoveryPin(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHowALoopIsAllowedToLeave(unittest.TestCase):
+    """Two branches of the ``while True`` exit rule that nothing failed on.
+
+    Each admits a genuinely broken loop when it breaks, so each is pinned here
+    rather than left to the reader. Found by mutating the rule, not by reading
+    it: both survived a full run of this file.
+    """
+
+    def problem(self, body):
+        source = (
+            "import gymnasium as gym\nenv = gym.make('x')\nwhile True:\n"
+            "    o, r, terminated, truncated, i = env.step(a)\n" + body
+        )
+        (loop,) = episode_loops(ast.parse(source))
+        return guard_problem(loop)
+
+    def test_setting_a_variable_is_not_leaving_the_loop(self):
+        """``running = False`` does not end a ``while True``. With the
+        break-or-return test widened to accept any statement, this passed."""
+        self.assertIsNotNone(
+            self.problem("    if terminated or truncated:\n        running = False\n")
+        )
+
+    def test_leaving_only_when_both_flags_are_set_is_leaving_never(self):
+        """The exit has to be the mirror of the guard rather than a mention of
+        both names. ``and`` here keeps stepping after either one fires, which is
+        the failure this file is about, and comparing the behaviour to anything
+        other than ``LEAVE_NOW`` lets it through."""
+        self.assertIsNotNone(
+            self.problem("    if terminated and truncated:\n        break\n")
+        )
+
+    def test_the_ordinary_form_is_still_accepted(self):
+        """The half that stops the two above being satisfied by refusing
+        everything."""
+        self.assertIsNone(
+            self.problem("    if terminated or truncated:\n        break\n")
+        )
