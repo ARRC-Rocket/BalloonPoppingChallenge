@@ -48,13 +48,22 @@ def _remove_monte_carlo_workspace(directory):
 
 
 def _seed_sequence_to_int(seed_sequence):
-    """Return the full 128-bit state of ``seed_sequence`` as a plain int.
+    """Encode 128 generated state bits of ``seed_sequence`` as a plain int.
 
     Sensors keep whatever seed they were built with and hand it back from
     ``to_dict()``, which the submission packer runs through ``RocketPyEncoder``.
     A ``SeedSequence`` object has no JSON form, so passing one straight to a
-    sensor makes packing a submission fail. An int carries the same entropy and
-    is accepted by ``default_rng``.
+    sensor makes packing a submission fail. An int has one and ``default_rng``
+    accepts it.
+
+    Not a change of representation. ``default_rng(child)`` mixes in the child's
+    ``spawn_key``; ``default_rng(int)`` builds a fresh root sequence from these
+    bits, so the generator draws a different stream from the one the child
+    itself would have produced. That is deliberate: both shipped scenarios run
+    at ``noise_density: 0.0``, so no baseline depends on the old stream, and the
+    three derived values are pinned by a test so a later move is a decision
+    rather than a side effect. Preserving the exact stream needs
+    ``SeedSequence`` serialization upstream (RocketPy-Team/RocketPy#1087).
 
     The words are combined by value rather than through ``tobytes``, so the
     result does not depend on the machine's byte order.
@@ -1078,31 +1087,28 @@ class BalloonPoppingEnv(gym.Env):
         # own SeedSequence(scenario_seed) tree even once that runs in parallel.
         sensor_seed_domain = 0x5E2502  # fixed "sensor" tag, distinct from the MC
         seed = self.np_random_seed
-        if seed is None:
-            gyro_seed = accelerometer_seed = gnss_seed = None
+        if seed is None or seed < 0:
+            # Gymnasium reports -1 when the seed is unknown, which happens when
+            # np_random was assigned directly, and its property initializes
+            # rather than ever handing back None. Both land here because
+            # SeedSequence rejects any negative entropy, not only -1, so
+            # narrowing this to == -1 would turn an unexpected value into a
+            # crash. The entropy comes from the generator we do have instead of
+            # a seed we do not; leaving the sensors unseeded here would make a
+            # run unreproducible without saying so.
+            entropy = [
+                int(word)
+                for word in self.np_random.integers(0, 2**32, size=4, dtype=np.uint32)
+            ]
         else:
-            if seed < 0:
-                # Gymnasium reports -1 when the seed is unknown, which happens
-                # when np_random was assigned directly. SeedSequence rejects a
-                # negative entropy, so draw the entropy from the generator we do
-                # have instead of a seed we do not.
-                entropy = [
-                    int(word)
-                    for word in self.np_random.integers(
-                        0, 2**32, size=4, dtype=np.uint32
-                    )
-                ]
-            else:
-                entropy = [int(seed)]
-            # Plain ints, not the SeedSequence children themselves: sensors keep
-            # their seed and hand it back through to_dict(), which has to stay
-            # JSON serializable for the submission packer.
-            gyro_seed, accelerometer_seed, gnss_seed = (
-                _seed_sequence_to_int(child)
-                for child in np.random.SeedSequence(
-                    [*entropy, sensor_seed_domain]
-                ).spawn(3)
-            )
+            entropy = [int(seed)]
+        # Plain ints, not the SeedSequence children themselves: sensors keep
+        # their seed and hand it back through to_dict(), which has to stay
+        # JSON serializable for the submission packer.
+        gyro_seed, accelerometer_seed, gnss_seed = (
+            _seed_sequence_to_int(child)
+            for child in np.random.SeedSequence([*entropy, sensor_seed_domain]).spawn(3)
+        )
         gyro = Gyroscope(
             sampling_rate=sensors_cfg["sampling_rate"],
             noise_density=sensors_cfg["gyro_noise_density"],
