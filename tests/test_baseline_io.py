@@ -8,10 +8,13 @@ strict encoding nor the atomic replace had a test.
 import json
 import math
 import os
+import stat
 import tempfile
 import unittest
+from unittest import mock
 
-from tests.baselines.baseline_io import write_baseline
+from tests.baselines import baseline_io
+from tests.baselines.baseline_io import NEW_BASELINE_MODE, write_baseline
 
 
 class TestWriteBaseline(unittest.TestCase):
@@ -75,3 +78,132 @@ class TestWriteBaseline(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipIf(os.name == "nt", "POSIX permission semantics")
+class TestTheReplacementKeepsThePermissions(unittest.TestCase):
+    """Replacing a file is not overwriting it, and the mode follows the file.
+
+    ``mkstemp`` creates owner-only and ``os.replace`` moves that file into place,
+    so without care every regeneration narrows a ``0664`` baseline to ``0600``.
+    The repository's committed baselines are ``0664``, so this is not
+    hypothetical. The submission writer elsewhere in the project *wants* owner-only
+    because its payload holds the team secret; a baseline does not.
+    """
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.directory = directory.name
+        self.path = os.path.join(self.directory, "baseline.json")
+
+    def _mode(self):
+        return stat.S_IMODE(os.stat(self.path).st_mode)
+
+    def test_replacing_a_baseline_preserves_its_mode(self):
+        write_baseline({"old": True}, self.path)
+        os.chmod(self.path, 0o664)
+
+        write_baseline({"new": True}, self.path)
+
+        self.assertEqual(self._mode(), 0o664)
+
+    def test_an_unusual_mode_is_preserved_too(self):
+        # Not just the one value the repository happens to use.
+        write_baseline({"old": True}, self.path)
+        os.chmod(self.path, 0o640)
+
+        write_baseline({"new": True}, self.path)
+
+        self.assertEqual(self._mode(), 0o640)
+
+    def test_a_new_baseline_is_readable(self):
+        previous = os.umask(0o022)
+        self.addCleanup(os.umask, previous)
+
+        write_baseline({"new": True}, self.path)
+
+        self.assertEqual(self._mode(), 0o644)
+
+    def test_a_new_baseline_respects_the_umask(self):
+        # 0o022, the common default, masks nothing out of 0o644, so a version that
+        # ignored the umask entirely would pass the test above. 0o027 does.
+        previous = os.umask(0o027)
+        self.addCleanup(os.umask, previous)
+
+        write_baseline({"new": True}, self.path)
+
+        self.assertNotEqual(NEW_BASELINE_MODE & ~0o027, NEW_BASELINE_MODE)
+        self.assertEqual(self._mode(), NEW_BASELINE_MODE & ~0o027)
+
+    def test_reading_the_umask_leaves_it_unchanged(self):
+        previous = os.umask(0o027)
+        self.addCleanup(os.umask, previous)
+
+        write_baseline({"new": True}, self.path)
+
+        current = os.umask(0o077)
+        os.umask(current)
+        self.assertEqual(current, 0o027)
+
+
+class TestTheFailurePathsTheHelperDocuments(unittest.TestCase):
+    """The two guarantees the cleanup handler exists for, neither of them tested.
+
+    The existing tests all stop inside ``json.dump`` with a ``ValueError``, which
+    an ``except Exception`` would catch just as well. Turning ``BaseException``
+    into ``Exception`` left all six of them passing while breaking the interrupt
+    cleanup the comment promises.
+    """
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.directory = directory.name
+        self.path = os.path.join(self.directory, "baseline.json")
+
+    def _leftovers(self):
+        return [n for n in os.listdir(self.directory) if n != "baseline.json"]
+
+    def test_an_interrupt_after_a_partial_write_cleans_up(self):
+        def interrupting_dump(_baseline, temp_file, **_kwargs):
+            temp_file.write('{"partial":')
+            raise KeyboardInterrupt
+
+        with mock.patch.object(baseline_io.json, "dump", interrupting_dump):
+            with self.assertRaises(KeyboardInterrupt):
+                write_baseline({"a": 1}, self.path)
+
+        self.assertFalse(os.path.exists(self.path))
+        self.assertEqual(self._leftovers(), [])
+
+    def test_an_interrupt_does_not_disturb_an_existing_baseline(self):
+        write_baseline({"old": True}, self.path)
+
+        def interrupting_dump(_baseline, temp_file, **_kwargs):
+            temp_file.write('{"partial":')
+            raise KeyboardInterrupt
+
+        with mock.patch.object(baseline_io.json, "dump", interrupting_dump):
+            with self.assertRaises(KeyboardInterrupt):
+                write_baseline({"new": True}, self.path)
+
+        with open(self.path, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), {"old": True})
+        self.assertEqual(self._leftovers(), [])
+
+    def test_a_replace_failure_preserves_the_previous_baseline(self):
+        # The other end of the write: the JSON is complete and valid, and the
+        # move itself fails. Windows can refuse this when a reader holds the
+        # destination open, and the temp file must not be left behind either.
+        write_baseline({"old": True}, self.path)
+
+        with mock.patch.object(
+            baseline_io.os, "replace", side_effect=PermissionError("busy")
+        ):
+            with self.assertRaises(PermissionError):
+                write_baseline({"new": True}, self.path)
+
+        with open(self.path, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), {"old": True})
+        self.assertEqual(self._leftovers(), [])
