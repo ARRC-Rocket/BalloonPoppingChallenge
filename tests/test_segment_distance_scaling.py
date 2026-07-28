@@ -380,3 +380,77 @@ class TestANearParallelInteriorMinimum(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEveryCandidateEarnsItsPlace(unittest.TestCase):
+    """Deleting an edge from the five candidates changed no test at all.
+
+    Both golden masters included. The clipped stationary point lands on the same
+    answer as the ``s = 1`` edge for every geometry the other fixtures contain,
+    so the edge was carrying weight nowhere anything looked. It is not decorative:
+    on the pair below, dropping it moves the answer from 1.49990 m to 4.05960 m,
+    which is a pop turning into a miss against a 1.5 m radius.
+
+    Checked against the brute force oracle rather than a recorded number, so this
+    says the answer is right rather than that it has not changed.
+    """
+
+    # From an exhaustive search for a geometry where the s = 1 edge is the only
+    # candidate holding the minimum, at scenario magnitudes.
+    ROCKET = np.array([[0.0, 0.0, 0.0], [2.248642, 7.195445, 26.380041]])
+    BALLOON = np.array(
+        [[-2.732624, 5.051852, 16.682862], [3.586303, 10.1662, 32.856179]]
+    )
+
+    def test_the_s_edge_holds_the_minimum_here(self):
+        truth = _brute_force_distance(*self.ROCKET, *self.BALLOON, samples=20001)
+
+        measured = float(
+            np.sqrt(
+                BalloonPoppingEnv._segment_distance_squared_batch(
+                    self.ROCKET[0],
+                    self.ROCKET[1],
+                    self.BALLOON[0][None, :],
+                    self.BALLOON[1][None, :],
+                )[0]
+            )
+        )
+
+        self.assertAlmostEqual(measured, truth, places=4)
+        self.assertLess(measured, 1.5, "this pair has to be a pop for the test to bite")
+
+    def test_no_geometry_in_a_corpus_beats_the_oracle(self):
+        """A fixed corpus, so the two edge families are covered symmetrically.
+
+        The t-edge minimiser's sign was pinned by the existing fixtures and the
+        s-edge's was not, which is the asymmetry hand-picked geometries produce.
+
+        Asserted one-sided, which is both tighter and far cheaper than comparing
+        to a tolerance. Sampling the two segments can only ever overestimate
+        their true closest approach, so an exact answer must come out at or below
+        the oracle whatever the sample count. Any candidate that is missing, or
+        minimised with the wrong sign, returns some other stationary value, and
+        the one direction it cannot go is under the truth.
+
+        Seeded, so a failure is reproducible rather than a flake.
+        """
+        generator = np.random.default_rng(20260729)
+        worst = 0.0
+        for _ in range(200):
+            points = generator.uniform(-30.0, 30.0, size=(4, 3))
+            sampled = _brute_force_distance(*points, samples=401)
+            measured = float(
+                np.sqrt(
+                    BalloonPoppingEnv._segment_distance_squared_batch(
+                        points[0],
+                        points[1],
+                        points[2][None, :],
+                        points[3][None, :],
+                    )[0]
+                )
+            )
+            worst = max(worst, measured - sampled)
+
+        self.assertLessEqual(
+            worst, 1e-9, f"exceeded a sampled upper bound by {worst:.3e} m"
+        )
