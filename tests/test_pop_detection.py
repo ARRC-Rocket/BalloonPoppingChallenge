@@ -52,10 +52,45 @@ class TestSegmentDistanceSquaredBatch(unittest.TestCase):
         result = self._distance_squared([0, 0, 0], [0, 0, 0], [[-1, 5, 0]], [[1, 5, 0]])
         np.testing.assert_allclose(result, [25.0], atol=1e-9, rtol=0)
 
+    def test_degenerate_segment_a_clamps_to_each_end_of_b(self):
+        """The clip in that branch, which the case above cannot reach.
+
+        Its point projects to the middle of B, so the clip has nothing to do
+        and deleting it leaves the answer at 25. Measured: it survived.
+
+        These two project outside B in each direction, where an unclipped
+        projection walks along the infinite line to the point itself and
+        returns zero.
+        """
+        beyond_the_end = self._distance_squared(
+            [5, 0, 0], [5, 0, 0], [[0, 0, 0]], [[1, 0, 0]]
+        )
+        np.testing.assert_allclose(beyond_the_end, [16.0], atol=1e-9)
+
+        before_the_start = self._distance_squared(
+            [-4, 0, 0], [-4, 0, 0], [[0, 0, 0]], [[1, 0, 0]]
+        )
+        np.testing.assert_allclose(before_the_start, [16.0], atol=1e-9)
+
     def test_degenerate_segment_b_is_a_point(self):
         # B collapses to (0, 4, 0); nearest point on A is the origin -> 16.
         result = self._distance_squared([-1, 0, 0], [1, 0, 0], [[0, 4, 0]], [[0, 4, 0]])
         np.testing.assert_allclose(result, [16.0], atol=1e-9, rtol=0)
+
+    def test_degenerate_segment_b_clamps_to_each_end_of_a(self):
+        """The same gap on the other side, which the review that found the
+        first one did not mention. It survived for the same reason: the case
+        above puts B's point opposite the middle of A.
+        """
+        beyond_the_end = self._distance_squared(
+            [0, 0, 0], [1, 0, 0], [[5, 0, 0]], [[5, 0, 0]]
+        )
+        np.testing.assert_allclose(beyond_the_end, [16.0], atol=1e-9)
+
+        before_the_start = self._distance_squared(
+            [0, 0, 0], [1, 0, 0], [[-4, 0, 0]], [[-4, 0, 0]]
+        )
+        np.testing.assert_allclose(before_the_start, [16.0], atol=1e-9)
 
     def test_colinear_segments_clamp_to_endpoints(self):
         # Colinear but disjoint along x; closest points are the facing
@@ -222,9 +257,18 @@ class TestTheClampingBranches(unittest.TestCase):
     # still clamped both to the same value, so the mutation survived.
     CLAMPED_HIGH = ([-5.002, 3.969, 3.068], [-0.857, 0.011, -1.096])
     CLAMPED_LOW = ([-4.004, -1.730, -3.597], [-0.977, 7.680, -4.506])
-    # Parallel: direction_b is a multiple of direction_a, so the denominator
-    # vanishes and s stays at its initialized zero.
-    PARALLEL = ([3.0, -1.0, 2.0], [3.0 - 3.15, -1.0 - 3.29, 2.0 - 3.08])
+    # Parallel: the same direction rather than a scaled one, so the denominator
+    # is exactly zero and s stays at its initialized zero.
+    #
+    # It used to be 0.7 times direction_a, which left the denominator at
+    # 4.55e-13 against a 1e-12 threshold. That is a margin of 2.2, resting on
+    # how the multiplication and subtraction round rather than on the segments
+    # being parallel, and #75 has just put this suite on a second Python and a
+    # second numpy. Identical directions cancel exactly.
+    PARALLEL = (
+        [3.0, -1.0, 2.0],
+        [3.0 - 4.5, -1.0 - 4.7, 2.0 - 4.4],
+    )
     # Degenerate: a balloon that did not move over the step.
     DEGENERATE_B = ([2.0, 3.0, 0.0], [2.0, 3.0, 0.0])
     # The rocket's own closest point falls outside its sweep while the balloon's
