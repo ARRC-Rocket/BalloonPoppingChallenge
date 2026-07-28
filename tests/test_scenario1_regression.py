@@ -326,6 +326,62 @@ class TestScenario1Regression(unittest.TestCase):
 
         np.testing.assert_array_equal(first_active_step, expected_first_active_step)
 
+    def test_every_recorded_status_is_one_of_the_three(self):
+        """The whole history, not only the last row.
+
+        The timing check above asks ``history != 0``, which treats any value at
+        all as released, and the domain assertion elsewhere only looks at the
+        final observation. So a history of ``0, 3, 1`` has the right first
+        active step and the right final status while carrying a state that does
+        not exist.
+        """
+        history = self.run_result.status_history
+
+        self.assertTrue(
+            np.issubdtype(history.dtype, np.integer),
+            f"balloon status should be integral, got {history.dtype}",
+        )
+        outside = np.unique(history[~np.isin(history, (0, 1, 2))])
+        self.assertEqual(
+            outside.tolist(), [], "balloon status values outside 0, 1 and 2"
+        )
+
+    def test_no_balloon_goes_backwards(self):
+        """A balloon on the ground is released, and a popped one stays popped.
+
+        ``0, 1, 0, 1`` also has the right first active step and the right final
+        histogram, so neither of the checks above sees it.
+        """
+        history = self.run_result.status_history
+
+        backwards = np.argwhere(np.diff(history, axis=0) < 0)
+        self.assertEqual(
+            backwards[:5].tolist(),
+            [],
+            f"{len(backwards)} status transitions go backwards",
+        )
+
+    def test_the_release_schedule_matches_what_the_parameters_imply(self):
+        """Derived from the scenario file, not read back from the environment.
+
+        The timing check compares against the environment's own
+        ``_balloon_release_at_step``. If the schedule were generated wrongly and
+        the status update followed the same wrong schedule, the two would still
+        agree. This is the independent half: the set of scheduled steps is
+        ``arange(num) * int(release_interval / time_step)`` whatever the
+        shuffle does to their order.
+        """
+        parameters, _ = load_scenario_parameters(SCENARIO_NUMBER)
+        spacing = int(
+            parameters["balloon"]["release_interval"]
+            / parameters["simulation"]["time_step"]
+        )
+        expected = np.arange(parameters["balloon"]["num"]) * spacing
+
+        np.testing.assert_array_equal(
+            np.sort(self.run_result.release_at_step), expected
+        )
+
     def test_the_release_schedule_itself_is_not_degenerate(self):
         """Guard the oracle above, which compares against a live attribute.
 
