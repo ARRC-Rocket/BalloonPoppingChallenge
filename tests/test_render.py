@@ -36,7 +36,6 @@ def _simulation_stack_installed():
     return importlib.util.find_spec("rocketpy") is not None
 
 
-@unittest.skipUnless(_simulation_stack_installed(), "simulation stack not installed")
 @dataclass(frozen=True)
 class FakeVector:
     """Stands in for ``vpython.vector`` while keeping its identity.
@@ -64,6 +63,18 @@ class FakeVector:
         yield self.z
 
 
+def fake_vector(x, y, z, /):
+    """The three positional components ``vpython.vector`` takes.
+
+    Positional-only on purpose. Using the dataclass itself as the stand-in
+    accepts ``vector(x=..., y=..., z=...)``, which real vpython does not: its
+    constructor is ``def __init__(self, *args)`` and raises on those keywords.
+    That left another mutation green here and broken in the renderer.
+    """
+    return FakeVector(x, y, z)
+
+
+@unittest.skipUnless(_simulation_stack_installed(), "simulation stack not installed")
 class TestVpythonRendersAllBalloons(unittest.TestCase):
     """Issue #26: the vpython renderer must create one sphere per balloon."""
 
@@ -82,7 +93,7 @@ class TestVpythonRendersAllBalloons(unittest.TestCase):
         # attributable, and a vector() that keeps its own type.
         spheres = [MagicMock(name=f"sphere{index}") for index in range(num)]
         fake_vpython.sphere.side_effect = spheres
-        fake_vpython.vector.side_effect = FakeVector
+        fake_vpython.vector.side_effect = fake_vector
         with patch.dict(sys.modules, {"vpython": fake_vpython}):
             env.reset(seed=0)
 
@@ -143,7 +154,7 @@ class TestVpythonRendersAllBalloons(unittest.TestCase):
         fake_vpython = MagicMock()
         spheres = [MagicMock(name=f"sphere{index}") for index in range(num)]
         fake_vpython.sphere.side_effect = spheres
-        fake_vpython.vector.side_effect = FakeVector
+        fake_vpython.vector.side_effect = fake_vector
 
         # Not a shared linear ramp: three axes stepping together would let a
         # swap that also rescaled go unnoticed. Mixed signs and a quadratic.
