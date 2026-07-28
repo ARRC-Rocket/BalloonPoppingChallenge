@@ -41,6 +41,7 @@ if _STACK_AVAILABLE:
     from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
     from verify_submission import (
         DEFAULT_TOLERANCE_METRES,
+        _release_eligibility,
         _load_canonical_scenario,
         check_claimed_pops_are_reachable,
         check_internal_consistency,
@@ -212,6 +213,25 @@ class TestTheSubmissionChecker(unittest.TestCase):
         # the two sources are indistinguishable to the suite.
         self.assertNotIn("balloon trajectories", failures)
 
+    def test_the_canonical_world_is_rebuilt_once(self):
+        """Rebuilding it runs the balloon Monte Carlo.
+
+        It was being paid for twice per submission: once to work out release
+        eligibility and once to compare the balloon trajectories. Asserted
+        rather than left to the structure, since the next check to need the
+        canonical world is one call away from making it three.
+        """
+        import verify_submission
+
+        with patch.object(
+            verify_submission,
+            "_regenerate_balloon_flights",
+            wraps=verify_submission._regenerate_balloon_flights,
+        ) as regenerate:
+            verify(self.submission, DEFAULT_TOLERANCE_METRES)
+
+        self.assertEqual(regenerate.call_count, 1)
+
     def test_a_changed_release_schedule_is_caught(self):
         self.submission["balloon_world_data"]["balloon_release_at_step"][0] += 1
 
@@ -283,7 +303,7 @@ class TestWhenAPopIsTooEarly(unittest.TestCase):
     """
 
     @staticmethod
-    def _consistency(status_rows, release_at_step, eligibility=None):
+    def _consistency(status_rows, release_at_step, eligibility="derive"):
         submission = {
             "leaderboard_info": {
                 "final_reward": int((np.asarray(status_rows)[-1] == 2).sum())
@@ -293,7 +313,7 @@ class TestWhenAPopIsTooEarly(unittest.TestCase):
                 "balloon_release_at_step": list(release_at_step),
             },
         }
-        if eligibility is None:
+        if isinstance(eligibility, str):
             status = np.asarray(status_rows, dtype=int)
             steps = np.arange(1, status.shape[0] + 1)[:, None]
             eligibility = steps >= np.asarray(release_at_step, dtype=int)[None, :]
@@ -321,6 +341,17 @@ class TestWhenAPopIsTooEarly(unittest.TestCase):
         failures = self._consistency([[0], [2], [2]], release_at_step=[1])
 
         self.assertNotIn("no balloon is popped before release", failures)
+
+    def test_without_a_release_rule_the_check_reports_that_it_did_not_run(self):
+        """An unevaluated check must not look like a passed one.
+
+        It used to leave ``early`` empty and report "every pop is on or after
+        the balloon's release step", which is an affirmative line about a
+        comparison that never happened.
+        """
+        failures = self._consistency([[2], [2]], [0], eligibility=None)  # really None
+
+        self.assertIn("no balloon is popped before release", failures)
 
     def test_popped_before_the_release_step_is_caught(self):
         # Row 0 is step 1 again, and this balloon is not released until step 50.
@@ -448,8 +479,38 @@ class TestTheIntervalsThePopCheckLooksAt(unittest.TestCase):
         self.assertNotEqual(self._closest(rocket, status, balloons, eligible), [])
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TestTheReleaseRuleItself(unittest.TestCase):
+    """The rule, straight from the regenerated facts.
+
+    Nothing else in this file reaches it. Scenario 0 starts every balloon
+    released, and the reduced scenario-1 fixture has one balloon and therefore a
+    release step of zero, so both produce an all-True mask; the forged-release
+    test supplies its own. Measured: returning ``ones(...)`` from this function,
+    and moving its comparison off by one, both left every other test here green,
+    which is exactly the bypass this branch exists to close.
+    """
+
+    def test_a_grounded_balloon_is_not_eligible_until_its_step(self):
+        # Row k is step k + 1, so a balloon released on step 3 is eligible from
+        # row 2 onwards.
+        eligibility = _release_eligibility(np.array([3]), np.array([0]), steps=4)
+
+        np.testing.assert_array_equal(eligibility, [[False], [False], [True], [True]])
+
+    def test_a_balloon_that_starts_released_is_eligible_throughout(self):
+        """Scenario 0. Its schedule still says 400 and it never fires."""
+        eligibility = _release_eligibility(np.array([400]), np.array([1]), steps=3)
+
+        np.testing.assert_array_equal(eligibility, [[True], [True], [True]])
+
+    def test_the_two_rules_combine_per_balloon(self):
+        eligibility = _release_eligibility(
+            np.array([2, 400]), np.array([0, 1]), steps=3
+        )
+
+        np.testing.assert_array_equal(
+            eligibility, [[False, True], [True, True], [True, True]]
+        )
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
@@ -506,3 +567,7 @@ class TestARealScenario0SubmissionPasses(unittest.TestCase):
 
         self.assertEqual(failures, [])
         self.assertGreater(env._popped_count, 0, "this run should pop something")
+
+
+if __name__ == "__main__":
+    unittest.main()

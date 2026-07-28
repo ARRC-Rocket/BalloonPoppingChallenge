@@ -264,8 +264,12 @@ def _regenerate_balloon_flights(scenario_parameters):
     )
 
 
-def _release_eligibility(canonical, steps):
+def _release_eligibility(release_at_step, initial_status, steps):
     """``(steps, balloons)`` mask of when each balloon is allowed to be released.
+
+    Takes the regenerated facts rather than the scenario, so the rule can be
+    tested without paying for a Monte Carlo, and so the scenario is rebuilt once
+    per submission rather than once per caller.
 
     Taken from the environment rather than from the release schedule, because
     the schedule is not the rule on its own.
@@ -280,14 +284,15 @@ def _release_eligibility(canonical, steps):
     has it released, and from its scheduled step otherwise. Deriving it this way
     rather than naming scenario 0 keeps it right for whatever scenario 2 does.
     """
-    _flights, release_at_step, initial_status = _regenerate_balloon_flights(canonical)
     # Row k is step k + 1, the same offset the trajectory comparison uses.
     step_numbers = np.arange(1, steps + 1)[:, None]
     scheduled = step_numbers >= release_at_step[None, :]
     return scheduled | (initial_status[None, :] >= 1)
 
 
-def check_balloon_trajectories(submission, tolerance, trusted_positions, canonical):
+def check_balloon_trajectories(
+    submission, tolerance, trusted_positions, flights, release_at_step
+):
     """The main check: every recorded balloon state came out of the simulator.
 
     ``canonical`` is the scenario as shipped, never the copy in the submission.
@@ -310,8 +315,6 @@ def check_balloon_trajectories(submission, tolerance, trusted_positions, canonic
                 f"expected (steps, balloons, 6), got {claimed.shape}",
             )
         ]
-
-    flights, release_at_step, _initial_status = _regenerate_balloon_flights(canonical)
 
     expected_balloons = flights.shape[0]
     if claimed.shape[1] != expected_balloons:
@@ -579,9 +582,19 @@ def check_internal_consistency(submission, eligibility=None):
     # scenario 0 run as popping balloon 0 before release: the schedule says step
     # 400 and the committed baseline pops it at 370.
     popped_rows = status == 2
-    early = []
-    if eligibility is not None and eligibility.shape == status.shape:
-        early = np.flatnonzero((popped_rows & ~eligibility).any(axis=0))
+    if eligibility is None or eligibility.shape != status.shape:
+        # Not evaluated rather than passed. Reporting "every pop is on or after
+        # release" when nothing was compared puts an affirmative line under a
+        # report that has already failed for want of a scenario.
+        findings.append(
+            Finding(
+                "no balloon is popped before release",
+                False,
+                "not evaluated: no release schedule to compare against",
+            )
+        )
+        return findings
+    early = np.flatnonzero((popped_rows & ~eligibility).any(axis=0))
     findings.append(
         Finding(
             "no balloon is popped before release",
@@ -615,14 +628,19 @@ def verify(submission, tolerance):
         # scenario at all.
         return findings + check_internal_consistency(submission)
 
+    # Once. Rebuilding it runs the balloon Monte Carlo, which for scenario 1 is
+    # a hundred flights, and it was being paid for twice per submission.
+    flights, release_at_step, initial_status = _regenerate_balloon_flights(canonical)
     eligibility = _release_eligibility(
-        canonical, len(submission["balloon_world_data"]["trajectories"])
+        release_at_step,
+        initial_status,
+        len(submission["balloon_world_data"]["trajectories"]),
     )
     findings += check_internal_consistency(submission, eligibility)
 
     trusted_positions = []
     findings += check_balloon_trajectories(
-        submission, tolerance, trusted_positions, canonical
+        submission, tolerance, trusted_positions, flights, release_at_step
     )
     # Only worth asking where the rocket went if the balloons it is compared
     # against are the ones the seed produced.
