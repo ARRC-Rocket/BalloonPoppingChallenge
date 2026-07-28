@@ -36,9 +36,20 @@ def _brute_force_distance(start_a, end_a, start_b, end_b, samples=4001):
     fractions = np.linspace(0.0, 1.0, samples)[:, None]
     points_a = start_a + fractions * (end_a - start_a)
     points_b = start_b + fractions * (end_b - start_b)
-    return float(
-        np.sqrt(((points_a[:, None, :] - points_b[None, :, :]) ** 2).sum(-1)).min()
-    )
+    # In chunks. The whole difference tensor at 4001 samples is
+    # 4001 * 4001 * 3 * 8 bytes, about 366 MiB, and squaring it can hold two of
+    # those at once. That is a lot of memory for one assertion, and this file
+    # makes the call eight times.
+    best = np.inf
+    for start in range(0, len(points_a), 256):
+        block = points_a[start : start + 256]
+        best = min(
+            best,
+            float(
+                np.sqrt(((block[:, None, :] - points_b[None, :, :]) ** 2).sum(-1)).min()
+            ),
+        )
+    return best
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
@@ -82,6 +93,43 @@ class TestTheParallelTestDoesNotDependOnScale(unittest.TestCase):
         )
 
         self.assertAlmostEqual(measured, truth, places=6)
+        self.assertLessEqual(
+            measured, BALLOON_RADIUS, "this is a pop and was reported as a miss"
+        )
+
+    def test_a_nearly_parallel_pair_still_gets_the_real_closest_approach(self):
+        """The tolerance is observable, and the first version of this got it wrong.
+
+        The branch selected below the tolerance pins s to zero, which is right
+        only when the directions really are parallel: then every s gives the
+        same distance. For merely close to parallel it is wrong, so widening
+        the tolerance moves pairs into a branch that does not answer their
+        question.
+
+        At a chosen 1e-12 this pair came back as 1.5000004 m where the true
+        closest approach is 1.4999995 m, which against a 1.5 m radius is a pop
+        reported as a miss. That is the same defect this file exists to fix,
+        moved rather than removed. The tolerance is now derived from double
+        precision instead.
+        """
+        start_a, end_a = np.array([0.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0])
+        start_b = np.array([-1.0, 1.5000013, 0.0])
+        end_b = np.array([1.0, 1.4999995, 0.0])
+
+        # The premise: close enough to parallel that a loose tolerance catches
+        # it, and not parallel.
+        direction_a, direction_b = end_a - start_a, end_b - start_b
+        a_coeff = float(direction_a @ direction_a)
+        e_coeff = float(direction_b @ direction_b)
+        b_coeff = float(direction_a @ direction_b)
+        relative = abs(a_coeff * e_coeff - b_coeff * b_coeff) / (a_coeff * e_coeff)
+        self.assertLess(relative, 1e-12, "not near enough to parallel")
+        self.assertGreater(relative, 0.0, "exactly parallel proves nothing here")
+
+        measured = self.distance(start_a, end_a, start_b, end_b)
+        truth = _brute_force_distance(start_a, end_a, start_b, end_b)
+
+        self.assertAlmostEqual(measured, truth, places=9)
         self.assertLessEqual(
             measured, BALLOON_RADIUS, "this is a pop and was reported as a miss"
         )
