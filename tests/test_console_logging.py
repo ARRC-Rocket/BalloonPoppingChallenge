@@ -160,6 +160,39 @@ class TestTheConsoleFormat(_LoggingStateMixin, unittest.TestCase):
         self.assertEqual(self.stream.getvalue(), "Total reward: 7\n")
         self.assertEqual(host_stream.getvalue(), "Total reward: 7\n")
 
+    def test_a_hosts_lower_level_is_not_raised(self):
+        """Preserving a handler is not the same as preserving the policy.
+
+        An application that set DEBUG on this logger did so to feed its own
+        handler. Setting the logger to INFO would silence that handler while
+        leaving it attached, which looks like preservation and is not. The
+        console threshold lives on the console handler, so the logger can stay
+        wherever the host put it.
+        """
+        host_stream = io.StringIO()
+        host_handler = logging.StreamHandler(host_stream)
+        host_handler.set_name("host.debug_file")
+        host_handler.setLevel(logging.DEBUG)
+        self.package_logger.addHandler(host_handler)
+        self.package_logger.setLevel(logging.DEBUG)
+
+        configure_console_logging(level=logging.INFO, stream=self.stream)
+
+        self.assertEqual(self.package_logger.level, logging.DEBUG)
+        logging.getLogger(f"{PACKAGE_LOGGER_NAME}.envs").debug("host wants this")
+        logging.getLogger(f"{PACKAGE_LOGGER_NAME}.envs").info("Total reward: 7")
+
+        self.assertEqual(host_stream.getvalue(), "host wants this\nTotal reward: 7\n")
+        # The console still shows only INFO and above.
+        self.assertEqual(self.stream.getvalue(), "Total reward: 7\n")
+
+    def test_a_logger_with_no_level_gets_the_requested_one(self):
+        self.package_logger.setLevel(logging.NOTSET)
+
+        configure_console_logging(level=logging.INFO, stream=self.stream)
+
+        self.assertEqual(self.package_logger.level, logging.INFO)
+
     def test_a_host_root_handler_does_not_double_the_line(self):
         """Why propagate is turned off.
 
@@ -213,7 +246,11 @@ class TestTheConsoleFormat(_LoggingStateMixin, unittest.TestCase):
         self.assertEqual(completed.stdout, "", "importing the package wrote to stdout")
         self.assertEqual(completed.stderr, "", "importing the package wrote to stderr")
         state = json.loads(report.read_text(encoding="utf-8"))
-        self.assertEqual(state["handlers"], [], "import installed a handler")
+        # Exactly the library default: a NullHandler, which emits nothing.
+        # Anything else would put records on a stream nobody asked for, and
+        # nothing at all would let a future WARNING reach logging's last-resort
+        # handler and land on stderr.
+        self.assertEqual(state["handlers"], ["NullHandler"])
         self.assertEqual(state["root_handlers"], [])
 
 
@@ -281,6 +318,70 @@ class TestTheCommandLine(_LoggingStateMixin, unittest.TestCase):
             "Scenario 0 evaluation completed with agent 'A'.\nTotal reward: 7\n",
         )
 
+    def test_running_the_file_directly_enters_main(self):
+        """The `if __name__ == "__main__"` block, which calling main() skips.
+
+        Deleting it leaves every other test here green while `python
+        evaluate.py config.yaml` does nothing at all. Passing no argument makes
+        main() raise before any simulation starts, so this costs nothing: the
+        message proves the script reached it, and a script that never calls
+        main() exits cleanly with no output.
+        """
+        completed = subprocess.run(
+            [sys.executable, "BalloonPoppingGymEnv/evaluation/evaluate.py"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+
+        self.assertNotEqual(completed.returncode, 0, completed.stdout[-500:])
+        self.assertIn("Configuration file path is required", completed.stderr)
+
+    def test_the_submission_is_packed_when_the_config_asks_for_it(self):
+        """The branch the shipped config actually takes.
+
+        Every other test here sets leaderboard_submission to false, so removing
+        the call, or handing it the wrong environment, passed. The config in the
+        repository sets it to true.
+        """
+        from BalloonPoppingGymEnv.evaluation import evaluate
+
+        config = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+        config["leaderboard_submission"] = True
+        self.config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+        env, agent, parameters = object(), object(), {"scenario": {"number": 0}}
+        with mock.patch.object(evaluate, "_load_agent_class", return_value=object):
+            with mock.patch.object(
+                evaluate, "evaluate_scenario", return_value=(env, agent, parameters)
+            ):
+                with mock.patch(
+                    "BalloonPoppingGymEnv.evaluation.results.utils.pack_for_submission"
+                ) as packed:
+                    evaluate.main([str(self.config_path)])
+
+        packed.assert_called_once()
+        self.assertIs(packed.call_args.kwargs["env"], env)
+        self.assertIs(packed.call_args.kwargs["scenario_parameters"], parameters)
+        self.assertEqual(
+            packed.call_args.kwargs["eval_cfg"]["team_name"], config["team_name"]
+        )
+
+    def test_the_submission_is_not_packed_when_the_config_declines(self):
+        from BalloonPoppingGymEnv.evaluation import evaluate
+
+        with mock.patch.object(evaluate, "_load_agent_class", return_value=object):
+            with mock.patch.object(
+                evaluate, "evaluate_scenario", return_value=(object(), object(), {})
+            ):
+                with mock.patch(
+                    "BalloonPoppingGymEnv.evaluation.results.utils.pack_for_submission"
+                ) as packed:
+                    evaluate.main([str(self.config_path)])
+
+        packed.assert_not_called()
+
     def test_a_missing_config_path_still_explains_itself(self):
         from BalloonPoppingGymEnv.evaluation import evaluate
 
@@ -341,20 +442,33 @@ class TestTheEntryPointsConfigureIt(unittest.TestCase):
         self.assertEqual(order, ["configure", "evaluate"])
 
     def test_the_notebook_configures_logging_before_evaluating(self):
+        """Execute the cell against stubs, rather than read its AST.
+
+        ``ast.walk`` proves both call nodes exist and reports an order, but it
+        cannot see reachability: a call under ``if False:`` or inside a nested
+        function that is never called satisfies it. One such mutation was caught
+        here only because walking happened to reorder the two names, which is
+        not something to rely on.
+        """
         notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
-        cells = [
+        source = next(
             "".join(cell["source"])
             for cell in notebook["cells"]
             if cell["cell_type"] == "code"
-        ]
-        source = next(cell for cell in cells if "evaluate_scenario(" in cell)
-        tree = ast.parse(source)
-        names = self._call_names(tree)
-
-        self.assertIn("configure_console_logging", names)
-        self.assertLess(
-            names.index("configure_console_logging"), names.index("evaluate_scenario")
+            and "evaluate_scenario(" in "".join(cell["source"])
         )
+
+        order = []
+        namespace = {
+            "configure_console_logging": lambda *a, **k: order.append("configure"),
+            "evaluate_scenario": lambda *a, **k: (
+                order.append("evaluate") or (object(), object(), {})
+            ),
+            "NoActionAgent": object,
+        }
+        exec(compile(source, str(NOTEBOOK), "exec"), namespace)
+
+        self.assertEqual(order, ["configure", "evaluate"])
 
     def test_the_notebook_binds_the_result_rather_than_displaying_it(self):
         """Left as the cell's value, the returned tuple renders the environment."""

@@ -40,6 +40,15 @@ def configure_console_logging(level=logging.INFO, stream=None):
     Only the handler this module installed is replaced, and it is closed on the
     way out. Clearing the logger's handlers outright would also discard a file,
     JSON or audit handler belonging to whatever is embedding the environment.
+
+    Two things this does take over, which is worth saying plainly because
+    preserving handlers is not the same as preserving policy. Propagation is
+    turned off, so handlers on the root logger stop receiving this package's
+    records; that is what keeps a score from being printed twice, and it is a
+    reasonable trade for something an entry point calls. And the logger's own
+    threshold is lowered to ``level`` if it had none, or left where it is if the
+    host had already set one lower, so a host's DEBUG file handler keeps working
+    while the console still shows only ``level`` and above.
     """
     package_logger = logging.getLogger(PACKAGE_LOGGER_NAME)
     for existing in list(package_logger.handlers):
@@ -52,8 +61,15 @@ def configure_console_logging(level=logging.INFO, stream=None):
     handler.setFormatter(logging.Formatter("%(message)s"))
     handler.setLevel(level)
     package_logger.addHandler(handler)
-    package_logger.setLevel(level)
-    # Already handled here; letting it propagate would print twice under an
-    # application that has its own root handler.
+
+    # Never raise the logger's threshold. A host that set DEBUG here did so to
+    # feed its own handler, and moving the logger to INFO would silence that
+    # handler even though it is left attached. The console threshold is the one
+    # on the handler above, so lowering the logger costs nothing.
+    if package_logger.level == logging.NOTSET:
+        package_logger.setLevel(level)
+    else:
+        package_logger.setLevel(min(package_logger.level, level))
+
     package_logger.propagate = False
     return package_logger
