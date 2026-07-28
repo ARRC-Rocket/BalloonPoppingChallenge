@@ -15,6 +15,7 @@ iteration to keep this guard small and its tolerances simple.
 """
 
 import json
+from dataclasses import dataclass
 import unittest
 from pathlib import Path
 
@@ -61,13 +62,37 @@ SCENARIO_NUMBER = 0
 EXPECTED_POPPED_COUNT = 10
 
 
+@dataclass(frozen=True)
+class RunResult:
+    """One scenario-0 run, in the terms the baseline compares.
+
+    ``positions`` is the per-step rocket centre-of-mass position
+    ``(num_steps, 3)``, NaN rows before launch included.
+
+    ``pop_step`` is, for each balloon, the step at which it first reads as
+    popped. Ten numbers, and the reason they are here: the final count alone
+    says nothing about when or why anything popped. Measured against the
+    previous version of this file, replacing the whole of ``_detect_pops`` with
+    "mark every balloon popped on the first flown step" passed all three tests,
+    because the count, the trajectory and the duration are all unchanged by it.
+
+    ``terminated`` and ``truncated`` are kept apart because Gymnasium keeps them
+    apart. Scenario 0's rocket lands well inside the horizon, so this run ends
+    in a terminal state rather than at a limit, and swapping the two flags would
+    otherwise be invisible.
+    """
+
+    positions: np.ndarray
+    popped: int
+    pop_step: np.ndarray
+    terminated: bool
+    truncated: bool
+
+
 def run_scenario_0():
     """Run scenario #0 with the fixed agent and seed.
 
-    Returns ``(positions, popped)`` where ``positions`` is the per-step rocket
-    centre-of-mass position ``(num_steps, 3)`` -- including the NaN rows before
-    launch -- and ``popped`` is the final cumulative popped-balloon count. Side
-    effect free: it does not write trajectory files.
+    Side effect free: it does not write trajectory files.
     """
     scenario_params, given_params = load_scenario_parameters(SCENARIO_NUMBER)
     env = BalloonPoppingEnv(render_mode=None, parameters=scenario_params)
@@ -82,7 +107,20 @@ def run_scenario_0():
     rocket_states = np.array(
         [step["rocket_states"] for step in env.trajectories], dtype=float
     )
-    return rocket_states[:, :3], int(env._popped_count)
+    status_history = np.asarray(
+        [step["balloon_status"] for step in env.trajectories], dtype=int
+    )
+    popped_now = status_history == 2
+    # -1 for a balloon that never popped, so a run that pops fewer is a visible
+    # difference rather than a shorter list.
+    pop_step = np.where(popped_now.any(axis=0), popped_now.argmax(axis=0), -1)
+    return RunResult(
+        positions=rocket_states[:, :3],
+        popped=int(env._popped_count),
+        pop_step=pop_step,
+        terminated=bool(terminated),
+        truncated=bool(truncated),
+    )
 
 
 def post_launch_positions(positions):
@@ -117,15 +155,66 @@ class TestScenario0Regression(unittest.TestCase):
     def setUpClass(cls):
         with open(BASELINE_PATH, encoding="utf-8") as baseline_file:
             cls.baseline = json.load(baseline_file)
-        positions, cls.popped = run_scenario_0()
-        cls.num_steps = positions.shape[0]
-        cls.positions = post_launch_positions(positions)
+        cls.run_result = run_scenario_0()
+        cls.popped = cls.run_result.popped
+        cls.num_steps = cls.run_result.positions.shape[0]
+        cls.positions = post_launch_positions(cls.run_result.positions)
 
     def test_popped_count_matches_baseline(self):
         # Pin the semantic count, not just the (regenerable) baseline, so a
         # regression that pops fewer balloons cannot be blessed by regenerating.
         self.assertEqual(self.baseline["popped_count"], EXPECTED_POPPED_COUNT)
         self.assertEqual(self.popped, EXPECTED_POPPED_COUNT)
+
+    def test_each_balloon_pops_when_the_baseline_says_it_does(self):
+        """When and which, not only how many.
+
+        The count alone is blind to the thing it exists to protect. Measured on
+        the previous version: replacing the whole of ``_detect_pops`` with
+        "mark every balloon popped on the first flown step" passed every test
+        here, because it leaves the count at ten, the trajectory identical and
+        the duration identical.
+
+        Compared exactly rather than with a tolerance. These are step indices
+        into a deterministic run, so a single step of difference is a real
+        change to when a balloon was reached and worth looking at.
+        """
+        expected = np.asarray(self.baseline["pop_step"], dtype=int)
+        actual = self.run_result.pop_step
+
+        self.assertEqual(
+            actual.shape,
+            expected.shape,
+            f"{actual.size} balloons, baseline has {expected.size}",
+        )
+        np.testing.assert_array_equal(actual, expected)
+
+    def test_the_pops_are_spread_through_the_flight(self):
+        """Guard the comparison above, which is against a regenerable file.
+
+        If the baseline were regenerated from a run that popped everything at
+        once, the exact comparison would keep passing forever. Ten static
+        balloons stacked 40 m apart cannot all be reached in one step, so the
+        steps have to differ.
+        """
+        pop_step = self.run_result.pop_step
+
+        self.assertTrue((pop_step >= 0).all(), "a balloon never popped")
+        self.assertGreater(
+            len(np.unique(pop_step)),
+            1,
+            "every balloon popped on the same step, which the geometry forbids",
+        )
+
+    def test_the_episode_ends_because_the_flight_ended(self):
+        """Scenario 0 lands well inside the horizon.
+
+        Both flags come back from ``step`` and were both discarded, so swapping
+        them was invisible. Which one is set decides whether an agent should
+        bootstrap from the final state.
+        """
+        self.assertTrue(self.run_result.terminated)
+        self.assertFalse(self.run_result.truncated)
 
     def test_flight_duration_matches_baseline(self):
         expected = self.baseline["num_steps_full"]

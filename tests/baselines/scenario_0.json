@@ -13,6 +13,18 @@
   "downsample_stride": 50,
   "num_steps_full": 6012,
   "popped_count": 10,
+  "pop_step": [
+    369,
+    742,
+    959,
+    1127,
+    1268,
+    1392,
+    1504,
+    1606,
+    1700,
+    1788
+  ],
   "rocket_position_downsampled": [
     [
       -1.6839707610917858e-09,
