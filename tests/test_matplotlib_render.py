@@ -20,8 +20,6 @@ import matplotlib
 import numpy as np
 import yaml
 
-matplotlib.use("Agg")
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCENARIO_0 = (
     REPO_ROOT
@@ -42,32 +40,46 @@ class TestTheMatplotlibRendererBeforeLaunch(unittest.TestCase):
     def setUp(self):
         import matplotlib.pyplot as plt
 
+        # Scoped to this test, not set at import. matplotlib.use at module level
+        # changes the backend for the whole pytest session, and this file has no
+        # business deciding that for tests that never render.
+        previous_backend = matplotlib.get_backend()
+        self.addCleanup(plt.switch_backend, previous_backend)
+        plt.switch_backend("Agg")
         self.addCleanup(plt.close, "all")
         parameters = yaml.safe_load(SCENARIO_0.read_text(encoding="utf-8-sig"))
         self.env = BalloonPoppingEnv(render_mode="matplotlib", parameters=parameters)
-        self.env.reset(seed=parameters["scenario"]["random_seed"])
+        _observation, self.info = self.env.reset(
+            seed=parameters["scenario"]["random_seed"]
+        )
 
     def test_the_rocket_state_really_is_nan_before_launch(self):
         """The precondition, so this suite cannot stop reaching the branch.
 
         If the environment ever started the rocket at a finite position, the
         tests below would keep passing while covering nothing.
+
+        Read from the info the environment hands back rather than from
+        ``_rocket_states``, so this is about the state the environment reports.
         """
         self.assertTrue(
-            np.isnan(np.asarray(self.env._rocket_states, dtype=float)).all()
+            np.isnan(np.asarray(self.info["rocket_states"], dtype=float)).all()
         )
 
     def test_a_frame_before_launch_leaves_the_line_holding_arrays(self):
         self.env._render_frame()
 
+        # get_data_3d is documented public API. What is asserted is the property
+        # Line3D.draw actually requires, rather than a specific numpy type:
+        # `_verts3d[0].shape` is read when a coordinate is invalid for the axis
+        # scale, which every pre-launch frame is. Pinning ndarray instead would
+        # over-specify a storage detail matplotlib does not promise.
         verts = self.env.render_rocket[0].get_data_3d()
         for axis, values in zip("xyz", verts, strict=True):
             with self.subTest(axis=axis):
-                self.assertIsInstance(
-                    values,
-                    np.ndarray,
-                    "Line3D.draw reads .shape off these when a coordinate is "
-                    "invalid for the axis scale, which every pre-launch frame is",
+                self.assertTrue(
+                    hasattr(values, "shape"),
+                    f"Line3D.draw reads .shape off this; got {type(values).__name__}",
                 )
 
     def test_a_frame_before_launch_draws(self):
