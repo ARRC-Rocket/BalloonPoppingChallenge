@@ -704,31 +704,43 @@ class BalloonPoppingEnv(gym.Env):
             self.simulation_parameters["max_time"],
             self.simulation_parameters["time_step"],
         )
-        monte_carlo_sim = MonteCarlo(
-            filename=os.path.join(tempfile.gettempdir(), f"balloon_sim_{os.getpid()}"),
-            environment=stochastic_env,
-            rocket=stochastic_balloon,
-            flight=stochastic_flight,
-            export_list=["t_final"],
-            data_collector={
-                "x": lambda flight: flight.x(time_array),
-                "y": lambda flight: flight.y(time_array),
-                "z": lambda flight: flight.z(time_array),
-                "vx": lambda flight: flight.vx(time_array),
-                "vy": lambda flight: flight.vy(time_array),
-                "vz": lambda flight: flight.vz(time_array),
-                "lat0": lambda flight: flight.latitude(0),
-                "lon0": lambda flight: flight.longitude(0),
-            },
-        )
+        # MonteCarlo writes .inputs.txt, .outputs.txt and .errors.txt beside its
+        # filename, and for scenario 1 the outputs file is 169 MB. Nothing reads
+        # them back: the arrays below come from the returned dict. Written
+        # straight into the shared temp directory they were never removed, so a
+        # competitor iterating on an agent left one behind per run and filled
+        # /tmp within tens of runs, after which runs fail in ways that do not
+        # point back here. Measured: 22 files, 3.7 GB, and one corrupted run.
+        #
+        # A private directory removes all three whatever they end up being
+        # called, and mkdtemp creates it exclusively, so this also subsumes the
+        # per-process filename that was there to keep concurrent runs apart.
+        with tempfile.TemporaryDirectory(prefix="balloon_sim_") as monte_carlo_dir:
+            monte_carlo_sim = MonteCarlo(
+                filename=os.path.join(monte_carlo_dir, "balloon_sim"),
+                environment=stochastic_env,
+                rocket=stochastic_balloon,
+                flight=stochastic_flight,
+                export_list=["t_final"],
+                data_collector={
+                    "x": lambda flight: flight.x(time_array),
+                    "y": lambda flight: flight.y(time_array),
+                    "z": lambda flight: flight.z(time_array),
+                    "vx": lambda flight: flight.vx(time_array),
+                    "vy": lambda flight: flight.vy(time_array),
+                    "vz": lambda flight: flight.vz(time_array),
+                    "lat0": lambda flight: flight.latitude(0),
+                    "lon0": lambda flight: flight.longitude(0),
+                },
+            )
 
-        monte_carlo_results_ = monte_carlo_sim.simulate(
-            number_of_simulations=self.balloon_parameters["num"],
-            append=False,
-            include_function_data=False,
-            random_seed=self.np_random_seed,
-            parallel=False,
-        )
+            monte_carlo_results_ = monte_carlo_sim.simulate(
+                number_of_simulations=self.balloon_parameters["num"],
+                append=False,
+                include_function_data=False,
+                random_seed=self.np_random_seed,
+                parallel=False,
+            )
 
         # Convert Monte Carlo dict to [balloon][state][timestep].
         east0, north0, up0 = pm.geodetic2enu(
