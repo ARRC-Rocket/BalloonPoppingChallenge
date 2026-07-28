@@ -11,6 +11,9 @@ import logging
 import sys
 
 PACKAGE_LOGGER_NAME = "BalloonPoppingGymEnv"
+# Marks the handler this module owns, so repeat calls replace that one and leave
+# anything the host installed alone.
+CONSOLE_HANDLER_NAME = "BalloonPoppingGymEnv.console"
 
 
 def configure_console_logging(level=logging.INFO, stream=None):
@@ -26,15 +29,28 @@ def configure_console_logging(level=logging.INFO, stream=None):
     ``INFO:__main__:Total reward: 7``. That line is the visible result of a run
     and is worth keeping the way it was.
 
-    Calling this twice replaces the handler rather than adding a second one, so a
-    notebook cell rerun does not double every line.
+    The threshold is set on the handler as well as on the logger, which is not
+    redundant. A record is filtered by the level of the logger it was *emitted
+    on*; propagation then hands it to every ancestor handler without rechecking
+    any ancestor logger's level. So a descendant left at ``DEBUG`` sends debug
+    records straight to this handler, and with the handler at ``NOTSET`` they
+    reach stdout. Measured: a child at ``DEBUG`` printed its record even with the
+    package logger at ``INFO``.
+
+    Only the handler this module installed is replaced, and it is closed on the
+    way out. Clearing the logger's handlers outright would also discard a file,
+    JSON or audit handler belonging to whatever is embedding the environment.
     """
     package_logger = logging.getLogger(PACKAGE_LOGGER_NAME)
     for existing in list(package_logger.handlers):
-        package_logger.removeHandler(existing)
+        if existing.get_name() == CONSOLE_HANDLER_NAME:
+            package_logger.removeHandler(existing)
+            existing.close()
 
     handler = logging.StreamHandler(sys.stdout if stream is None else stream)
+    handler.set_name(CONSOLE_HANDLER_NAME)
     handler.setFormatter(logging.Formatter("%(message)s"))
+    handler.setLevel(level)
     package_logger.addHandler(handler)
     package_logger.setLevel(level)
     # Already handled here; letting it propagate would print twice under an
