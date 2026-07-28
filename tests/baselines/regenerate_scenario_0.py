@@ -28,7 +28,8 @@ OUTPUT_PATH = Path(__file__).parent / "scenario_0.json"
 
 def main():
     scenario_params, _ = load_scenario_parameters(SCENARIO_NUMBER)
-    positions, popped = run_scenario_0()
+    run_result = run_scenario_0()
+    positions, popped = run_result.positions, run_result.popped
     baseline = {
         "scenario_number": SCENARIO_NUMBER,
         "random_seed": scenario_params["scenario"]["random_seed"],
@@ -37,6 +38,9 @@ def main():
         "downsample_stride": DOWNSAMPLE_STRIDE,
         "num_steps_full": int(positions.shape[0]),
         "popped_count": int(popped),
+        # Per balloon, the step it first reads as popped. The count alone cannot
+        # see a change to when or why anything was reached.
+        "pop_step": run_result.pop_step.tolist(),
         "rocket_position_downsampled": post_launch_positions(positions).tolist(),
     }
     write_baseline(baseline, OUTPUT_PATH)

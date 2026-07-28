@@ -15,22 +15,29 @@ iteration to keep this guard small and its tolerances simple.
 """
 
 import json
+from dataclasses import dataclass
 import unittest
+from importlib.util import find_spec
 from pathlib import Path
 
 import numpy as np
+
+from tests.position_tolerance import assert_positions_match
 
 # ActiveRocketPy (imported as ``rocketpy``) is the heavy optional dependency, so
 # skip the whole test when it is genuinely not installed. The BalloonPoppingGymEnv
 # imports are deliberately left outside that guard: once the stack is present, an
 # ImportError from them is a real regression (a renamed or removed symbol, a
 # broken internal import) and must fail the run instead of skipping it silently.
-try:
+# ``find_spec`` answers "is the package installed", which is the only case that
+# justifies a skip. The import itself stays outside any guard: ``import rocketpy``
+# runs the package's own ``__init__``, so an ImportError raised there means an
+# installed but broken stack, which is exactly what these tests exist to catch and
+# must fail rather than skip.
+_STACK_AVAILABLE = find_spec("rocketpy") is not None
+
+if _STACK_AVAILABLE:
     import rocketpy  # noqa: F401
-except ImportError:
-    _STACK_AVAILABLE = False
-else:
-    _STACK_AVAILABLE = True
 
     from BalloonPoppingGymEnv.agents.example_agents import AttitudeRateControlAgent
     from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
@@ -42,12 +49,8 @@ BASELINE_PATH = Path(__file__).parent / "baselines" / "scenario_0.json"
 AGENT_KWARGS = {"rate_targets": [0.0, 0.0, 0.0], "launch_time": 1}
 DOWNSAMPLE_STRIDE = 50
 
-# Per-coordinate position tolerance, applied as a real floor of
-# ``max(POSITION_ATOL, POSITION_RTOL * abs(expected))`` -- not numpy's additive
-# ``atol + rtol * expected`` -- so a coordinate near zero cannot drift by the
-# metre floor *plus* another few percent.
-POSITION_RTOL = 0.03
-POSITION_ATOL = 1.0
+# The position tolerance itself lives in tests/position_tolerance.py, shared
+# with the other scenario so the two cannot drift apart again.
 # Flight duration is deterministic, so allow only a couple of steps of
 # cross-platform jitter. This is absolute, not a percentage: a 2% tolerance on a
 # ~6000-step flight would wave through a full second of early termination.
@@ -61,13 +64,38 @@ SCENARIO_NUMBER = 0
 EXPECTED_POPPED_COUNT = 10
 
 
+@dataclass(frozen=True)
+class RunResult:
+    """One scenario-0 run, in the terms the baseline compares.
+
+    ``positions`` is the per-step rocket centre-of-mass position
+    ``(num_steps, 3)``, NaN rows before launch included.
+
+    ``pop_step`` is, for each balloon, the step at which it first reads as
+    popped. Ten numbers, and the reason they are here: the final count alone
+    says nothing about when or why anything popped. Measured against the
+    previous version of this file, replacing the whole of ``_detect_pops`` with
+    "mark every balloon popped on the first flown step" passed all three tests,
+    because the count, the trajectory and the duration are all unchanged by it.
+
+    ``terminated`` and ``truncated`` are kept apart because Gymnasium keeps them
+    apart. Scenario 0's rocket lands well inside the horizon, so this run ends
+    in a terminal state rather than at a limit, and swapping the two flags would
+    otherwise be invisible.
+    """
+
+    positions: np.ndarray
+    popped: int
+    pop_step: np.ndarray
+    status_history: np.ndarray
+    terminated: bool
+    truncated: bool
+
+
 def run_scenario_0():
     """Run scenario #0 with the fixed agent and seed.
 
-    Returns ``(positions, popped)`` where ``positions`` is the per-step rocket
-    centre-of-mass position ``(num_steps, 3)`` -- including the NaN rows before
-    launch -- and ``popped`` is the final cumulative popped-balloon count. Side
-    effect free: it does not write trajectory files.
+    Side effect free: it does not write trajectory files.
     """
     scenario_params, given_params = load_scenario_parameters(SCENARIO_NUMBER)
     env = BalloonPoppingEnv(render_mode=None, parameters=scenario_params)
@@ -82,7 +110,33 @@ def run_scenario_0():
     rocket_states = np.array(
         [step["rocket_states"] for step in env.trajectories], dtype=float
     )
-    return rocket_states[:, :3], int(env._popped_count)
+    status_history = np.asarray(
+        [step["balloon_status"] for step in env.trajectories], dtype=int
+    )
+    popped_now = status_history == 2
+    has_popped = popped_now.any(axis=0)
+    # A simulation step, not a row number. ``step()`` increments ``current_step``
+    # before it appends the record and ``reset()`` appends nothing, so row i is
+    # step i+1. Read the step back out of the record's own clock rather than
+    # writing that offset down here, so this keeps meaning what its name says if
+    # the logging ever starts somewhere else. The same offset is already carried
+    # by scenario 1's release timing and by the submission checker.
+    record_step = np.rint(
+        np.asarray([step["time"] for step in env.trajectories], dtype=float)
+        / scenario_params["simulation"]["time_step"]
+    ).astype(int)
+    # -1 for a balloon that never popped, so a run that pops fewer is a visible
+    # difference rather than a shorter list.
+    pop_step = np.full(status_history.shape[1], -1, dtype=int)
+    pop_step[has_popped] = record_step[popped_now.argmax(axis=0)[has_popped]]
+    return RunResult(
+        positions=rocket_states[:, :3],
+        popped=int(env._popped_count),
+        pop_step=pop_step,
+        status_history=status_history,
+        terminated=bool(terminated),
+        truncated=bool(truncated),
+    )
 
 
 def post_launch_positions(positions):
@@ -125,15 +179,106 @@ class TestScenario0Regression(unittest.TestCase):
     def setUpClass(cls):
         with open(BASELINE_PATH, encoding="utf-8") as baseline_file:
             cls.baseline = json.load(baseline_file)
-        positions, cls.popped = run_scenario_0()
-        cls.num_steps = positions.shape[0]
-        cls.positions = post_launch_positions(positions)
+        cls.run_result = run_scenario_0()
+        cls.popped = cls.run_result.popped
+        cls.num_steps = cls.run_result.positions.shape[0]
+        cls.positions = post_launch_positions(cls.run_result.positions)
 
     def test_popped_count_matches_baseline(self):
         # Pin the semantic count, not just the (regenerable) baseline, so a
         # regression that pops fewer balloons cannot be blessed by regenerating.
         self.assertEqual(self.baseline["popped_count"], EXPECTED_POPPED_COUNT)
         self.assertEqual(self.popped, EXPECTED_POPPED_COUNT)
+
+    def test_each_balloon_pops_when_the_baseline_says_it_does(self):
+        """When and which, not only how many.
+
+        The count alone is blind to the thing it exists to protect. Measured on
+        the previous version: replacing the whole of ``_detect_pops`` with
+        "mark every balloon popped on the first flown step" passed every test
+        here, because it leaves the count at ten, the trajectory identical and
+        the duration identical.
+
+        Compared exactly rather than with a tolerance. These are step indices
+        into a deterministic run, so a single step of difference is a real
+        change to when a balloon was reached and worth looking at.
+
+        Exact means exact on the platform the baseline was taken on. Two runs on
+        one machine are bit identical and both CI Pythons agree, but a pop step
+        is the first sample inside a radius, so a different libm or a different
+        CPU path could in principle move one by a step. This is a golden master
+        for the CI reference platform, not a claim about arbitrary hardware; if
+        it ever fires on a new platform, check the neighbouring steps before
+        concluding the geometry changed.
+        """
+        expected = np.asarray(self.baseline["pop_step"], dtype=int)
+        actual = self.run_result.pop_step
+
+        self.assertEqual(
+            actual.shape,
+            expected.shape,
+            f"{actual.size} balloons, baseline has {expected.size}",
+        )
+        np.testing.assert_array_equal(actual, expected)
+
+    def test_the_pops_are_spread_through_the_flight(self):
+        """Guard the comparison above, which is against a regenerable file.
+
+        If the baseline were regenerated from a run that popped everything at
+        once, the exact comparison would keep passing forever. Ten static
+        balloons stacked 40 m apart cannot all be reached in one step, so the
+        steps have to differ.
+
+        All ten distinct, rather than merely more than one. "More than one"
+        rejects only the single mutation where every balloon pops together;
+        nine on one step and one later would still pass, and so would a run
+        that took them five at a time. The balloons are 40 m apart and the
+        rocket covers about 1.4 m in a step, so a step that reaches two of them
+        is not a tighter tolerance, it is a different simulation.
+        """
+        pop_step = self.run_result.pop_step
+
+        self.assertTrue((pop_step >= 0).all(), "a balloon never popped")
+        self.assertEqual(
+            len(np.unique(pop_step)),
+            EXPECTED_POPPED_COUNT,
+            "two balloons popped on the same step, which 40 m of spacing forbids",
+        )
+
+    def test_no_balloon_goes_back_to_unpopped(self):
+        """Only the first 2 is compared above, so the rest of the history is free.
+
+        ``pop_step`` reads the first step each balloon shows as popped and the
+        count reads the end state, so a status that went 1 -> 2 -> 1 -> 2 leaves
+        both of them unchanged and every other test here passing. Scenario 1
+        already pins this; the same hole was open on this side.
+        """
+        history = self.run_result.status_history
+
+        backwards = np.argwhere(np.diff(history, axis=0) < 0)
+        self.assertEqual(
+            backwards.tolist()[:5],
+            [],
+            f"{len(backwards)} balloon status transitions go backwards, first "
+            f"few at (step, balloon) {backwards.tolist()[:5]}",
+        )
+
+    def test_the_episode_ends_because_the_flight_ended(self):
+        """Scenario 0 lands well inside the horizon.
+
+        Both flags come back from ``step`` and were both discarded, so swapping
+        them was invisible. Which one is set decides whether an agent should
+        bootstrap from the final state.
+
+        This discriminates because the two flags now carry different causes:
+        ``terminated`` is the flight finishing and ``truncated`` is running out
+        of precomputed horizon. While ``step`` still reported the clock as
+        termination, these two assertions were also satisfied by an episode that
+        simply ran out of time, and would not have established what the name
+        says.
+        """
+        self.assertTrue(self.run_result.terminated)
+        self.assertFalse(self.run_result.truncated)
 
     def test_flight_duration_matches_baseline(self):
         expected = self.baseline["num_steps_full"]
@@ -145,27 +290,12 @@ class TestScenario0Regression(unittest.TestCase):
         )
 
     def test_rocket_position_trajectory_matches_baseline(self):
-        expected = np.array(self.baseline["rocket_position_downsampled"], dtype=float)
-        actual = self.positions
-        # Guard the row count before comparing only the overlap: a truncated
-        # trajectory (for example an early termination) would otherwise pass
-        # vacuously on its shorter prefix.
-        self.assertLessEqual(
-            abs(len(actual) - len(expected)),
+        assert_positions_match(
+            self,
+            self.positions,
+            np.array(self.baseline["rocket_position_downsampled"], dtype=float),
+            "rocket",
             ROW_COUNT_ABS_TOL,
-            f"downsampled trajectory row count {len(actual)} drifted from "
-            f"baseline {len(expected)} by more than {ROW_COUNT_ABS_TOL} rows",
-        )
-        overlap = min(len(expected), len(actual))
-        # Real floor: max(atol, rtol * |expected|), not numpy's additive form.
-        error = np.abs(actual[:overlap] - expected[:overlap])
-        allowed = np.maximum(POSITION_ATOL, POSITION_RTOL * np.abs(expected[:overlap]))
-        worst = float(np.max(error - allowed))
-        self.assertLessEqual(
-            worst,
-            0.0,
-            f"rocket position exceeds max({POSITION_ATOL} m, "
-            f"{POSITION_RTOL:.0%} of |expected|) by {worst:.4g} m",
         )
 
 

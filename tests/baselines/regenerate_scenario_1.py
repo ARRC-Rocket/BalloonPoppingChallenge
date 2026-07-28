@@ -33,7 +33,7 @@ OUTPUT_PATH = Path(__file__).parent / "scenario_1.json"
 
 def main():
     scenario_params, _ = load_scenario_parameters(SCENARIO_NUMBER)
-    rocket_positions, balloon_positions, popped = run_scenario_1()
+    run = run_scenario_1()
     baseline = {
         "scenario_number": SCENARIO_NUMBER,
         "random_seed": scenario_params["scenario"]["random_seed"],
@@ -42,13 +42,14 @@ def main():
         "rocket_downsample_stride": ROCKET_DOWNSAMPLE_STRIDE,
         "balloon_time_stride": BALLOON_TIME_STRIDE,
         "balloon_index_stride": BALLOON_INDEX_STRIDE,
-        "num_steps_full": int(rocket_positions.shape[0]),
-        "popped_count": int(popped),
+        "num_steps_full": int(run.rocket_positions.shape[0]),
+        "final_balloon_status_counts": run.status_counts,
+        "popped_count": int(run.popped_count),
         "rocket_position_downsampled": post_launch_rocket_positions(
-            rocket_positions
+            run.rocket_positions
         ).tolist(),
         "balloon_position_downsampled": downsample_balloon_positions(
-            balloon_positions
+            run.balloon_positions
         ).tolist(),
     }
     write_baseline(baseline, OUTPUT_PATH)

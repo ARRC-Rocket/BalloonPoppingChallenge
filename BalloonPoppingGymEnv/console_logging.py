@@ -49,27 +49,65 @@ def configure_console_logging(level=logging.INFO, stream=None):
     threshold is lowered to ``level`` if it had none, or left where it is if the
     host had already set one lower, so a host's DEBUG file handler keeps working
     while the console still shows only ``level`` and above.
+
+    ``level=logging.NOTSET`` is the one value that does not mean what the name
+    suggests. On a handler it means "handle everything", but the logger gate
+    comes first, and ``NOTSET`` on a non-root logger means "ask my ancestors",
+    whose default is ``WARNING``. So passing it leaves ``INFO`` records dropped
+    before they reach the console. Pass ``logging.DEBUG`` for everything. The
+    behaviour is left as ``logging`` defines it for each object rather than
+    special-cased here, because a single value where this function disagrees
+    with the standard library is the worse surprise.
+
+    Nothing on the logger is touched until the new handler exists and has
+    accepted ``level``, so a level ``logging`` rejects raises with the logger
+    exactly as it was.
     """
     package_logger = logging.getLogger(PACKAGE_LOGGER_NAME)
+
+    # Built and configured before the logger is touched at all. setLevel is
+    # where logging itself decides what a level name means, and it is the call
+    # that rejects a bad one; doing it here rather than after the swap is what
+    # makes a rejection leave nothing half-done. It also normalises "INFO" to an
+    # int, which the arithmetic at the bottom needs.
+    #
+    # Not named yet, deliberately. set_name is not configuration, it writes to
+    # logging's process-wide handler-name registry, and close() deletes whatever
+    # that name currently points at without checking it is the handler being
+    # closed. Naming this one first meant the second call took the name, then
+    # closing the old handler deleted the new one's entry: the handler stayed
+    # attached and kept printing, so every output test passed, while
+    # getHandlerByName returned None and an incremental dictConfig could no
+    # longer find it. Measured. A rejected level had the same effect, which made
+    # the atomicity this function claims untrue in the one way the logger's own
+    # attributes do not show.
+    handler = logging.StreamHandler(sys.stdout if stream is None else stream)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    handler.setLevel(level)
+    numeric_level = handler.level
+
+    # getEffectiveLevel, not .level. NOTSET on a non-root logger does not mean
+    # "no threshold", it means "ask my ancestors", so a host that set DEBUG on
+    # the root still has an effective DEBUG here. Reading the raw attribute and
+    # finding NOTSET, then setting INFO, raised the threshold anyway.
+    effective_level = package_logger.getEffectiveLevel()
+
+    # Everything from here down mutates the logger, and none of it can fail.
     for existing in list(package_logger.handlers):
         if existing.get_name() == CONSOLE_HANDLER_NAME:
             package_logger.removeHandler(existing)
             existing.close()
 
-    handler = logging.StreamHandler(sys.stdout if stream is None else stream)
+    # Named only now, once the old owner of the name has let go of it.
     handler.set_name(CONSOLE_HANDLER_NAME)
-    handler.setFormatter(logging.Formatter("%(message)s"))
-    handler.setLevel(level)
     package_logger.addHandler(handler)
 
-    # Never raise the logger's threshold. A host that set DEBUG here did so to
-    # feed its own handler, and moving the logger to INFO would silence that
-    # handler even though it is left attached. The console threshold is the one
-    # on the handler above, so lowering the logger costs nothing.
-    if package_logger.level == logging.NOTSET:
-        package_logger.setLevel(level)
-    else:
-        package_logger.setLevel(min(package_logger.level, level))
+    # Never raise the threshold. A host that arranged for DEBUG here, directly
+    # or through an ancestor, did so to feed its own handler, and moving this
+    # logger to INFO would silence that handler even though it is left
+    # attached. The console threshold is the one on the handler above, so
+    # lowering this one costs nothing.
+    package_logger.setLevel(min(effective_level, numeric_level))
 
     package_logger.propagate = False
     return package_logger
