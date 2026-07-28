@@ -569,15 +569,43 @@ class BalloonPoppingEnv(gym.Env):
                     candidates[0][1].copy(),
                 )
                 if np.any(solvable):
+                    # Both numerators from the same identity as the
+                    # denominator, and for the same reason. Written
+                    # algebraically they are b*f - c*e and a*f - b*c, and for a
+                    # near-parallel pair those are two nearly equal products
+                    # subtracted, so most of their digits cancel. Fixing only
+                    # the denominator left the answer depending on which end the
+                    # caller called the start:
+                    #
+                    #     u = (20, 0, 0), v = 20*(cos t, sin t, 0),
+                    #     t = sqrt(10 * eps), closest points at s = 0.35,
+                    #     t = 0.70, separation one part in 1e14 inside 1.5 m
+                    #
+                    # returned 1.4999999999999900 as written, a pop, and
+                    # 1.5000000000000087 with the rocket sweep reversed, a miss.
+                    # The true separation is 45 ulp inside the radius, so that
+                    # was a real loss of digits rather than the last bit.
+                    #
+                    # (p x q) . (r x s) = (p.r)(q.s) - (p.s)(q.r), so these
+                    # equal the algebraic forms exactly in real arithmetic and
+                    # reach them without the subtraction.
                     s_interior[solvable] = np.clip(
-                        (b_r[solvable] * f_r[solvable] - c_r[solvable] * e_r[solvable])
+                        np.einsum(
+                            "ij,ij->i",
+                            np.cross(direction_b_r[solvable], offset_r[solvable]),
+                            normal[solvable],
+                        )
                         / denominator_regular[solvable],
                         0.0,
                         1.0,
                     )
                     t_interior[solvable] = np.clip(
-                        (b_r[solvable] * s_interior[solvable] + f_r[solvable])
-                        / e_r[solvable],
+                        np.einsum(
+                            "ij,ij->i",
+                            np.cross(direction_a, offset_r[solvable]),
+                            normal[solvable],
+                        )
+                        / denominator_regular[solvable],
                         0.0,
                         1.0,
                     )

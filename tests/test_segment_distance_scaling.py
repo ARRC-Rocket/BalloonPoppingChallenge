@@ -227,10 +227,6 @@ class TestTheParallelTestDoesNotDependOnScale(unittest.TestCase):
         self.assertAlmostEqual(measured, 5.0, places=12)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
 class TestANearParallelInteriorMinimum(unittest.TestCase):
     """The case four edges do not contain.
@@ -249,7 +245,53 @@ class TestANearParallelInteriorMinimum(unittest.TestCase):
 
     RADIUS = 1.5
 
+    # Deliberately away from the midpoints. A symmetric s = t = 0.5 fixture
+    # catches the skipped stationary point but not the cancellation in the
+    # numerators, because the two products being subtracted end up close to
+    # equal in magnitude rather than close to equal in value.
+    S_TRUE = 0.35
+    T_TRUE = 0.70
+
     def _pair(self):
+        angle = np.sqrt(10 * np.finfo(float).eps)
+        length = 20.0
+        separation = self.RADIUS - 1e-14
+        direction_a = np.array([length, 0.0, 0.0])
+        direction_b = length * np.array([np.cos(angle), np.sin(angle), 0.0])
+        start_a = np.zeros(3)
+        start_b = (
+            self.S_TRUE * direction_a
+            - self.T_TRUE * direction_b
+            - np.array([0.0, 0.0, separation])
+        )
+        return start_a, start_a + direction_a, start_b, start_b + direction_b
+
+    def _orderings(self):
+        start_a, end_a, start_b, end_b = self._pair()
+        return {
+            "as written": (start_a, end_a, start_b, end_b),
+            "rocket reversed": (end_a, start_a, start_b, end_b),
+            "balloon reversed": (start_a, end_a, end_b, start_b),
+            "both reversed": (end_a, start_a, end_b, start_b),
+            "swapped": (start_b, end_b, start_a, end_a),
+        }
+
+    @staticmethod
+    def _relative_determinant(start_a, end_a, start_b, end_b):
+        direction_a, direction_b = end_a - start_a, end_b - start_b
+        a = float(direction_a @ direction_a)
+        e = float(direction_b @ direction_b)
+        b = float(direction_a @ direction_b)
+        return (a * e - b * b) / (a * e)
+
+    def _skipped_interior_pair(self):
+        """The pair the removed cutoff would have refused to solve.
+
+        Kept alongside the asymmetric one because they are different faults.
+        This one is below 8 * eps, so restoring the cutoff skips its stationary
+        point; the asymmetric pair sits above it and would still be solved, so
+        it cannot catch that regression.
+        """
         angle = np.sqrt(7 * np.finfo(float).eps)
         just_inside = np.nextafter(self.RADIUS, 0.0)
         half = 5.0
@@ -260,29 +302,15 @@ class TestANearParallelInteriorMinimum(unittest.TestCase):
             np.array([half, half * angle, just_inside]),
         )
 
-    def test_it_is_below_the_old_cutoff_and_not_parallel(self):
+    def test_the_skipped_interior_pair_is_below_the_old_cutoff(self):
         """Both halves, or the fixture is not the case it is named for."""
-        start_a, end_a, start_b, end_b = self._pair()
-        direction_a, direction_b = end_a - start_a, end_b - start_b
-        a = float(direction_a @ direction_a)
-        e = float(direction_b @ direction_b)
-        b = float(direction_a @ direction_b)
-        relative = (a * e - b * b) / (a * e)
+        relative = self._relative_determinant(*self._skipped_interior_pair())
 
         self.assertGreater(relative, 0.0, "this pair is exactly parallel")
         self.assertLessEqual(relative, 8 * np.finfo(float).eps)
 
-    def test_the_closest_points_are_the_two_midpoints(self):
-        start_a, end_a, start_b, end_b = self._pair()
-        midpoint_a = (start_a + end_a) / 2.0
-        midpoint_b = (start_b + end_b) / 2.0
-
-        distance = float(np.linalg.norm(midpoint_a - midpoint_b))
-
-        self.assertLessEqual(distance, self.RADIUS, "the fixture is not a pop")
-
-    def test_the_interior_minimum_is_not_skipped(self):
-        start_a, end_a, start_b, end_b = self._pair()
+    def test_the_pair_below_the_old_cutoff_is_still_a_pop(self):
+        start_a, end_a, start_b, end_b = self._skipped_interior_pair()
 
         measured = float(
             np.sqrt(
@@ -292,9 +320,63 @@ class TestANearParallelInteriorMinimum(unittest.TestCase):
             )
         )
 
-        self.assertLessEqual(
-            measured,
-            self.RADIUS,
-            f"reported {measured!r} against a {self.RADIUS} m radius, so a pop "
-            "is scored as a miss",
+        self.assertLessEqual(measured, self.RADIUS)
+
+    def test_the_cancelling_pair_is_near_parallel_but_not_parallel(self):
+        relative = self._relative_determinant(*self._pair())
+
+        self.assertGreater(relative, 0.0, "this pair is exactly parallel")
+        self.assertLess(relative, 1e-13, "this pair is not near parallel enough")
+
+    def test_the_closest_points_are_where_the_fixture_puts_them(self):
+        start_a, end_a, start_b, end_b = self._pair()
+        closest_a = start_a + self.S_TRUE * (end_a - start_a)
+        closest_b = start_b + self.T_TRUE * (end_b - start_b)
+
+        distance = float(np.linalg.norm(closest_a - closest_b))
+
+        self.assertLessEqual(distance, self.RADIUS, "the fixture is not a pop")
+        # Well inside, not one representable float inside, so a verdict that
+        # flips here is a real loss of digits rather than the last bit.
+        self.assertGreater(
+            (self.RADIUS - distance) / np.spacing(self.RADIUS),
+            10.0,
+            "the fixture sits too close to the radius to mean anything",
         )
+
+    def test_the_interior_minimum_is_not_skipped_in_any_ordering(self):
+        """Every way of writing the same two segments down.
+
+        The stationary point being skipped and its numerators cancelling are
+        different faults with the same symptom, and the second one only shows
+        when the orderings are compared: reversing the rocket sweep changes the
+        rounding of ``b * f - c * e`` enough to cross the radius.
+        """
+        measured = {
+            name: float(
+                np.sqrt(
+                    BalloonPoppingEnv._segment_distance_squared_batch(
+                        start_a, end_a, np.array([start_b]), np.array([end_b])
+                    )[0]
+                )
+            )
+            for name, (start_a, end_a, start_b, end_b) in self._orderings().items()
+        }
+
+        for name, distance in measured.items():
+            with self.subTest(ordering=name):
+                self.assertLessEqual(
+                    distance,
+                    self.RADIUS,
+                    f"{name} reports {distance!r} against a {self.RADIUS} m "
+                    "radius, so a pop is scored as a miss",
+                )
+        self.assertLessEqual(
+            max(measured.values()) - min(measured.values()),
+            1e-12,
+            f"the orderings disagree: {measured}",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

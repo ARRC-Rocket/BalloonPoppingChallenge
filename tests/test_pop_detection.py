@@ -317,15 +317,19 @@ class TestTheClampingBranches(unittest.TestCase):
             return "degenerate_b"
 
         b_coeff = float(direction_a @ direction_b)
-        c_coeff = float(direction_a @ offset)
         f_coeff = float(direction_b @ offset)
-        denominator = a_coeff * e_coeff - b_coeff * b_coeff
-        # sin(angle)**2, so this is about the directions rather than about how
-        # long the segments happen to be.
-        if abs(denominator) <= 8 * np.finfo(float).eps * a_coeff * e_coeff:
+        # Exactly parallel, by the directions rather than by a threshold. This
+        # used to copy production's 8 * eps test, which meant it called a pair
+        # parallel that is not, and it went stale the moment production stopped
+        # having such a test at all.
+        normal = np.cross(direction_a, direction_b)
+        denominator = float(normal @ normal)
+        if denominator == 0.0:
             return "parallel"
 
-        s_unclipped = (b_coeff * f_coeff - c_coeff * e_coeff) / denominator
+        # Same identity production uses, so this describes the geometry rather
+        # than reproducing a subtraction that loses digits near parallel.
+        s_unclipped = float(np.cross(direction_b, offset) @ normal) / denominator
         s_param = np.clip(s_unclipped, 0.0, 1.0)
         t_param = (b_coeff * s_param + f_coeff) / e_coeff
         if t_param < 0.0:
