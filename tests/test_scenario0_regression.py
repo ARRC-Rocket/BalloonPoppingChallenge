@@ -21,6 +21,8 @@ from pathlib import Path
 
 import numpy as np
 
+from tests.position_tolerance import assert_positions_match
+
 # ActiveRocketPy (imported as ``rocketpy``) is the heavy optional dependency, so
 # skip the whole test when it is genuinely not installed. The BalloonPoppingGymEnv
 # imports are deliberately left outside that guard: once the stack is present, an
@@ -46,12 +48,8 @@ BASELINE_PATH = Path(__file__).parent / "baselines" / "scenario_0.json"
 AGENT_KWARGS = {"rate_targets": [0.0, 0.0, 0.0], "launch_time": 1}
 DOWNSAMPLE_STRIDE = 50
 
-# Per-coordinate position tolerance, applied as a real floor of
-# ``max(POSITION_ATOL, POSITION_RTOL * abs(expected))`` -- not numpy's additive
-# ``atol + rtol * expected`` -- so a coordinate near zero cannot drift by the
-# metre floor *plus* another few percent.
-POSITION_RTOL = 0.03
-POSITION_ATOL = 1.0
+# The position tolerance itself lives in tests/position_tolerance.py, shared
+# with the other scenario so the two cannot drift apart again.
 # Flight duration is deterministic, so allow only a couple of steps of
 # cross-platform jitter. This is absolute, not a percentage: a 2% tolerance on a
 # ~6000-step flight would wave through a full second of early termination.
@@ -141,27 +139,12 @@ class TestScenario0Regression(unittest.TestCase):
         )
 
     def test_rocket_position_trajectory_matches_baseline(self):
-        expected = np.array(self.baseline["rocket_position_downsampled"], dtype=float)
-        actual = self.positions
-        # Guard the row count before comparing only the overlap: a truncated
-        # trajectory (for example an early termination) would otherwise pass
-        # vacuously on its shorter prefix.
-        self.assertLessEqual(
-            abs(len(actual) - len(expected)),
+        assert_positions_match(
+            self,
+            self.positions,
+            np.array(self.baseline["rocket_position_downsampled"], dtype=float),
+            "rocket",
             ROW_COUNT_ABS_TOL,
-            f"downsampled trajectory row count {len(actual)} drifted from "
-            f"baseline {len(expected)} by more than {ROW_COUNT_ABS_TOL} rows",
-        )
-        overlap = min(len(expected), len(actual))
-        # Real floor: max(atol, rtol * |expected|), not numpy's additive form.
-        error = np.abs(actual[:overlap] - expected[:overlap])
-        allowed = np.maximum(POSITION_ATOL, POSITION_RTOL * np.abs(expected[:overlap]))
-        worst = float(np.max(error - allowed))
-        self.assertLessEqual(
-            worst,
-            0.0,
-            f"rocket position exceeds max({POSITION_ATOL} m, "
-            f"{POSITION_RTOL:.0%} of |expected|) by {worst:.4g} m",
         )
 
 
