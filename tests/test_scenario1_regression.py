@@ -35,6 +35,7 @@ import json
 import os
 import unittest
 from importlib.util import find_spec
+from typing import NamedTuple
 from pathlib import Path
 
 import numpy as np
@@ -48,16 +49,16 @@ _RUN_SLOW = os.environ.get("BPC_RUN_SLOW_TESTS", "0").strip().lower() in (
     "yes",
 )
 
-# ActiveRocketPy (imported as ``rocketpy``) is the heavy optional dependency. When
-# the slow gate is on we intend to run, so a missing or broken stack must fail
-# rather than skip. The BalloonPoppingGymEnv imports stay outside the guard: an
-# ImportError from them is a real regression (a renamed or removed symbol) and
-# must fail loudly when the stack is present.
+# ActiveRocketPy (imported as ``rocketpy``) is the heavy optional dependency.
 # ``find_spec`` answers "is the package installed", which is the only case that
 # justifies a skip. The import itself stays outside any guard: ``import rocketpy``
 # runs the package's own ``__init__``, so an ImportError raised there means an
-# installed but broken stack, which is exactly what these tests exist to catch and
-# must fail rather than skip.
+# installed but broken stack, which is exactly what these tests exist to catch
+# and must fail rather than skip. The same goes for the BalloonPoppingGymEnv
+# imports, where an ImportError means a renamed or removed symbol.
+#
+# And when the slow gate is on we intend to run, so a stack that is not there at
+# all is an error too rather than a quiet pass over nothing.
 _STACK_AVAILABLE = find_spec("rocketpy") is not None
 if _RUN_SLOW and not _STACK_AVAILABLE:
     raise ImportError("BPC_RUN_SLOW_TESTS is set but rocketpy is not installed")
@@ -101,15 +102,33 @@ STEP_COUNT_ABS_TOL = 2
 ROW_COUNT_ABS_TOL = 1
 
 
-def run_scenario_1():
-    """Run scenario #1 with the fixed agent and seed.
+class RunResult(NamedTuple):
+    """What one scenario run reports, so callers stop unpacking a bare tuple."""
 
-    Returns ``(rocket_positions, balloon_positions, popped)`` where
-    ``rocket_positions`` is the per-step rocket centre-of-mass position
-    ``(num_steps, 3)`` -- including the NaN rows before launch -- and
-    ``balloon_positions`` is the per-step balloon positions
-    ``(num_steps, num_balloons, 3)``. ``popped`` is the final cumulative
-    popped-balloon count.
+    rocket_positions: np.ndarray
+    balloon_positions: np.ndarray
+    popped_count: int
+    final_status: np.ndarray
+    status_counts: dict
+    status_history: np.ndarray
+    release_at_step: np.ndarray
+    terminated: bool
+    truncated: bool
+
+
+def run_scenario_1():
+    """Run scenario #1 with the fixed agent and seed, returning a `RunResult`.
+
+    ``rocket_positions`` is the per-step rocket centre-of-dry-mass position
+    ``(num_steps, 3)``, including the NaN rows before launch.
+    ``balloon_positions`` is ``(num_steps, num_balloons, 3)``.
+    ``popped_count`` is the final cumulative popped-balloon count.
+    ``final_status`` is the last observation's balloon status, uncoerced.
+    ``status_counts`` histograms it over ground, released and popped.
+    ``status_history`` is ``(num_steps, num_balloons)``, so a caller can see
+    *when* each balloon changed state, and ``release_at_step`` is the schedule it
+    should match. ``terminated`` and ``truncated`` are the final Gymnasium flags,
+    which mean different things and are both recorded rather than or-ed together.
 
     The env loop is driven directly (no ``evaluate.py``) so this is free of the
     ``save_trajectories`` file writes and the submission-MD5 network call. The
@@ -132,7 +151,40 @@ def run_scenario_1():
     balloon_states = np.array(
         [step["balloon_states"] for step in env.trajectories], dtype=float
     )
-    return rocket_states[:, :3], balloon_states[:, :, :3], int(env._popped_count)
+    # Balloon status, because the sampled *positions* cannot see it: the balloon
+    # positions come from the array precomputed and time-shifted at reset, so the
+    # release machinery can stop working entirely without a single sampled
+    # position moving. Deleting the ground-to-released update leaves all seven
+    # position-and-count golden master tests green.
+    #
+    # Read it from the observation rather than ``env._balloon_status``. The two
+    # hold the same values today, ``_get_obs`` forwards the array itself, but the
+    # observation is what an agent is given, so a regression that stopped
+    # forwarding the status would show up here instead of passing.
+    #
+    # Not coerced with ``dtype=int``: the env declares this observation as a
+    # ``MultiDiscrete``, and a cast would quietly make a future non-integral
+    # representation look valid before any assertion ran.
+    final_status = np.asarray(observation["balloon_status"])[:, 0]
+    status_counts = {
+        "ground": int(np.sum(final_status == 0)),
+        "released": int(np.sum(final_status == 1)),
+        "popped": int(np.sum(final_status == 2)),
+    }
+    # ``step_record`` already carries ``balloon_status`` for every step, so the
+    # release *timing* needs no extra instrumentation in the environment.
+    status_history = np.asarray([step["balloon_status"] for step in env.trajectories])
+    return RunResult(
+        rocket_positions=rocket_states[:, :3],
+        balloon_positions=balloon_states[:, :, :3],
+        popped_count=int(env._popped_count),
+        final_status=final_status,
+        status_counts=status_counts,
+        status_history=status_history,
+        release_at_step=np.asarray(env._balloon_release_at_step, dtype=int),
+        terminated=bool(terminated),
+        truncated=bool(truncated),
+    )
 
 
 def post_launch_rocket_positions(positions):
@@ -181,15 +233,177 @@ class TestScenario1Regression(unittest.TestCase):
     def setUpClass(cls):
         with open(BASELINE_PATH, encoding="utf-8") as baseline_file:
             cls.baseline = json.load(baseline_file)
-        rocket_positions, balloon_positions, cls.popped = run_scenario_1()
-        cls.num_steps = rocket_positions.shape[0]
-        cls.rocket_positions = post_launch_rocket_positions(rocket_positions)
-        cls.balloon_positions = downsample_balloon_positions(balloon_positions)
+        cls.run_result = run_scenario_1()
+        cls.popped = cls.run_result.popped_count
+        cls.num_steps = cls.run_result.rocket_positions.shape[0]
+        cls.rocket_positions = post_launch_rocket_positions(
+            cls.run_result.rocket_positions
+        )
+        cls.balloon_positions = downsample_balloon_positions(
+            cls.run_result.balloon_positions
+        )
 
     def test_popped_count_matches_baseline(self):
         # Pin the semantic count, not just the (regenerable) baseline.
         self.assertEqual(self.baseline["popped_count"], EXPECTED_POPPED_COUNT)
         self.assertEqual(self.popped, EXPECTED_POPPED_COUNT)
+
+    def test_the_release_and_pop_states_match_the_baseline(self):
+        """The status machinery, which no sampled position can see.
+
+        Balloon positions come from the array precomputed at reset, so removing
+        the ground-to-released update in ``step`` leaves every sampled position,
+        the step count and the expected score of zero exactly as they were. All
+        seven golden master tests stay green with scenario 1's release machinery
+        deleted, which this closes.
+
+        The expected state is derived, not copied from the baseline. The last
+        balloon is scheduled well before the episode ends, so the contract is
+        that *every* balloon is accounted for: nothing still on the ground, and
+        everything not popped released. Requiring only ``released + popped > 0``
+        would have let a baseline regenerated against a partial failure, one
+        balloon released out of a hundred, bless itself.
+        """
+        num_balloons = self.run_result.balloon_positions.shape[1]
+        expected = {
+            "ground": 0,
+            "released": num_balloons - EXPECTED_POPPED_COUNT,
+            "popped": EXPECTED_POPPED_COUNT,
+        }
+
+        self.assertEqual(self.run_result.status_counts, expected)
+        self.assertEqual(self.baseline["final_balloon_status_counts"], expected)
+
+    def test_the_balloon_status_stays_in_its_declared_domain(self):
+        """The status observation is a ``MultiDiscrete``, so hold it to that.
+
+        The histogram above only counts 0, 1 and 2. On its own that makes any
+        other value invisible: it would be excluded from all three counts, and
+        the counts would simply fail to add up with no indication why.
+        """
+        final_status = self.run_result.final_status
+
+        self.assertTrue(
+            np.issubdtype(final_status.dtype, np.integer),
+            f"balloon status must be integral, got {final_status.dtype}",
+        )
+        unexpected = np.setdiff1d(np.unique(final_status), [0, 1, 2])
+        self.assertEqual(
+            unexpected.tolist(), [], "balloon status outside {ground, released, popped}"
+        )
+        self.assertEqual(
+            sum(self.run_result.status_counts.values()),
+            self.run_result.balloon_positions.shape[1],
+            "the three status counts must account for every balloon",
+        )
+        # Two ways of counting the same thing, so they cannot drift apart.
+        self.assertEqual(
+            self.run_result.status_counts["popped"], self.run_result.popped_count
+        )
+
+    def test_every_balloon_is_released_at_its_scheduled_step(self):
+        """*When* each balloon is released, not just how many end up released.
+
+        The final histogram cannot see release timing. Releasing all hundred on
+        the first step, or off-by-one on the release condition, reaches the same
+        final ``0/100/0`` and leaves every sampled position untouched, because
+        the flights were time-shifted at reset. ``step_record`` already stores
+        ``balloon_status`` every step, so this needs nothing added to the
+        environment.
+        """
+        history = self.run_result.status_history
+        became_active = history != 0
+
+        never_released = np.flatnonzero(~became_active.any(axis=0))
+        self.assertEqual(
+            never_released.tolist(), [], "balloons that never left the ground"
+        )
+
+        # `trajectories[i]` is written after `current_step` becomes `i + 1`, and
+        # release fires on the first `current_step >= release_at_step`. One
+        # balloon is scheduled at step 0, so its first recorded active step is 1.
+        first_active_step = np.argmax(became_active, axis=0) + 1
+        expected_first_active_step = np.maximum(self.run_result.release_at_step, 1)
+
+        np.testing.assert_array_equal(first_active_step, expected_first_active_step)
+
+    def test_every_recorded_status_is_one_of_the_three(self):
+        """The whole history, not only the last row.
+
+        The timing check above asks ``history != 0``, which treats any value at
+        all as released, and the domain assertion elsewhere only looks at the
+        final observation. So a history of ``0, 3, 1`` has the right first
+        active step and the right final status while carrying a state that does
+        not exist.
+        """
+        history = self.run_result.status_history
+
+        self.assertTrue(
+            np.issubdtype(history.dtype, np.integer),
+            f"balloon status should be integral, got {history.dtype}",
+        )
+        outside = np.unique(history[~np.isin(history, (0, 1, 2))])
+        self.assertEqual(
+            outside.tolist(), [], "balloon status values outside 0, 1 and 2"
+        )
+
+    def test_no_balloon_goes_backwards(self):
+        """A balloon on the ground is released, and a popped one stays popped.
+
+        ``0, 1, 0, 1`` also has the right first active step and the right final
+        histogram, so neither of the checks above sees it.
+        """
+        history = self.run_result.status_history
+
+        backwards = np.argwhere(np.diff(history, axis=0) < 0)
+        self.assertEqual(
+            backwards[:5].tolist(),
+            [],
+            f"{len(backwards)} status transitions go backwards",
+        )
+
+    def test_the_release_schedule_matches_what_the_parameters_imply(self):
+        """Derived from the scenario file, not read back from the environment.
+
+        The timing check compares against the environment's own
+        ``_balloon_release_at_step``. If the schedule were generated wrongly and
+        the status update followed the same wrong schedule, the two would still
+        agree. This is the independent half: the set of scheduled steps is
+        ``arange(num) * int(release_interval / time_step)`` whatever the
+        shuffle does to their order.
+        """
+        parameters, _ = load_scenario_parameters(SCENARIO_NUMBER)
+        spacing = int(
+            parameters["balloon"]["release_interval"]
+            / parameters["simulation"]["time_step"]
+        )
+        expected = np.arange(parameters["balloon"]["num"]) * spacing
+
+        np.testing.assert_array_equal(
+            np.sort(self.run_result.release_at_step), expected
+        )
+
+    def test_the_release_schedule_itself_is_not_degenerate(self):
+        """Guard the oracle above, which compares against a live attribute.
+
+        If the schedule collapsed to all-zeros, "released when scheduled" would
+        become "released immediately" and the comparison would still pass.
+        """
+        release_at_step = self.run_result.release_at_step
+        num_steps = self.run_result.rocket_positions.shape[0]
+
+        self.assertEqual(len(np.unique(release_at_step)), release_at_step.size)
+        self.assertEqual(release_at_step.min(), 0)
+        self.assertGreater(release_at_step.max(), 0)
+        # Everything must be scheduled inside the episode, otherwise the
+        # all-released contract above would be wrong rather than merely unmet.
+        self.assertLess(release_at_step.max(), num_steps)
+
+    def test_the_episode_terminates_rather_than_truncating(self):
+        # Gymnasium gives these different meanings, and the runner only loops on
+        # `terminated or truncated`, so swapping them keeps the step count intact.
+        self.assertTrue(self.run_result.terminated)
+        self.assertFalse(self.run_result.truncated)
 
     def test_flight_duration_matches_baseline(self):
         expected = self.baseline["num_steps_full"]
