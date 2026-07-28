@@ -197,19 +197,44 @@ class TestDetectPops(unittest.TestCase):
         np.testing.assert_array_equal(status, [self.RELEASED])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
 class TestTheClampingBranches(unittest.TestCase):
     """The endpoint clamping the fixed cases above do not reach.
 
-    When the closest point on a balloon sweep falls beyond its far endpoint, the
+    When the closest point on a balloon sweep falls outside its endpoints, the
     parameter is clamped and the rocket-side parameter is recomputed against that
-    endpoint. Swapping that recomputation for the near-endpoint one leaves every
-    other test in this file green, so it needs its own case (see #63 discussion).
+    endpoint. Swapping the two recomputations leaves every other test in this
+    file green, so each clamp needs its own case (see #63 discussion).
+
+    Every case here shares one rocket segment, ``SEGMENT_A``. That is what makes
+    the mixed batch at the end a real union of the individual cases rather than a
+    third unrelated input that happens to look similar. An earlier version used a
+    different rocket segment for the batch, and it reached neither the parallel
+    nor the high-clamp branch it claimed to cover.
     """
+
+    # One rocket sweep for every case below.
+    SEGMENT_A = (np.zeros(3), np.array([-4.5, -4.7, -4.4]))
+
+    # Chosen by searching for pairs where the far-end and near-end
+    # recomputations disagree by a wide margin, rather than by picking something
+    # that merely reaches the branch: a first attempt reached the branch and
+    # still clamped both to the same value, so the mutation survived.
+    CLAMPED_HIGH = ([-5.002, 3.969, 3.068], [-0.857, 0.011, -1.096])
+    CLAMPED_LOW = ([-4.004, -1.730, -3.597], [-0.977, 7.680, -4.506])
+    # Parallel: direction_b is a multiple of direction_a, so the denominator
+    # vanishes and s stays at its initialized zero.
+    PARALLEL = ([3.0, -1.0, 2.0], [3.0 - 3.15, -1.0 - 3.29, 2.0 - 3.08])
+    # Degenerate: a balloon that did not move over the step.
+    DEGENERATE_B = ([2.0, 3.0, 0.0], [2.0, 3.0, 0.0])
+    # The rocket's own closest point falls outside its sweep while the balloon's
+    # stays inside, so s is clamped and t is never recomputed.
+    S_CLAMPED = ([-4.026, -5.843, 4.051], [-0.605, -2.271, 7.394])
+    # Almost degenerate and oblique, which is a different thing: see the test.
+    NEAR_DEGENERATE_B = (
+        [-7.9985, -2.0956, -2.9027],
+        [-7.998499407604158, -2.0955998431503545, -2.9026997331907473],
+    )
 
     def _distance_squared(self, start_a, end_a, starts_b, ends_b):
         return BalloonPoppingEnv._segment_distance_squared_batch(
@@ -217,74 +242,204 @@ class TestTheClampingBranches(unittest.TestCase):
         )
 
     @staticmethod
-    def _brute_force(start_a, end_a, start_b, end_b, samples=2001):
+    def _branch_of(start_a, end_a, start_b, end_b, epsilon=1e-12):
+        """Name the branch a pair reaches, so a case cannot silently stop reaching it.
+
+        This repeats a little of the implementation's arithmetic on purpose. Without
+        it a case is only *believed* to exercise a branch, which is how the batch
+        below came to claim four branches while reaching two.
+        """
+        direction_a = np.asarray(end_a, dtype=float) - np.asarray(start_a, dtype=float)
+        direction_b = np.asarray(end_b, dtype=float) - np.asarray(start_b, dtype=float)
+        offset = np.asarray(start_a, dtype=float) - np.asarray(start_b, dtype=float)
+
+        a_coeff = float(direction_a @ direction_a)
+        if a_coeff <= epsilon:
+            return "degenerate_a"
+        e_coeff = float(direction_b @ direction_b)
+        if e_coeff <= epsilon:
+            return "degenerate_b"
+
+        b_coeff = float(direction_a @ direction_b)
+        c_coeff = float(direction_a @ offset)
+        f_coeff = float(direction_b @ offset)
+        denominator = a_coeff * e_coeff - b_coeff * b_coeff
+        if abs(denominator) <= epsilon:
+            return "parallel"
+
+        s_unclipped = (b_coeff * f_coeff - c_coeff * e_coeff) / denominator
+        s_param = np.clip(s_unclipped, 0.0, 1.0)
+        t_param = (b_coeff * s_param + f_coeff) / e_coeff
+        if t_param < 0.0:
+            return "t_too_low"
+        if t_param > 1.0:
+            return "t_too_high"
+        if not 0.0 <= s_unclipped <= 1.0:
+            return "s_clamped"
+        return "interior"
+
+    @staticmethod
+    def _brute_force(start_a, end_a, start_b, end_b, samples=2001, chunk=250):
         """Minimum over a dense sampling of both segments, as an oracle.
 
         Slow and obvious on purpose: it shares no code with the vectorized
-        implementation, so agreeing with it means something.
+        implementation, so agreeing with it means something. Sampled in chunks
+        along A because the full ``samples x samples x 3`` difference array is
+        over a hundred mebibytes, which is a lot to allocate for one assertion.
         """
         params = np.linspace(0.0, 1.0, samples)
-        points_a = np.asarray(start_a) + params[:, None] * (
-            np.asarray(end_a) - np.asarray(start_a)
+        points_a = np.asarray(start_a, dtype=float) + params[:, None] * (
+            np.asarray(end_a, dtype=float) - np.asarray(start_a, dtype=float)
         )
-        points_b = np.asarray(start_b) + params[:, None] * (
-            np.asarray(end_b) - np.asarray(start_b)
+        points_b = np.asarray(start_b, dtype=float) + params[:, None] * (
+            np.asarray(end_b, dtype=float) - np.asarray(start_b, dtype=float)
         )
-        deltas = points_a[:, None, :] - points_b[None, :, :]
-        return float(np.min(np.einsum("ijk,ijk->ij", deltas, deltas)))
+        best = np.inf
+        for offset in range(0, samples, chunk):
+            deltas = points_a[offset : offset + chunk, None, :] - points_b[None, :, :]
+            best = min(best, float(np.min(np.einsum("ijk,ijk->ij", deltas, deltas))))
+        return best
+
+    def _assert_matches_brute_force(self, start_b, end_b, expected_branch):
+        start_a, end_a = self.SEGMENT_A
+
+        self.assertEqual(
+            self._branch_of(start_a, end_a, start_b, end_b),
+            expected_branch,
+            "this case no longer reaches the branch it was chosen for",
+        )
+        actual = self._distance_squared(start_a, end_a, [start_b], [end_b])[0]
+
+        np.testing.assert_allclose(
+            actual, self._brute_force(start_a, end_a, start_b, end_b), rtol=2e-4
+        )
 
     def test_closest_point_beyond_the_far_end_of_the_balloon_sweep(self):
-        # Chosen by searching for a pair where the far-end and near-end
-        # recomputations disagree by a wide margin, rather than by picking
-        # something that merely reaches the branch: my first attempt reached it
-        # and still clamped both to the same value, so the mutation survived.
-        # Here the correct answer is 1.958 and the near-end formula gives 75.53.
-        start_a, end_a = [0.0, 0.0, 0.0], [-4.143, -4.990, -4.617]
-        start_b, end_b = [-7.559, 7.589, 6.488], [-5.483, -5.211, -4.280]
-
-        actual = self._distance_squared(start_a, end_a, [start_b], [end_b])[0]
-
-        np.testing.assert_allclose(
-            actual, self._brute_force(start_a, end_a, start_b, end_b), rtol=2e-4
-        )
+        # Correct answer 0.7299; the near-end formula gives 50.19, a factor of 69.
+        self._assert_matches_brute_force(*self.CLAMPED_HIGH, "t_too_high")
 
     def test_closest_point_before_the_near_end_of_the_balloon_sweep(self):
-        # Same treatment for the other clamp: correct is 4.854, the far-end
-        # formula gives 86.73.
-        start_a, end_a = [0.0, 0.0, 0.0], [-4.911, -4.398, -4.254]
-        start_b, end_b = [-6.734, -5.388, -3.514], [-6.209, 0.970, 7.798]
+        # Correct answer 3.4073; the far-end formula gives 80.24, a factor of 24.
+        self._assert_matches_brute_force(*self.CLAMPED_LOW, "t_too_low")
 
-        actual = self._distance_squared(start_a, end_a, [start_b], [end_b])[0]
+    def test_parallel_sweeps_with_this_rocket_segment(self):
+        self._assert_matches_brute_force(*self.PARALLEL, "parallel")
 
-        np.testing.assert_allclose(
-            actual, self._brute_force(start_a, end_a, start_b, end_b), rtol=2e-4
-        )
+    def test_a_balloon_that_did_not_move_over_the_step(self):
+        self._assert_matches_brute_force(*self.DEGENERATE_B, "degenerate_b")
+
+    def test_a_balloon_that_barely_moved_but_not_along_the_rocket(self):
+        """A near-degenerate sweep where the denominator is *not* near zero.
+
+        The degenerate-B branch is selected on ``e_coeff <= epsilon``, and the
+        regular branch is masked to exclude those rows. For a balloon that did not
+        move at all the denominator collapses to zero too, so dropping that mask
+        changes nothing and the bug hides. Sitting the balloon exactly
+        perpendicular to the rocket does not help either: the two formulas are
+        algebraically equal when ``direction_a`` and the balloon's step are
+        orthogonal, which is how a first attempt at this test reached the branch
+        and still passed against the mutation.
+
+        What separates them is a *small, oblique* step. ``e_coeff`` is 1e-12, at
+        the threshold, while ``a_coeff * e_coeff - b_coeff**2`` is 1.4e-11, above
+        it, so the unmasked regular branch claims the row: it puts the rocket-side
+        parameter at 0.0 where the degenerate formula puts it at 0.95, and leaves
+        ``t`` at zero because that assignment *is* masked. The reported squared
+        distance goes from 21.1 to 76.8.
+
+        Physically this is a balloon hanging almost still over one 0.01 s step,
+        which scenario #1 produces in quantity.
+        """
+        start_a, end_a = self.SEGMENT_A
+        start_a, end_a = self.SEGMENT_A
+        start_b, end_b = self.NEAR_DEGENERATE_B
+        step = np.asarray(end_b) - np.asarray(start_b)
+        # Oblique, not orthogonal: the two formulas agree when it is orthogonal.
+        self.assertNotEqual(float((end_a - start_a) @ step), 0.0)
+        self.assertLess(float(np.linalg.norm(step)), 1e-6)
+
+        self._assert_matches_brute_force(start_b, end_b, "degenerate_b")
+
+    def test_the_rocket_side_parameter_is_clamped_too(self):
+        """The other clamp, on s rather than t.
+
+        The two tests above clamp the balloon parameter and recompute the rocket
+        one. This is the reverse: the closest point on the rocket sweep lies far
+        outside it while the balloon parameter stays inside, so s is clamped and
+        the t recomputation never runs. Dropping that clip reports 5.7e8 instead
+        of 54.3, and every other case here passes without it because their s
+        already lands in range or a t clamp overwrites it.
+        """
+        self._assert_matches_brute_force(*self.S_CLAMPED, "s_clamped")
 
     def test_a_mixed_batch_takes_every_branch_at_once(self):
-        # Degenerate, parallel, skew clamped high and skew clamped low, in one
-        # call, because the implementation masks the branches rather than
-        # looping and a per-case test cannot see them interact.
-        start_a, end_a = [0.0, 0.0, 0.0], [-4.5, -4.7, -4.4]
-        starts_b = [
-            [2.0, 3.0, 0.0],
-            [0.0, 5.0, 0.0],
-            [-7.559, 7.589, 6.488],
-            [-6.734, -5.388, -3.514],
-        ]
-        ends_b = [
-            [2.0, 3.0, 0.0],
-            [4.0, 5.0, 0.0],
-            [-5.483, -5.211, -4.280],
-            [-6.209, 0.970, 7.798],
-        ]
+        """All four branches in one call, because they are masks over one array.
 
-        actual = self._distance_squared(start_a, end_a, starts_b, ends_b)
+        The implementation masks the branches rather than looping, so a
+        per-case test cannot see them interact: a mask written with the wrong
+        index, or a clamp applied to the whole array instead of its subset,
+        needs more than one branch present at once to show up.
+        """
+        start_a, end_a = self.SEGMENT_A
+        cases = [
+            ("degenerate_b", *self.DEGENERATE_B),
+            ("parallel", *self.PARALLEL),
+            ("t_too_high", *self.CLAMPED_HIGH),
+            ("t_too_low", *self.CLAMPED_LOW),
+            # The near-degenerate row belongs here rather than only in its own
+            # test. The regular-branch block is guarded by `if np.any(regular)`,
+            # so on its own that row skips the block entirely and a mask written
+            # without its `regular &` term never runs. It needs a regular row
+            # beside it to fire.
+            ("degenerate_b", *self.NEAR_DEGENERATE_B),
+            ("s_clamped", *self.S_CLAMPED),
+        ]
+        # The point of the batch, asserted rather than assumed.
+        for expected_branch, start_b, end_b in cases:
+            self.assertEqual(
+                self._branch_of(start_a, end_a, start_b, end_b),
+                expected_branch,
+                f"the batch no longer covers {expected_branch} via {start_b}",
+            )
+
+        actual = self._distance_squared(
+            start_a, end_a, [c[1] for c in cases], [c[2] for c in cases]
+        )
 
         expected = [
-            self._brute_force(start_a, end_a, s, e)
-            for s, e in zip(starts_b, ends_b, strict=True)
+            self._brute_force(start_a, end_a, start_b, end_b)
+            for _, start_b, end_b in cases
         ]
         np.testing.assert_allclose(actual, expected, rtol=2e-4)
+
+    def test_reordering_the_batch_only_reorders_the_result(self):
+        """The masks must follow the rows, not fixed positions.
+
+        Every branch above lands on a different row here, so a clamp that wrote
+        to the wrong slice would agree with the batch above and disagree here.
+        """
+        start_a, end_a = self.SEGMENT_A
+        pairs = [
+            self.CLAMPED_LOW,
+            self.NEAR_DEGENERATE_B,
+            self.PARALLEL,
+            self.DEGENERATE_B,
+            self.CLAMPED_HIGH,
+            self.S_CLAMPED,
+        ]
+
+        forward = self._distance_squared(
+            start_a, end_a, [p[0] for p in pairs], [p[1] for p in pairs]
+        )
+        reversed_pairs = pairs[::-1]
+        backward = self._distance_squared(
+            start_a,
+            end_a,
+            [p[0] for p in reversed_pairs],
+            [p[1] for p in reversed_pairs],
+        )
+
+        np.testing.assert_allclose(forward, backward[::-1], rtol=0, atol=0)
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
@@ -300,15 +455,30 @@ class TestTheSweptPathRule(unittest.TestCase):
     def test_paths_crossing_at_different_times_still_pop(self):
         # The rocket reaches x = 9 at 90% of the timestep; the balloon is there at
         # 50%. They never share the point at the same moment.
-        rocket_start, rocket_end = np.array([0.0, 0.0, 0.0]), np.array([10.0, 0.0, 0.0])
+        rocket_start = np.array([0.0, 0.0, 0.0])
+        rocket_end = np.array([10.0, 0.0, 0.0])
         balloon_start = np.array([[9.0, -20.0, 0.0]])
         balloon_end = np.array([[9.0, 20.0, 0.0]])
+        radius = 1.5
 
-        swept = BalloonPoppingEnv._segment_distance_squared_batch(
-            rocket_start, rocket_end, balloon_start, balloon_end
-        )[0]
+        # Through _detect_pops, not the geometry helper: the rule is the pop, and
+        # the helper is one step of it. Asserting on the distance alone would
+        # still pass if the radius comparison or the status write changed.
+        env = TestDetectPops._env_with_state(
+            balloon_end, [TestDetectPops.RELEASED], rocket_now=rocket_end, radius=radius
+        )
+        env._detect_pops(
+            previous_balloon_positions=balloon_start,
+            previous_rocket_position=rocket_start,
+        )
 
-        # Same-instant distance, which is what a synchronized rule would use.
+        self.assertEqual(
+            env._balloon_status[0, 0],
+            TestDetectPops.POPPED,
+            "the swept rule should register a pop",
+        )
+
+        # The case only means something if a same-instant rule would miss it.
         params = np.linspace(0.0, 1.0, 20001)
         rocket = rocket_start + params[:, None] * (rocket_end - rocket_start)
         balloon = balloon_start[0] + params[:, None] * (
@@ -316,13 +486,31 @@ class TestTheSweptPathRule(unittest.TestCase):
         )
         same_instant = float(np.min(np.sum((rocket - balloon) ** 2, axis=1)))
 
-        radius = 1.5
-        self.assertLessEqual(swept, radius**2, "the swept rule should register a pop")
-        self.assertGreater(
-            same_instant,
-            radius**2,
-            "the case is only meaningful if a same-instant rule would miss it",
+        self.assertGreater(same_instant, radius**2)
+
+    def test_the_same_geometry_one_timestep_earlier_does_not_pop(self):
+        """The rule is not "any two paths that ever cross".
+
+        The pair above pops because both sweeps happen to overlap in space within
+        the same step. Shift the balloon's sweep to the step before and the same
+        two trajectories no longer produce a pop, which is what makes the rule a
+        per-step comparison rather than a whole-flight one.
+        """
+        rocket_start = np.array([0.0, 0.0, 0.0])
+        rocket_end = np.array([10.0, 0.0, 0.0])
+        # The balloon crosses x = 9 forty metres away in y during this step.
+        balloon_start = np.array([[9.0, -60.0, 0.0]])
+        balloon_end = np.array([[9.0, -20.0, 0.0]])
+
+        env = TestDetectPops._env_with_state(
+            balloon_end, [TestDetectPops.RELEASED], rocket_now=rocket_end, radius=1.5
         )
+        env._detect_pops(
+            previous_balloon_positions=balloon_start,
+            previous_rocket_position=rocket_start,
+        )
+
+        self.assertEqual(env._balloon_status[0, 0], TestDetectPops.RELEASED)
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
@@ -357,18 +545,32 @@ class TestTheRewardContract(unittest.TestCase):
         env.step(launch)
         return env
 
+    @staticmethod
+    def _park(env, on_the_rocket):
+        """Move ``on_the_rocket`` balloons onto the launch point, the rest far away.
+
+        ``_balloon_states`` is set as well as ``_balloon_flights``. ``step`` copies
+        the previous balloon positions out of ``_balloon_states`` *before* refilling
+        it from ``_balloon_flights``, so writing only the flights would leave the
+        first step sweeping from wherever the balloon really was to the parked
+        position. That sweep still crosses the rocket, so the test passed while
+        measuring geometry it did not describe.
+        """
+        here = np.asarray(env.initial_solution[1:4], dtype=float)
+        far = here + np.array([0.0, 0.0, 10_000.0])
+        env._balloon_flights[:, :3, :] = far[None, :, None]
+        env._balloon_flights[:on_the_rocket, :3, :] = here[:, None]
+        env._balloon_flights[:, 3:, :] = 0.0
+        env._balloon_states = env._balloon_flights[:, :, env.current_step].copy()
+        env._balloon_status[:, 0] = 1
+        return here
+
     def test_reward_is_the_step_delta_and_a_pop_never_scores_twice(self):
         env = self._launched()
 
         # One balloon parked on the launch point, the rest far enough away that
         # only the first can account for any reward.
-        here = np.asarray(env.initial_solution[1:4], dtype=float)
-        env._balloon_flights[:, :3, :] = (here + np.array([0.0, 0.0, 10_000.0]))[
-            None, :, None
-        ]
-        env._balloon_flights[0, :3, :] = here[:, None]
-        env._balloon_flights[:, 3:, :] = 0.0
-        env._balloon_status[:, 0] = 1
+        self._park(env, on_the_rocket=1)
 
         _obs, first_reward, _term, _trunc, first_info = env.step(self._idle(env))
         _obs, second_reward, _term, _trunc, second_info = env.step(self._idle(env))
@@ -380,16 +582,57 @@ class TestTheRewardContract(unittest.TestCase):
         self.assertEqual(second_reward, 0, "an already popped balloon scored again")
         self.assertEqual(second_info["popped_count"], 1, "the count must not drift")
 
+    def test_three_balloons_popped_in_one_step_score_three(self):
+        """The reward is the *size* of the delta, not that a delta happened.
+
+        Every other reward test here pops exactly one balloon per step, so
+        ``reward = int(new_count > previous_count)`` satisfies all of them while
+        capping a multi-pop step at one point. Scenario #1 releases a hundred
+        balloons into a ~0.01 s step, so more than one pop per step is reachable
+        and the cap would quietly lower a competitor's score.
+        """
+        env = self._launched()
+        parked = 3
+        self._park(env, on_the_rocket=parked)
+
+        _obs, reward, _term, _trunc, info = env.step(self._idle(env))
+
+        self.assertEqual(reward, parked, "the reward must count every new pop")
+        self.assertEqual(info["popped_count"], parked)
+        # Same balloons, still on the rocket: the second step adds nothing.
+        _obs, again, _term, _trunc, later = env.step(self._idle(env))
+        self.assertEqual(again, 0)
+        self.assertEqual(later["popped_count"], parked)
+
+    def test_the_reward_sums_to_the_final_popped_count(self):
+        """The cumulative count is the score, and the reward is what an agent sees.
+
+        They are computed differently, so pin that they agree over a whole run
+        rather than only at the step boundary each test above happens to check.
+        """
+        env = self._launched()
+        self._park(env, on_the_rocket=2)
+
+        total = 0
+        info = {"popped_count": 0}
+        for _ in range(5):
+            _obs, reward, terminated, truncated, info = env.step(self._idle(env))
+            total += reward
+            if terminated or truncated:
+                break
+
+        self.assertEqual(total, info["popped_count"])
+        self.assertEqual(total, 2)
+
     def test_a_distant_balloon_earns_nothing(self):
         env = self._launched()
-        here = np.asarray(env.initial_solution[1:4], dtype=float)
-        env._balloon_flights[:, :3, :] = (here + np.array([0.0, 0.0, 10_000.0]))[
-            None, :, None
-        ]
-        env._balloon_flights[:, 3:, :] = 0.0
-        env._balloon_status[:, 0] = 1
+        self._park(env, on_the_rocket=0)
 
         _obs, reward, _term, _trunc, info = env.step(self._idle(env))
 
         self.assertEqual(reward, 0)
         self.assertEqual(info["popped_count"], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
