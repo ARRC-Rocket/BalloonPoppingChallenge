@@ -318,6 +318,36 @@ class TestScenario0Regression(unittest.TestCase):
             ROW_COUNT_ABS_TOL,
         )
 
+    # The pipeline lag between the step whose clock first reaches launch_time and
+    # the first row carrying a finite state. Measured as 2 on both scenarios, and
+    # it is structural rather than tuned: the launch action is read on one step
+    # and the integrator reports its first state on the next.
+    LAUNCH_PIPELINE_LAG = 2
+
+    def test_the_launch_step_is_the_one_the_agent_was_asked_for(self):
+        """So regenerating cannot bless a flight that launches late.
+
+        The baseline value is compared against the baseline, which says nothing
+        about whether it is right. Measured: moving the agent's launch_time from
+        1 s to 3 s and regenerating writes launch_step 302 and every test here
+        passes. This file already guards popped_count against exactly that, on
+        the stated grounds that a regression must not be blessed by regenerating,
+        and the new field needs the same.
+
+        Derived from the agent's own configuration and the scenario clock, so it
+        is an independent statement rather than the baseline restating itself.
+        """
+        parameters, _given = load_scenario_parameters(0)
+        implied = AGENT_KWARGS["launch_time"] / parameters["simulation"]["time_step"]
+
+        self.assertLessEqual(
+            abs(self.baseline["launch_step"] - implied),
+            STEP_COUNT_ABS_TOL + self.LAUNCH_PIPELINE_LAG,
+            f"the baseline launches at step {self.baseline['launch_step']}, but a "
+            f"launch_time of {AGENT_KWARGS['launch_time']} s implies about "
+            f"{implied:.0f}",
+        )
+
     def test_the_flight_happens_when_the_baseline_says_it_does(self):
         """*When*, which the trajectory comparison throws away.
 
@@ -355,7 +385,15 @@ class TestScenario0Regression(unittest.TestCase):
             ROW_COUNT_ABS_TOL,
         )
 
-        with self.assertRaises(AssertionError):
+        # Matched on the message, not merely on the type. ``launch_step``
+        # raises AssertionError for its own input guards too, so a bare
+        # assertRaises passes when the helper rejects the arguments rather
+        # than the clock. Measured: dropping the tail trim in
+        # ``displace_flight_in_time``, which breaks the same-step-count
+        # contract its docstring promises, left this test passing while
+        # the real failure was "the clock has 6012 entries and the
+        # trajectory has 6022".
+        with self.assertRaisesRegex(AssertionError, "launched at step"):
             assert_launch_step_matches(
                 self,
                 launch_step(displaced, self.run_result.record_step),
