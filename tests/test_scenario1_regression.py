@@ -88,11 +88,8 @@ BALLOON_INDEX_STRIDE = 1
 # drift past on the wind. Pin that so regenerating cannot bless a different count.
 EXPECTED_POPPED_COUNT = 0
 
-# Per-coordinate position tolerance, applied as a real floor of
-# ``max(POSITION_ATOL, POSITION_RTOL * abs(expected))`` -- not numpy's additive
-# ``atol + rtol * expected`` -- so a coordinate near zero (the x/y balloon and
-# rocket coordinates pass through 0) cannot drift by the metre floor *plus*
-# another few percent.
+# The position tolerance itself lives in tests/position_tolerance.py, shared
+# with the other scenario so the two cannot drift apart again.
 # Flight duration is deterministic, so allow only a couple of steps of
 # cross-platform jitter, absolute rather than a percentage: a 2% tolerance on a
 # ~6000-step flight would wave through a full second of early termination.

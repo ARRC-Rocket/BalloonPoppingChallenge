@@ -44,10 +44,8 @@ BASELINE_PATH = Path(__file__).parent / "baselines" / "scenario_0.json"
 AGENT_KWARGS = {"rate_targets": [0.0, 0.0, 0.0], "launch_time": 1}
 DOWNSAMPLE_STRIDE = 50
 
-# Per-coordinate position tolerance, applied as a real floor of
-# ``max(POSITION_ATOL, POSITION_RTOL * abs(expected))`` -- not numpy's additive
-# ``atol + rtol * expected`` -- so a coordinate near zero cannot drift by the
-# metre floor *plus* another few percent.
+# The position tolerance itself lives in tests/position_tolerance.py, shared
+# with the other scenario so the two cannot drift apart again.
 # Flight duration is deterministic, so allow only a couple of steps of
 # cross-platform jitter. This is absolute, not a percentage: a 2% tolerance on a
 # ~6000-step flight would wave through a full second of early termination.
