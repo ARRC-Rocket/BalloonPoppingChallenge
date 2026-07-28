@@ -42,8 +42,7 @@ maintainer's call.
 
 ## Before you open a pull request
 
-Run what CI runs. The ruff version is pinned, and an unpinned one will disagree
-about formatting:
+Run what CI runs:
 
 ```shell
 uvx ruff@0.15.20 check BalloonPoppingGymEnv/ tests/
@@ -52,7 +51,21 @@ uv lock --check
 BPC_RUN_SLOW_TESTS=1 pytest tests/ --cov=BalloonPoppingGymEnv
 ```
 
-`make format` fixes import order and formatting in place.
+`make format` fixes import order and formatting in place, using the same pinned
+ruff.
+
+There is one ruff version for the whole project: the CI pin, the `dev` extra, the
+lockfile and `make format` all say 0.15.20, and `required-version` in
+`pyproject.toml` makes any other release refuse to run rather than quietly apply
+different rules:
+
+```
+ruff failed
+  Cause: Required version `==0.15.20` does not match the running version `0.15.13`
+```
+
+So an editor integration or a stale environment tells you, instead of formatting a
+file that CI then rejects.
 
 `uv lock --check` matters more than it looks. CI installs with pip, so nothing
 else notices `uv.lock` drifting away from the ActiveRocketPy submodule.
