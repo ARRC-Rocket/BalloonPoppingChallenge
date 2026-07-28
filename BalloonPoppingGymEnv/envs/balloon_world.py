@@ -1,6 +1,7 @@
 import copy
 import logging
 import os
+import shutil
 import tempfile
 
 import gymnasium as gym
@@ -28,6 +29,22 @@ from rocketpy.sensors.gyroscope import Gyroscope
 from rocketpy.tools import euler313_to_quaternions
 
 logger = logging.getLogger(__name__)
+
+
+def _remove_monte_carlo_workspace(directory):
+    """Delete a Monte Carlo scratch directory, saying so if it will not go.
+
+    ``ignore_errors=True`` would turn a failed removal back into the silent
+    accumulation this exists to stop, and letting the error out would turn a
+    finished reset into a failure over scratch files nobody wanted. Neither, so
+    it is reported instead.
+    """
+    try:
+        shutil.rmtree(directory)
+    except OSError as error:
+        logger.warning(
+            "Could not remove the Monte Carlo workspace at %s: %s", directory, error
+        )
 
 
 def _seed_sequence_to_int(seed_sequence):
@@ -732,59 +749,101 @@ class BalloonPoppingEnv(gym.Env):
             self.simulation_parameters["max_time"],
             self.simulation_parameters["time_step"],
         )
-        monte_carlo_sim = MonteCarlo(
-            filename=os.path.join(tempfile.gettempdir(), f"balloon_sim_{os.getpid()}"),
-            environment=stochastic_env,
-            rocket=stochastic_balloon,
-            flight=stochastic_flight,
-            export_list=["t_final"],
-            data_collector={
-                "x": lambda flight: flight.x(time_array),
-                "y": lambda flight: flight.y(time_array),
-                "z": lambda flight: flight.z(time_array),
-                "vx": lambda flight: flight.vx(time_array),
-                "vy": lambda flight: flight.vy(time_array),
-                "vz": lambda flight: flight.vz(time_array),
-                "lat0": lambda flight: flight.latitude(0),
-                "lon0": lambda flight: flight.longitude(0),
-            },
-        )
+        # MonteCarlo writes .inputs.txt, .outputs.txt and .errors.txt beside its
+        # filename, and for scenario 1 the outputs file is 169 MB. A successful
+        # reset reads none of them back: the arrays below come from the returned
+        # dict. Written straight into the shared temp directory they were never
+        # removed, so a competitor iterating on an agent left one set behind per
+        # run and filled /tmp within tens of runs, after which runs fail in ways
+        # that do not point back here. Measured: 22 files, 3.7 GB, and one
+        # corrupted run.
+        #
+        # Removed only once the whole conversion below has succeeded, which is
+        # why this is not a TemporaryDirectory. RocketPy keeps the failing
+        # stochastic inputs on purpose: a serial simulation error appends them to
+        # .errors.txt and re-raises, and Ctrl-C prints "Files saved." A context
+        # manager deletes the directory while the exception unwinds, so the
+        # caller is told the files were saved and finds nothing there. The
+        # conversion is inside the same block because it has its own ways to
+        # fail, and an incomplete result is exactly when the inputs that produced
+        # it are worth having.
+        #
+        # mkdtemp creates the directory exclusively, so this also subsumes the
+        # per-process filename that was there to keep two runs apart.
+        monte_carlo_dir = tempfile.mkdtemp(prefix="balloon_sim_")
+        try:
+            monte_carlo_sim = MonteCarlo(
+                filename=os.path.join(monte_carlo_dir, "balloon_sim"),
+                environment=stochastic_env,
+                rocket=stochastic_balloon,
+                flight=stochastic_flight,
+                export_list=["t_final"],
+                data_collector={
+                    "x": lambda flight: flight.x(time_array),
+                    "y": lambda flight: flight.y(time_array),
+                    "z": lambda flight: flight.z(time_array),
+                    "vx": lambda flight: flight.vx(time_array),
+                    "vy": lambda flight: flight.vy(time_array),
+                    "vz": lambda flight: flight.vz(time_array),
+                    "lat0": lambda flight: flight.latitude(0),
+                    "lon0": lambda flight: flight.longitude(0),
+                },
+            )
 
-        monte_carlo_results_ = monte_carlo_sim.simulate(
-            number_of_simulations=self.balloon_parameters["num"],
-            append=False,
-            include_function_data=False,
-            random_seed=self.np_random_seed,
-            parallel=False,
-        )
+            monte_carlo_results_ = monte_carlo_sim.simulate(
+                number_of_simulations=self.balloon_parameters["num"],
+                append=False,
+                include_function_data=False,
+                random_seed=self.np_random_seed,
+                parallel=False,
+            )
 
-        # Convert Monte Carlo dict to [balloon][state][timestep].
-        east0, north0, up0 = pm.geodetic2enu(
-            monte_carlo_results_["lat0"],
-            monte_carlo_results_["lon0"],
-            self._rocketpy_env.elevation,
-            self._rocketpy_env.latitude,
-            self._rocketpy_env.longitude,
-            self._rocketpy_env.elevation,
-        )
-        # Broadcast initial ENU offsets to all timesteps for each simulation
-        east0, north0, up0 = (
-            np.array(east0)[:, None],
-            np.array(north0)[:, None],
-            np.array(up0)[:, None],
-        )
+            # Convert Monte Carlo dict to [balloon][state][timestep].
+            east0, north0, up0 = pm.geodetic2enu(
+                monte_carlo_results_["lat0"],
+                monte_carlo_results_["lon0"],
+                self._rocketpy_env.elevation,
+                self._rocketpy_env.latitude,
+                self._rocketpy_env.longitude,
+                self._rocketpy_env.elevation,
+            )
+            # Broadcast initial ENU offsets to all timesteps for each simulation
+            east0, north0, up0 = (
+                np.array(east0)[:, None],
+                np.array(north0)[:, None],
+                np.array(up0)[:, None],
+            )
 
-        self._balloon_flights = np.stack(
-            [
-                np.array(monte_carlo_results_["x"]) + east0,
-                np.array(monte_carlo_results_["y"]) + north0,
-                np.array(monte_carlo_results_["z"]) + up0,
-                np.array(monte_carlo_results_["vx"]),
-                np.array(monte_carlo_results_["vy"]),
-                np.array(monte_carlo_results_["vz"]),
-            ],
-            axis=1,
-        )
+            self._balloon_flights = np.stack(
+                [
+                    np.array(monte_carlo_results_["x"]) + east0,
+                    np.array(monte_carlo_results_["y"]) + north0,
+                    np.array(monte_carlo_results_["z"]) + up0,
+                    np.array(monte_carlo_results_["vx"]),
+                    np.array(monte_carlo_results_["vy"]),
+                    np.array(monte_carlo_results_["vz"]),
+                ],
+                axis=1,
+            )
+        except BaseException:
+            # Including KeyboardInterrupt, which is the case RocketPy prints
+            # "Files saved." for. Keeping them costs one directory; removing
+            # them costs whoever has to work out why a run failed.
+            #
+            # Only when there is something to keep. A failure before any file
+            # was written, which is every failure inside the MonteCarlo
+            # constructor, would otherwise leave an empty directory behind on
+            # every attempt: the leak this whole change is about, in a smaller
+            # size.
+            if os.listdir(monte_carlo_dir):
+                logger.warning(
+                    "Balloon Monte Carlo failed; its inputs and error log are at %s",
+                    monte_carlo_dir,
+                )
+            else:
+                _remove_monte_carlo_workspace(monte_carlo_dir)
+            raise
+        _remove_monte_carlo_workspace(monte_carlo_dir)
 
         # Vectorized shift trajectories by release step
         num_balloons, state_dims, num_timesteps = self._balloon_flights.shape
