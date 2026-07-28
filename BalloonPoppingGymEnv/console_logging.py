@@ -49,18 +49,32 @@ def configure_console_logging(level=logging.INFO, stream=None):
     threshold is lowered to ``level`` if it had none, or left where it is if the
     host had already set one lower, so a host's DEBUG file handler keeps working
     while the console still shows only ``level`` and above.
+
+    ``level=logging.NOTSET`` is the one value that does not mean what the name
+    suggests. On a handler it means "handle everything", but the logger gate
+    comes first, and ``NOTSET`` on a non-root logger means "ask my ancestors",
+    whose default is ``WARNING``. So passing it leaves ``INFO`` records dropped
+    before they reach the console. Pass ``logging.DEBUG`` for everything. The
+    behaviour is left as ``logging`` defines it for each object rather than
+    special-cased here, because a single value where this function disagrees
+    with the standard library is the worse surprise.
+
+    Nothing on the logger is touched until the new handler exists and has
+    accepted ``level``, so a level ``logging`` rejects raises with the logger
+    exactly as it was.
     """
     package_logger = logging.getLogger(PACKAGE_LOGGER_NAME)
 
-    # Normalise and validate before touching anything. logging accepts "INFO"
-    # as well as an int, and the comparison below is arithmetic, so a string
-    # level used to raise TypeError *after* the new handler was attached and the
-    # old one closed: the caller got an exception and a half-configured logger.
-    # A probe handler does the conversion, because setLevel is where logging
-    # itself decides what a level name means.
-    probe = logging.Handler()
-    probe.setLevel(level)
-    numeric_level = probe.level
+    # Built and configured before the logger is touched at all. setLevel is
+    # where logging itself decides what a level name means, and it is the call
+    # that rejects a bad one; doing it here rather than after the swap is what
+    # makes a rejection leave nothing half-done. It also normalises "INFO" to an
+    # int, which the arithmetic at the bottom needs.
+    handler = logging.StreamHandler(sys.stdout if stream is None else stream)
+    handler.set_name(CONSOLE_HANDLER_NAME)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    handler.setLevel(level)
+    numeric_level = handler.level
 
     # getEffectiveLevel, not .level. NOTSET on a non-root logger does not mean
     # "no threshold", it means "ask my ancestors", so a host that set DEBUG on
@@ -68,15 +82,12 @@ def configure_console_logging(level=logging.INFO, stream=None):
     # finding NOTSET, then setting INFO, raised the threshold anyway.
     effective_level = package_logger.getEffectiveLevel()
 
+    # Everything from here down mutates the logger, and none of it can fail.
     for existing in list(package_logger.handlers):
         if existing.get_name() == CONSOLE_HANDLER_NAME:
             package_logger.removeHandler(existing)
             existing.close()
 
-    handler = logging.StreamHandler(sys.stdout if stream is None else stream)
-    handler.set_name(CONSOLE_HANDLER_NAME)
-    handler.setFormatter(logging.Formatter("%(message)s"))
-    handler.setLevel(numeric_level)
     package_logger.addHandler(handler)
 
     # Never raise the threshold. A host that arranged for DEBUG here, directly

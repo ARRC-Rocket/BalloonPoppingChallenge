@@ -225,11 +225,69 @@ class TestTheConsoleFormat(_LoggingStateMixin, unittest.TestCase):
         self.assertEqual(self.package_logger.getEffectiveLevel(), logging.DEBUG)
 
     def test_a_logger_with_no_level_gets_the_requested_one(self):
+        # The root level is part of this assertion, not ambient. The level
+        # written is min(effective, requested), and effective is inherited from
+        # the root once this logger is at NOTSET, so a process that had left the
+        # root at DEBUG would legitimately produce DEBUG here. Measured: this
+        # test failed exactly that way with the root at DEBUG.
+        root = logging.getLogger()
+        self.addCleanup(root.setLevel, root.level)
+        root.setLevel(logging.WARNING)
         self.package_logger.setLevel(logging.NOTSET)
 
         configure_console_logging(level=logging.INFO, stream=self.stream)
 
         self.assertEqual(self.package_logger.level, logging.INFO)
+
+    def test_a_level_logging_rejects_leaves_the_logger_untouched(self):
+        """The half-configured state the normalisation was moved for.
+
+        Asserted on the logger rather than on the exception, because the
+        exception was never the problem: the old order attached the new handler
+        and closed the old one first, so a caller that caught the error was left
+        with console output going somewhere it did not ask for. Measured with
+        the check moved back below the swap: every other test here stayed green.
+        """
+        installed = logging.StreamHandler(io.StringIO())
+        installed.set_name(CONSOLE_HANDLER_NAME)
+        self.package_logger.addHandler(installed)
+        self.package_logger.setLevel(logging.WARNING)
+        self.package_logger.propagate = True
+
+        with self.assertRaises(ValueError):
+            configure_console_logging(level="NOT_A_LEVEL", stream=self.stream)
+
+        self.assertEqual(self.package_logger.handlers, [installed])
+        self.assertEqual(self.package_logger.level, logging.WARNING)
+        self.assertTrue(self.package_logger.propagate)
+        # close() on the handler this owns is the irreversible half, and it is
+        # not visible in the list above: a closed handler is still attached.
+        installed.emit(
+            logging.LogRecord("x", logging.WARNING, __file__, 0, "still open", (), None)
+        )
+        self.assertEqual(installed.stream.getvalue(), "still open\n")
+
+    def test_notset_leaves_the_ancestors_deciding(self):
+        """The one level whose name promises the opposite of what it does.
+
+        On the handler NOTSET means handle everything, but the logger gate comes
+        first and NOTSET there means ask the ancestors, whose default is
+        WARNING. So INFO is dropped. Pinned rather than fixed: see the docstring
+        for why this function does not special-case a single level.
+        """
+        root = logging.getLogger()
+        self.addCleanup(root.setLevel, root.level)
+        root.setLevel(logging.WARNING)
+
+        configure_console_logging(level=logging.NOTSET, stream=self.stream)
+
+        self.package_logger.info("Total reward: 7")
+        self.assertEqual(self.stream.getvalue(), "")
+
+        # And the documented way to get everything.
+        configure_console_logging(level=logging.DEBUG, stream=self.stream)
+        self.package_logger.info("Total reward: 7")
+        self.assertEqual(self.stream.getvalue(), "Total reward: 7\n")
 
     def test_a_host_root_handler_does_not_double_the_line(self):
         """Why propagate is turned off.
@@ -574,7 +632,31 @@ class TestTheRecordsProductionActuallyEmits(unittest.TestCase):
         for record in caught.records:
             self.assertEqual(record.levelno, logging.INFO)
 
-    def test_the_environment_logs_why_the_episode_ended(self):
+    def _run_to_the_end(self, env, action):
+        """Step until the episode ends, bounded.
+
+        The bound is not decoration. Both callers below drive a real episode,
+        and a termination regression turns an unbounded ``while`` into a run
+        that ends at the CI timeout with no useful failure. ``num_timesteps + 5``
+        is the same bound ``test_episode_lifecycle`` uses.
+        """
+        steps = 0
+        while True:
+            _obs, _reward, terminated, truncated, _info = env.step(action)
+            steps += 1
+            if terminated or truncated:
+                return steps
+            self.assertLess(steps, env.num_timesteps + 5, "episode did not terminate")
+
+    def test_the_environment_logs_a_timeout(self):
+        """The no-launch path, which is also covered in test_episode_lifecycle.
+
+        Deliberately not folded into that test. It is about the lifecycle and
+        should not start depending on a logging contract, and this file should
+        not start importing its helpers. The duplication costs 0.1 s, because an
+        unlaunched step never runs the flight solver: it indexes the balloon
+        array that reset() precomputed. Measured: 9999 steps in 0.106 s.
+        """
         import numpy as np
 
         from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
@@ -591,15 +673,56 @@ class TestTheRecordsProductionActuallyEmits(unittest.TestCase):
         with self.assertLogs(
             "BalloonPoppingGymEnv.envs.balloon_world", level="INFO"
         ) as caught:
-            done = False
-            while not done:
-                _obs, _r, terminated, truncated, _info = env.step(action)
-                done = terminated or truncated
+            steps = self._run_to_the_end(env, action)
 
-        self.assertIn(
-            "Terminated: Reached max time",
+        self.assertEqual(steps, env.num_timesteps - 1)
+        self.assertEqual(
             [record.getMessage() for record in caught.records],
+            ["Terminated: Reached max time"],
         )
+        for record in caught.records:
+            self.assertEqual(record.levelno, logging.INFO)
+
+    def test_the_environment_logs_a_flight_that_finished(self):
+        """The fourth call, and the only one that needs a real flight.
+
+        The other branch of the same ``if`` is the timeout above, and reaching
+        this one means the rocket has to actually fly and come down inside the
+        horizon rather than run out of it. So this launches and steps the
+        solver, which is why it is the slow test in this file: around 5800 steps
+        and 9 s. Worth it, because with this call back as a bare ``print`` the
+        whole suite stayed green.
+        """
+        import numpy as np
+
+        from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
+        from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
+
+        parameters, _ = load_scenario_parameters(0)
+        env = BalloonPoppingEnv(render_mode=None, parameters=parameters)
+        env.reset(seed=parameters["scenario"]["random_seed"])
+        action = env.action_space.sample()
+        action["launch"] = np.array(1, dtype=action["launch"].dtype)
+        action["launch_inclination_heading"] = np.array([90.0, 0.0], dtype=np.float64)
+        action["throttle"] = np.ones_like(action["throttle"])
+        for key in ("tvc", "roll"):
+            action[key] = np.zeros_like(action[key])
+
+        with self.assertLogs(
+            "BalloonPoppingGymEnv.envs.balloon_world", level="INFO"
+        ) as caught:
+            steps = self._run_to_the_end(env, action)
+
+        # Ends because the flight ended, not because it ran out of horizon. A
+        # timeout would log the other message and this assertion is what keeps
+        # the two branches from standing in for each other.
+        self.assertLess(steps, env.num_timesteps - 1)
+        self.assertEqual(
+            [record.getMessage() for record in caught.records],
+            ["Terminated: Rocket flight finished"],
+        )
+        for record in caught.records:
+            self.assertEqual(record.levelno, logging.INFO)
 
 
 if __name__ == "__main__":
