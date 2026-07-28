@@ -16,6 +16,7 @@ package itself is mocked, so it does not need to be installed.
 
 import importlib.util
 import sys
+from dataclasses import dataclass
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -36,6 +37,33 @@ def _simulation_stack_installed():
 
 
 @unittest.skipUnless(_simulation_stack_installed(), "simulation stack not installed")
+@dataclass(frozen=True)
+class FakeVector:
+    """Stands in for ``vpython.vector`` while keeping its identity.
+
+    The earlier stand-in was ``lambda x, y, z: (x, y, z)``, which made the
+    renderer's ``balloon.pos = vector(...)`` indistinguishable from
+    ``balloon.pos = (x, y, z)``. Real VPython is not indifferent: assigning to
+    ``pos`` hands the value to a vector's own setter, which reads ``_x``, ``_y``
+    and ``_z`` off it, so a plain tuple fails in the renderer while passing
+    every assertion here.
+
+    Comparable and iterable so the assertions stay about coordinates, distinct
+    from a tuple so bypassing ``vector()`` cannot go unnoticed. That is what the
+    call-count assertion #40 deleted was reaching for, without the fragility of
+    counting every call in the frame.
+    """
+
+    x: object
+    y: object
+    z: object
+
+    def __iter__(self):
+        yield self.x
+        yield self.y
+        yield self.z
+
+
 class TestVpythonRendersAllBalloons(unittest.TestCase):
     """Issue #26: the vpython renderer must create one sphere per balloon."""
 
@@ -51,10 +79,10 @@ class TestVpythonRendersAllBalloons(unittest.TestCase):
         env = BalloonPoppingEnv(render_mode="vpython", parameters=params)
         fake_vpython = MagicMock()
         # One distinct mock per sphere, so each balloon's assignments are
-        # attributable, and a vector() that returns a comparable tuple.
+        # attributable, and a vector() that keeps its own type.
         spheres = [MagicMock(name=f"sphere{index}") for index in range(num)]
         fake_vpython.sphere.side_effect = spheres
-        fake_vpython.vector.side_effect = lambda x, y, z: (x, y, z)
+        fake_vpython.vector.side_effect = FakeVector
         with patch.dict(sys.modules, {"vpython": fake_vpython}):
             env.reset(seed=0)
 
@@ -71,17 +99,29 @@ class TestVpythonRendersAllBalloons(unittest.TestCase):
             zip(spheres, env._balloon_states, strict=True)
         ):
             with self.subTest(balloon=index):
+                # The type as well as the coordinates: assigning the tuple
+                # directly, without going through vector(), places every balloon
+                # correctly here and breaks the real renderer.
+                self.assertIsInstance(
+                    drawn.pos, FakeVector, "balloon position bypassed vector()"
+                )
                 self.assertEqual(
                     drawn.pos,
-                    (state[0], state[1], state[2]),
+                    FakeVector(state[0], state[1], state[2]),
                     "balloon was not drawn at its own position",
                 )
 
-        # Two balloons at different heights must not share a position, or the
-        # assertion above could hold while every sphere sat in the same place.
+        # A fixture check, not a renderer one. The per-balloon equality above
+        # already fails if every sphere sits at balloon 0, and the renderer owes
+        # nothing here: one balloon, or two that happen to coincide, would both
+        # be legitimate. This says the scenario still spreads them out, so the
+        # comparison above is testing something.
         drawn_positions = {tuple(drawn.pos) for drawn in spheres}
         self.assertGreater(
-            len(drawn_positions), 1, "every balloon was drawn at the same point"
+            len(drawn_positions),
+            1,
+            "the scenario no longer spreads its balloons out, so this fixture "
+            "cannot distinguish per-balloon placement from a shared position",
         )
 
     def test_the_coordinates_are_not_transposed(self):
@@ -103,10 +143,12 @@ class TestVpythonRendersAllBalloons(unittest.TestCase):
         fake_vpython = MagicMock()
         spheres = [MagicMock(name=f"sphere{index}") for index in range(num)]
         fake_vpython.sphere.side_effect = spheres
-        fake_vpython.vector.side_effect = lambda x, y, z: (x, y, z)
+        fake_vpython.vector.side_effect = FakeVector
 
+        # Not a shared linear ramp: three axes stepping together would let a
+        # swap that also rescaled go unnoticed. Mixed signs and a quadratic.
         asymmetric = [
-            (1.0 + index, 100.0 + index, 200.0 + index) for index in range(num)
+            (1.25 + index, -7.0 - 3.0 * index, 200.0 + index**2) for index in range(num)
         ]
         with patch.dict(sys.modules, {"vpython": fake_vpython}):
             env.reset(seed=0)
@@ -118,7 +160,10 @@ class TestVpythonRendersAllBalloons(unittest.TestCase):
             zip(spheres, asymmetric, strict=True)
         ):
             with self.subTest(balloon=index):
-                self.assertEqual(drawn.pos, position, "coordinates were reordered")
+                self.assertIsInstance(drawn.pos, FakeVector)
+                self.assertEqual(
+                    drawn.pos, FakeVector(*position), "coordinates were reordered"
+                )
 
 
 if __name__ == "__main__":
