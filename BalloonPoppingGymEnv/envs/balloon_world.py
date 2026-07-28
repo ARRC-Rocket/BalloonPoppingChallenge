@@ -47,6 +47,59 @@ def _remove_monte_carlo_workspace(directory):
         )
 
 
+def _monte_carlo_workspace_has_files(directory):
+    """Whether the workspace holds anything worth keeping, without raising.
+
+    This runs inside an ``except`` block. An error raised here would be chained
+    onto the failure being handled rather than replacing it, so the original is
+    still readable, but it would stop the path being logged and stop the empty
+    directory being removed. So it answers "keep it" when it cannot tell.
+    """
+    try:
+        return bool(os.listdir(directory))
+    except OSError as error:
+        logger.warning(
+            "Could not inspect the Monte Carlo workspace at %s: %s", directory, error
+        )
+        return True
+
+
+# The result keys the balloon flights are built from. Counted together rather
+# than trusting one of them to speak for the rest.
+_MONTE_CARLO_RESULT_KEYS = ("x", "y", "z", "vx", "vy", "vz", "lat0", "lon0")
+
+
+def _check_monte_carlo_returned_every_balloon(results, requested):
+    """Refuse a short result set instead of building a world out of it.
+
+    ``simulate()`` does not always raise when it stops early. The pinned
+    RocketPy catches ``KeyboardInterrupt``, appends to its error file, prints
+    "Keyboard interrupt received. Files saved." and returns normally, so a
+    Ctrl-C part way through a hundred balloons comes back as fewer trajectories
+    rather than as a failure. Only ``Exception`` is re-raised there.
+
+    Exactly one returned trajectory is the case worth naming. The release shift
+    indexes with ``arange(num_balloons)`` against one release step per requested
+    balloon, so a ``(1, 6, T)`` array broadcasts to a full ``(100, 6, T)`` one in
+    which every balloon flies the same path, time shifted. Nothing downstream can
+    tell, and the episode scores normally against a world that was never
+    simulated. Every other short count reaches the same expression and raises an
+    IndexError about indexing array shapes, which is loud but says nothing about
+    what actually went wrong.
+    """
+    counts = {
+        key: len(results[key]) if key in results else None
+        for key in _MONTE_CARLO_RESULT_KEYS
+    }
+    if any(count != requested for count in counts.values()):
+        raise RuntimeError(
+            f"the balloon Monte Carlo was asked for {requested} trajectories "
+            f"and returned {counts}, so the balloon flights cannot be built. A "
+            "keyboard interrupt during the run is the usual cause: RocketPy "
+            "catches it, saves its files and returns what it has."
+        )
+
+
 def _seed_sequence_to_int(seed_sequence):
     """Return the full 128-bit state of ``seed_sequence`` as a plain int.
 
@@ -790,12 +843,19 @@ class BalloonPoppingEnv(gym.Env):
                 },
             )
 
+            # One read, used for both the request and the check on what came
+            # back, so the two cannot drift apart later.
+            requested_balloons = self.balloon_parameters["num"]
             monte_carlo_results_ = monte_carlo_sim.simulate(
-                number_of_simulations=self.balloon_parameters["num"],
+                number_of_simulations=requested_balloons,
                 append=False,
                 include_function_data=False,
                 random_seed=self.np_random_seed,
                 parallel=False,
+            )
+
+            _check_monte_carlo_returned_every_balloon(
+                monte_carlo_results_, requested_balloons
             )
 
             # Convert Monte Carlo dict to [balloon][state][timestep].
@@ -835,7 +895,7 @@ class BalloonPoppingEnv(gym.Env):
             # constructor, would otherwise leave an empty directory behind on
             # every attempt: the leak this whole change is about, in a smaller
             # size.
-            if os.listdir(monte_carlo_dir):
+            if _monte_carlo_workspace_has_files(monte_carlo_dir):
                 logger.warning(
                     "Balloon Monte Carlo failed; its inputs and error log are at %s",
                     monte_carlo_dir,
