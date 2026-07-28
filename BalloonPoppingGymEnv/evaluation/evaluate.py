@@ -5,10 +5,14 @@ import sys
 
 import yaml
 
+from BalloonPoppingGymEnv.console_logging import configure_console_logging
 from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
 from BalloonPoppingGymEnv.evaluation.results.utils import save_trajectories
 
-logger = logging.getLogger(__name__)
+# Named rather than __name__: running this file as a script makes __name__
+# "__main__", which puts its records outside the package logger the console
+# setup below attaches to, and shows up in the output as "__main__".
+logger = logging.getLogger("BalloonPoppingGymEnv.evaluation.evaluate")
 
 
 def _extract_nested_parameters(scenario_parameters, given_parameters_spec):
@@ -158,7 +162,7 @@ def evaluate_scenario(
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+    configure_console_logging()
 
     if len(sys.argv) < 2:
         raise ValueError(
