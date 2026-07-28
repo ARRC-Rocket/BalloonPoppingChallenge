@@ -10,6 +10,13 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Nothing here writes back to the repository. Without a declaration the
+# workflow token carries whatever the repository default grants, which is
+# usually write, and a checkout plus a third-party dependency install is the
+# wrong place to be holding it. Jobs that need more can ask for it locally.
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint and format
