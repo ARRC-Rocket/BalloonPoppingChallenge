@@ -7,6 +7,7 @@ scenario_number = 0
 agent_name = "Sine Command Agent"
 agent_kwargs = {"launch_time": 1.0}
 
+
 def run_for_development():
     from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
     from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
@@ -32,17 +33,22 @@ def run_for_development():
         observation, reward, terminated, _, info = env.step(action)
 
         # ground truth angular rates, should not pass to agent
-        angular_rates = np.append(angular_rates, info["rocket_states"][10:13].reshape(-1, 1), axis=1)
+        angular_rates = np.append(
+            angular_rates, info["rocket_states"][10:13].reshape(-1, 1), axis=1
+        )
         time = np.append(time, observation["simulation_time"])
 
-        print(f"simulation_time: {observation['simulation_time']:.2f} sec, reward: {reward:.2f}", end='\r')
+        print(
+            f"simulation_time: {observation['simulation_time']:.2f} sec, reward: {reward:.2f}",
+            end="\r",
+        )
 
     plt.subplot(2, 1, 1)
-    plt.plot(time, angular_rates[0], 'r-', label='x_rate')
-    plt.plot(time, angular_rates[1], 'g-', label='y_rate')
-    plt.plot(time, angular_rates[2], 'b-', label='z_rate')
-    plt.xlabel('Time (s)')
-    plt.ylabel('Angular Rates (rad/s)')
+    plt.plot(time, angular_rates[0], "r-", label="x_rate")
+    plt.plot(time, angular_rates[1], "g-", label="y_rate")
+    plt.plot(time, angular_rates[2], "b-", label="z_rate")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Angular Rates (rad/s)")
     plt.xlim(0, 30)
     plt.ylim(-0.1, 0.1)
     plt.legend()
@@ -51,10 +57,10 @@ def run_for_development():
     tvc = env._rocket_flight.rocket._controllers[0].observed_variables
     tvc_array = np.array(tvc, dtype=float)
     plt.subplot(2, 1, 2)
-    plt.plot(tvc_array[:, 0], tvc_array[:, 1], 'r-', label='tvc_x')
-    plt.plot(tvc_array[:, 0], tvc_array[:, 2], 'b-', label='tvc_y')
-    plt.xlabel('Time (s)')
-    plt.ylabel('TVC Gimbal Angle (deg)')
+    plt.plot(tvc_array[:, 0], tvc_array[:, 1], "r-", label="tvc_x")
+    plt.plot(tvc_array[:, 0], tvc_array[:, 2], "b-", label="tvc_y")
+    plt.xlabel("Time (s)")
+    plt.ylabel("TVC Gimbal Angle (deg)")
     plt.xlim(0, 30)
     plt.ylim(-0.1, 0.1)
     plt.legend()
@@ -67,6 +73,7 @@ def run_for_development():
 
     # env._rocket_flight.all_info() # Uncomment to print all info from RocketPy
 
+
 def run_for_evaluation():
     from BalloonPoppingGymEnv.evaluation.evaluate import evaluate_scenario
 
@@ -77,8 +84,9 @@ def run_for_evaluation():
         agent_kwargs=agent_kwargs,
         agent_name=agent_name,
         scenario_number=scenario_number,
-        render_mode='matplotlib',
+        render_mode="matplotlib",
     )
+
 
 if __name__ == "__main__":
     # Use this function for development and debugging purposes.
