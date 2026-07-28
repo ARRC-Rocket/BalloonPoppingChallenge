@@ -6,7 +6,9 @@ still prints the same line, whether anything is printed at all when
 ``evaluate_scenario`` is called from a script or a notebook, and whether the
 engine's own records end up mixed into it.
 
-Nothing here simulates anything. An earlier version of this file drove the real
+Most of this simulates nothing. The two termination records at the bottom are
+the exception: reaching them needs a real episode, and one of them needs a real
+flight. An earlier version of this file drove the real
 CLI against the shipped config, which renders with Matplotlib, writes a
 trajectory file into the package directory, makes a network request to GitHub
 and writes a submission carrying the team secret, all to check a formatter. It
@@ -42,6 +44,23 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 _STACK_AVAILABLE = find_spec("rocketpy") is not None
 EXAMPLE_SCRIPT = REPO_ROOT / "doc" / "examples" / "run_env_agent.py"
 NOTEBOOK = REPO_ROOT / "doc" / "examples" / "evaluate_scenario_colab.ipynb"
+
+
+class _ClosureTrackingHandler(logging.StreamHandler):
+    """Records whether it was closed, which the stream cannot be asked.
+
+    ``Handler.close`` marks the handler closed and drops its name registration
+    but leaves the stream alone, so writing through a closed StreamHandler still
+    works and cannot be used to tell the two apart.
+    """
+
+    def __init__(self, stream):
+        super().__init__(stream)
+        self.was_closed = False
+
+    def close(self):
+        self.was_closed = True
+        super().close()
 
 
 class _LoggingStateMixin:
@@ -248,7 +267,7 @@ class TestTheConsoleFormat(_LoggingStateMixin, unittest.TestCase):
         with console output going somewhere it did not ask for. Measured with
         the check moved back below the swap: every other test here stayed green.
         """
-        installed = logging.StreamHandler(io.StringIO())
+        installed = _ClosureTrackingHandler(io.StringIO())
         installed.set_name(CONSOLE_HANDLER_NAME)
         self.package_logger.addHandler(installed)
         self.package_logger.setLevel(logging.WARNING)
@@ -260,12 +279,43 @@ class TestTheConsoleFormat(_LoggingStateMixin, unittest.TestCase):
         self.assertEqual(self.package_logger.handlers, [installed])
         self.assertEqual(self.package_logger.level, logging.WARNING)
         self.assertTrue(self.package_logger.propagate)
-        # close() on the handler this owns is the irreversible half, and it is
-        # not visible in the list above: a closed handler is still attached.
-        installed.emit(
-            logging.LogRecord("x", logging.WARNING, __file__, 0, "still open", (), None)
-        )
-        self.assertEqual(installed.stream.getvalue(), "still open\n")
+        # Asked of the handler, not of its stream. An earlier version of this
+        # emitted a record and checked it arrived, which proves nothing:
+        # StreamHandler.close inherits Handler.close, which does not touch the
+        # stream, so emit keeps working on a closed handler. Measured.
+        self.assertFalse(installed.was_closed, "the owned handler was closed")
+        self.assertRegistryStillPointsAt(installed)
+
+    def assertRegistryStillPointsAt(self, handler):
+        """The part of "unchanged" the logger's own attributes cannot show.
+
+        ``set_name`` writes to logging's process-wide handler-name registry and
+        ``close`` deletes whatever that name points at. A version of this
+        function that named the new handler before the swap left the registry
+        empty while the handler stayed attached, so the output tests all passed
+        and ``getHandlerByName`` returned None.
+        """
+        if not hasattr(logging, "getHandlerByName"):  # added in 3.12
+            self.skipTest("getHandlerByName needs Python 3.12")
+        self.assertIs(logging.getHandlerByName(CONSOLE_HANDLER_NAME), handler)
+
+    def test_the_installed_handler_stays_findable_by_name(self):
+        """Two calls in a row, which is what an entry point plus a notebook does.
+
+        The second call has to end with the registry pointing at the handler
+        that is actually attached. It did not: the new handler took the name
+        first, then closing the old one deleted the new one's entry.
+        """
+        configure_console_logging(stream=self.stream)
+        configure_console_logging(stream=self.stream)
+
+        attached = [
+            handler
+            for handler in self.package_logger.handlers
+            if handler.get_name() == CONSOLE_HANDLER_NAME
+        ]
+        self.assertEqual(len(attached), 1)
+        self.assertRegistryStillPointsAt(attached[0])
 
     def test_notset_leaves_the_ancestors_deciding(self):
         """The one level whose name promises the opposite of what it does.
@@ -595,6 +645,13 @@ class TestTheRecordsProductionActuallyEmits(unittest.TestCase):
     The CLI test replaces evaluate_scenario with a fake that logs the two lines
     itself, so turning either real logger.info back into a print stays green
     there. These drive the real functions.
+
+    Each also watches the module's own ``print``. Reading the log records alone
+    catches a logger call turned into a print and misses a print *added beside*
+    one, which is the same contract broken in the other direction and shows the
+    competitor every line twice. Measured: both mutations passed before this.
+    Patched per module rather than by capturing stdout, so a print inside
+    RocketPy is not counted against us.
     """
 
     def test_evaluate_scenario_logs_the_completion_and_the_score(self):
@@ -612,15 +669,16 @@ class TestTheRecordsProductionActuallyEmits(unittest.TestCase):
         ):
             with mock.patch.object(evaluate, "BalloonPoppingEnv", return_value=env):
                 with mock.patch.object(evaluate, "save_trajectories"):
-                    with self.assertLogs(
-                        "BalloonPoppingGymEnv.evaluation.evaluate", level="INFO"
-                    ) as caught:
-                        evaluate.evaluate_scenario(
-                            lambda *a, **k: mock.MagicMock(),
-                            agent_name="A",
-                            scenario_number=0,
-                            render_mode=None,
-                        )
+                    with mock.patch.object(evaluate, "print", create=True) as printed:
+                        with self.assertLogs(
+                            "BalloonPoppingGymEnv.evaluation.evaluate", level="INFO"
+                        ) as caught:
+                            evaluate.evaluate_scenario(
+                                lambda *a, **k: mock.MagicMock(),
+                                agent_name="A",
+                                scenario_number=0,
+                                render_mode=None,
+                            )
 
         self.assertEqual(
             [record.getMessage() for record in caught.records],
@@ -629,6 +687,7 @@ class TestTheRecordsProductionActuallyEmits(unittest.TestCase):
                 "Total reward: 7",
             ],
         )
+        printed.assert_not_called()
         for record in caught.records:
             self.assertEqual(record.levelno, logging.INFO)
 
@@ -659,6 +718,7 @@ class TestTheRecordsProductionActuallyEmits(unittest.TestCase):
         """
         import numpy as np
 
+        from BalloonPoppingGymEnv.envs import balloon_world
         from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
         from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
 
@@ -670,10 +730,12 @@ class TestTheRecordsProductionActuallyEmits(unittest.TestCase):
         for key in ("tvc", "throttle", "roll"):
             action[key] = np.zeros_like(action[key])
 
-        with self.assertLogs(
-            "BalloonPoppingGymEnv.envs.balloon_world", level="INFO"
-        ) as caught:
-            steps = self._run_to_the_end(env, action)
+        with mock.patch.object(balloon_world, "print", create=True) as printed:
+            with self.assertLogs(
+                "BalloonPoppingGymEnv.envs.balloon_world", level="INFO"
+            ) as caught:
+                steps = self._run_to_the_end(env, action)
+        printed.assert_not_called()
 
         self.assertEqual(steps, env.num_timesteps - 1)
         self.assertEqual(
@@ -695,6 +757,7 @@ class TestTheRecordsProductionActuallyEmits(unittest.TestCase):
         """
         import numpy as np
 
+        from BalloonPoppingGymEnv.envs import balloon_world
         from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
         from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
 
@@ -708,10 +771,12 @@ class TestTheRecordsProductionActuallyEmits(unittest.TestCase):
         for key in ("tvc", "roll"):
             action[key] = np.zeros_like(action[key])
 
-        with self.assertLogs(
-            "BalloonPoppingGymEnv.envs.balloon_world", level="INFO"
-        ) as caught:
-            steps = self._run_to_the_end(env, action)
+        with mock.patch.object(balloon_world, "print", create=True) as printed:
+            with self.assertLogs(
+                "BalloonPoppingGymEnv.envs.balloon_world", level="INFO"
+            ) as caught:
+                steps = self._run_to_the_end(env, action)
+        printed.assert_not_called()
 
         # Ends because the flight ended, not because it ran out of horizon. A
         # timeout would log the other message and this assertion is what keeps

@@ -70,8 +70,18 @@ def configure_console_logging(level=logging.INFO, stream=None):
     # that rejects a bad one; doing it here rather than after the swap is what
     # makes a rejection leave nothing half-done. It also normalises "INFO" to an
     # int, which the arithmetic at the bottom needs.
+    #
+    # Not named yet, deliberately. set_name is not configuration, it writes to
+    # logging's process-wide handler-name registry, and close() deletes whatever
+    # that name currently points at without checking it is the handler being
+    # closed. Naming this one first meant the second call took the name, then
+    # closing the old handler deleted the new one's entry: the handler stayed
+    # attached and kept printing, so every output test passed, while
+    # getHandlerByName returned None and an incremental dictConfig could no
+    # longer find it. Measured. A rejected level had the same effect, which made
+    # the atomicity this function claims untrue in the one way the logger's own
+    # attributes do not show.
     handler = logging.StreamHandler(sys.stdout if stream is None else stream)
-    handler.set_name(CONSOLE_HANDLER_NAME)
     handler.setFormatter(logging.Formatter("%(message)s"))
     handler.setLevel(level)
     numeric_level = handler.level
@@ -88,6 +98,8 @@ def configure_console_logging(level=logging.INFO, stream=None):
             package_logger.removeHandler(existing)
             existing.close()
 
+    # Named only now, once the old owner of the name has let go of it.
+    handler.set_name(CONSOLE_HANDLER_NAME)
     package_logger.addHandler(handler)
 
     # Never raise the threshold. A host that arranged for DEBUG here, directly
