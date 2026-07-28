@@ -100,11 +100,13 @@ class TestTheParallelTestDoesNotDependOnScale(unittest.TestCase):
     def test_a_nearly_parallel_pair_still_gets_the_real_closest_approach(self):
         """The tolerance is observable, and the first version of this got it wrong.
 
-        The branch selected below the tolerance pins s to zero, which is right
-        only when the directions really are parallel: then every s gives the
-        same distance. For merely close to parallel it is wrong, so widening
-        the tolerance moves pairs into a branch that does not answer their
-        question.
+        The version this was written against skipped the stationary point below
+        a tolerance and pinned s to zero, which is right only when the
+        directions really are parallel: then every s gives the same distance.
+        For merely close to parallel it is wrong, so widening the tolerance
+        moved pairs into an answer to a different question. Nothing is skipped
+        now, and this case is kept because it is the one that showed the
+        absolute form of the test was scale dependent.
 
         At a chosen 1e-12 this pair came back as 1.5000004 m where the true
         closest approach is 1.4999995 m, which against a 1.5 m radius is a pop
@@ -173,19 +175,17 @@ class TestTheParallelTestDoesNotDependOnScale(unittest.TestCase):
         tolerance to 0.5, which calls anything within forty-five degrees
         parallel, passed every other test in this file.
 
-        Worth being straight about what this does and does not pin. It does not
-        fail if the tolerance is loosened: measured, 0.5 and 0.05 both pass it.
-        The reason is that the parallel branch is not simply ``s = 0``. When the
-        ``t`` that follows clamps out of range, ``s`` is recomputed from the
-        clamped ``t``, and for most geometries that recovers the right answer.
-        The branch only gives a wrong result when ``s = 0`` produces a ``t``
-        strictly inside the segment, which is what the millimetre case above
-        does and what an angle on its own does not arrange.
+        Worth being straight about what this pins. It is the ordinary case: a
+        clear angle between the two sweeps, where nothing about the tolerance
+        or the candidate set is delicate, and the answer has to be the same as
+        the brute force oracle's. The delicate cases are next door, in
+        TestANearParallelInteriorMinimum and in the endpoint-order test.
 
-        So the tolerance's value is not observable anywhere in a wide range,
-        because a pair near enough to parallel for it to matter is one the
-        parallel branch answers correctly anyway. What is observable, and what
-        the other tests here pin, is relative against absolute.
+        An earlier version of this docstring said the tolerance's value was not
+        observable anywhere in a wide range. That was measured against an
+        implementation that had a parallel branch, and it is no longer true:
+        the interior counter-example does observe it, which is why the
+        stationary point is now always computed.
         """
         angle = np.radians(20.0)
         start_a, end_a = np.array([0.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0])
