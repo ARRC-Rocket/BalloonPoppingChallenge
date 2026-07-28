@@ -362,7 +362,48 @@ class BalloonPoppingEnv(gym.Env):
         segment_start_b = np.asarray(segment_start_b, dtype=float)
         segment_end_b = np.asarray(segment_end_b, dtype=float)
 
-        epsilon = 1e-12
+        # Two tolerances, because the quantities they guard are not the same
+        # kind of thing. ``a_coeff`` and ``e_coeff`` are squared lengths in m**2,
+        # so a length below a micron counts as no movement at all. The
+        # denominator is a_coeff * e_coeff - b_coeff**2, in m**4, and how big it
+        # is says nothing on its own: it depends on the segment lengths as much
+        # as on the angle between them.
+        #
+        # One absolute value for both made the parallel decision depend on
+        # scale. A 1 mm rocket segment and a 1 mm balloon segment at exactly
+        # ninety degrees give a denominator of exactly 1e-12, so
+        # ``> 1e-12`` called perpendicular segments parallel, took the branch
+        # that pins s to zero, and reported 1.5005 m where the real distance is
+        # 1.4995 m. With a 1.5 m radius that is a pop reported as a miss.
+        #
+        # Measured over a scenario-1 run: 56 of 9155 released-balloon
+        # evaluations landed in that branch, all of them genuinely degenerate,
+        # so no score moved. It is the shape of the test that is wrong rather
+        # than any current result.
+        degenerate_length_squared = 1e-12
+        # Dimensionless: sin(angle)**2 has to clear this before the two
+        # directions count as distinct, whatever the segments are scaled to.
+        #
+        # Derived from double precision rather than chosen. The denominator is
+        # two nearly equal products subtracted, so its own rounding error is of
+        # order eps * a_coeff * e_coeff, and a few multiples of that is the
+        # point below which its sign and magnitude mean nothing. Eight is the
+        # margin.
+        #
+        # Not a value to widen. The branch it selects pins s to zero, which is
+        # the right answer only when the directions really are parallel, since
+        # then every s gives the same distance. For merely close to parallel it
+        # is wrong, and the wider the tolerance the more pairs land there. At
+        # 1e-12 this pair returned 1.5000004 m where the true closest approach
+        # is 1.4999995 m, which against a 1.5 m radius is a pop reported as a
+        # miss:
+        #
+        #     rocket  (0, 0, 0)          -> (1, 0, 0)
+        #     balloon (-1, 1.5000013, 0) -> (1, 1.4999995, 0)
+        #
+        # At 8 * eps that pair goes through the regular solution and is right.
+        parallel_relative_epsilon = 8 * np.finfo(float).eps
+        epsilon = degenerate_length_squared
         direction_a = segment_end_a - segment_start_a
         direction_b = segment_end_b - segment_start_b
         offset = segment_start_a - segment_start_b
@@ -397,7 +438,13 @@ class BalloonPoppingEnv(gym.Env):
                 b_coeff = np.einsum("j,ij->i", direction_a, direction_b)
                 denominator = a_coeff * e_coeff - b_coeff * b_coeff
 
-                non_parallel = regular & (np.abs(denominator) > epsilon)
+                # Relative to a_coeff * e_coeff, which is what the denominator
+                # would be at ninety degrees, so this compares sin(angle)**2
+                # against a dimensionless tolerance and scaling both segments
+                # cannot change the answer.
+                non_parallel = regular & (
+                    np.abs(denominator) > parallel_relative_epsilon * a_coeff * e_coeff
+                )
                 s_param[non_parallel] = np.clip(
                     (
                         b_coeff[non_parallel] * f_coeff[non_parallel]
