@@ -20,6 +20,7 @@ import numpy as np
 _STACK_AVAILABLE = find_spec("rocketpy") is not None
 
 if _STACK_AVAILABLE:
+    from BalloonPoppingGymEnv.agents.example_agents import AttitudeRateControlAgent
     from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
     from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
 
@@ -46,17 +47,56 @@ class TestNeverLaunchingAgent(unittest.TestCase):
         env.reset(seed=scenario_params["scenario"]["random_seed"])
 
         action = _idle_action(env)
-        terminated = False
+        terminated = truncated = False
         steps = 0
         # Before the fix this raised AttributeError on the final step, because
         # the timeout branch post-processed a flight that was never created.
-        while not terminated:
-            _observation, _reward, terminated, _truncated, info = env.step(action)
+        while not (terminated or truncated):
+            _observation, _reward, terminated, truncated, info = env.step(action)
             steps += 1
-            self.assertLess(steps, env.num_timesteps + 5, "episode did not terminate")
+            self.assertLess(steps, env.num_timesteps + 5, "episode did not end")
+
+        # Running out of horizon is truncation, not termination: nothing about
+        # the rocket ended the episode, the precomputed clock did. Reporting it
+        # as terminated tells an algorithm not to bootstrap the final value,
+        # which for an agent that simply never launched is the wrong lesson.
+        self.assertFalse(terminated, "the flight did not end; the clock did")
+        self.assertTrue(truncated)
+        self.assertEqual(steps, env.num_timesteps - 1)
 
         self.assertIsNone(env._rocket_flight, "no flight should exist without a launch")
         self.assertEqual(info["popped_count"], 0)
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestAFinishedFlightTerminates(unittest.TestCase):
+    """The other end of the pair, so neither flag is simply hard-coded.
+
+    Without this, setting terminated to False unconditionally would satisfy the
+    timeout case above and nothing else would notice.
+    """
+
+    def test_a_flight_that_lands_terminates_rather_than_truncating(self):
+        scenario_params, given = load_scenario_parameters(SCENARIO_NUMBER)
+        env = BalloonPoppingEnv(render_mode=None, parameters=scenario_params)
+        agent = AttitudeRateControlAgent(
+            given, rate_targets=[0.0, 0.0, 0.0], launch_time=1
+        )
+        observation, _ = env.reset(seed=scenario_params["scenario"]["random_seed"])
+
+        terminated = truncated = False
+        steps = 0
+        while not (terminated or truncated):
+            observation, _reward, terminated, truncated, _info = env.step(
+                agent.get_action(observation)
+            )
+            steps += 1
+            self.assertLess(steps, env.num_timesteps + 5)
+
+        self.assertTrue(terminated, "the flight finished, so the episode ended")
+        self.assertFalse(truncated)
+        # And it really did stop early rather than reaching the horizon.
+        self.assertLess(steps, env.num_timesteps - 1)
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")

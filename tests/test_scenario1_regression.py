@@ -34,6 +34,7 @@ an ImportError then fails loudly instead of skipping. Run it with::
 import json
 import os
 import unittest
+from importlib.util import find_spec
 from pathlib import Path
 
 import numpy as np
@@ -52,14 +53,17 @@ _RUN_SLOW = os.environ.get("BPC_RUN_SLOW_TESTS", "0").strip().lower() in (
 # rather than skip. The BalloonPoppingGymEnv imports stay outside the guard: an
 # ImportError from them is a real regression (a renamed or removed symbol) and
 # must fail loudly when the stack is present.
-try:
+# ``find_spec`` answers "is the package installed", which is the only case that
+# justifies a skip. The import itself stays outside any guard: ``import rocketpy``
+# runs the package's own ``__init__``, so an ImportError raised there means an
+# installed but broken stack, which is exactly what these tests exist to catch and
+# must fail rather than skip.
+_STACK_AVAILABLE = find_spec("rocketpy") is not None
+if _RUN_SLOW and not _STACK_AVAILABLE:
+    raise ImportError("BPC_RUN_SLOW_TESTS is set but rocketpy is not installed")
+
+if _STACK_AVAILABLE:
     import rocketpy  # noqa: F401
-except ImportError:
-    if _RUN_SLOW:
-        raise
-    _STACK_AVAILABLE = False
-else:
-    _STACK_AVAILABLE = True
 
     from BalloonPoppingGymEnv.agents.example_agents import AttitudeRateControlAgent
     from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
