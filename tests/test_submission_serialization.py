@@ -16,6 +16,8 @@ import os
 import unittest
 from importlib.util import find_spec
 
+import gymnasium
+import gymnasium.utils.seeding
 import numpy as np
 
 _STACK_AVAILABLE = find_spec("rocketpy") is not None
@@ -104,7 +106,31 @@ class TestSensorSeedsAreJsonSafe(unittest.TestCase):
         )
 
 
-@unittest.skipUnless(_RUN_SLOW, "slow: runs a scenario 0 episode to termination")
+def _read_submission(path):
+    """Load a packed submission, whichever container it is in.
+
+    #58 moves the packer from pickle to JSON. Reading by suffix means this test
+    covers the packer rather than the container, so it does not become the thing
+    that has to be rewritten when that lands, and it keeps working either way
+    round in the merge order.
+    """
+    if path.endswith(".json"):
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    import pickle
+
+    with open(path, "rb") as handle:
+        return pickle.load(handle)
+
+
+# Both conditions. The imports this class uses only exist when the stack is
+# installed, so gating on the slow flag alone turns a stackless run with
+# BPC_RUN_SLOW_TESTS=1 into a NameError in setUpClass instead of a skip.
+# Measured: exactly that, one error and nine skips.
+@unittest.skipUnless(
+    _STACK_AVAILABLE and _RUN_SLOW,
+    "slow: runs a scenario 0 episode to termination, and needs the stack",
+)
 class TestTheProductionBoundary(unittest.TestCase):
     """What ``pack_for_submission`` actually encodes, not a piece of it.
 
@@ -142,15 +168,35 @@ class TestTheProductionBoundary(unittest.TestCase):
 
         Nothing else covers the packer against a real one: the other tests that
         call it hand it ``_rocket_flight=None``.
+
+        Every path here is inside a temporary tree. The packer writes beside its
+        own module, so an earlier version of this test wrote a fixed-name agent
+        file into the installed package and then deleted every submission that
+        appeared while it ran. That removes a real submission if someone
+        evaluates an agent at the same time, and overwrites the agent file if
+        that name already exists. Redirecting the module's ``__file__`` moves
+        both the agent and the output somewhere this test owns, and the only
+        thing removed afterwards is the directory it created.
         """
-        import glob
-        import pickle
+        import shutil
+        import tempfile
         from unittest import mock
 
         from BalloonPoppingGymEnv.evaluation.results import utils
 
-        results_dir = os.path.dirname(os.path.abspath(utils.__file__))
-        agent_path = os.path.join(results_dir, "_serialization_test_agent.py")
+        root = tempfile.mkdtemp(prefix="bpc_submission_test_")
+        self.addCleanup(shutil.rmtree, root, True)
+        results_dir = os.path.join(root, "results")
+        os.mkdir(results_dir)
+        # The packer digests evaluate.py from two levels up, so the real one has
+        # to be where the redirected __file__ says it is.
+        real_utils = os.path.dirname(os.path.abspath(utils.__file__))
+        shutil.copy(
+            os.path.join(os.path.dirname(real_utils), "evaluate.py"),
+            os.path.join(root, "evaluate.py"),
+        )
+
+        agent_path = os.path.join(root, "agent_source.py")
         with open(agent_path, "w", encoding="utf-8") as handle:
             handle.write("# test agent source\n")
 
@@ -161,25 +207,27 @@ class TestTheProductionBoundary(unittest.TestCase):
             "scenario_number": SCENARIO_NUMBER,
             "agent_module_path": agent_path,
         }
-        pattern = os.path.join(results_dir, "*_submission.*")
-        before = set(glob.glob(pattern))
-        try:
+        with mock.patch.object(
+            utils, "__file__", os.path.join(results_dir, "utils.py")
+        ):
             with mock.patch.object(
                 utils.urllib.request, "urlopen", side_effect=OSError("offline")
             ):
                 utils.pack_for_submission(eval_cfg, self.env, {"scenario": {}})
-            written = sorted(set(glob.glob(pattern)) - before)
-            self.assertEqual(len(written), 1, "packing should produce one file")
-            with open(written[0], "rb") as handle:
-                payload = pickle.load(handle)
-        finally:
-            os.remove(agent_path)
-            for path in set(glob.glob(pattern)) - before:
-                os.remove(path)
+
+        written = os.listdir(results_dir)
+        self.assertEqual(len(written), 1, f"packing should produce one file: {written}")
+        payload = _read_submission(os.path.join(results_dir, written[0]))
 
         self.assertEqual(payload["team"]["name"], "unittest_team")
         self.assertIn("rocket_flight", payload["balloon_world_data"])
-        self.assertGreater(payload["leaderboard_info"]["final_reward"], 0)
+        # Not "greater than zero". That would tie a serialization test to the
+        # example agent's aim, the pop geometry and the reward rule, any of
+        # which can change while the packer stays correct. What this covers is
+        # that the packer wrote the run's own score rather than rewriting it.
+        self.assertEqual(
+            payload["leaderboard_info"]["final_reward"], self.env._popped_count
+        )
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
@@ -233,30 +281,33 @@ class TestUnknownSeed(unittest.TestCase):
             sensor = component[0] if isinstance(component, (tuple, list)) else component
             self.assertIsInstance(sensor._seed, int)
 
-    def test_any_negative_seed_is_handled_not_only_minus_one(self):
-        """``SeedSequence`` rejects every negative value, not just -1.
+    def test_gymnasium_produces_no_negative_seed_other_than_minus_one(self):
+        """Why the guard reads ``< 0`` and why nothing here manufactures a -5.
 
-        Narrowing the branch to ``== -1`` would turn an unexpected negative into
-        a ValueError at launch rather than a usable seed.
+        An earlier version of this file assigned ``_np_random_seed = -5``
+        directly and asserted it was recoverable. That turned a state no public
+        call can reach into a supported contract, and a private attribute into
+        the thing being tested.
+
+        The guard stays a superset because ``SeedSequence`` rejects every
+        negative value rather than only -1, so ``== -1`` would trade a working
+        fallback for a crash if that ever stopped holding. This pins the reason
+        the wider form costs nothing today: -1 is the only negative that gets
+        out of Gymnasium.
         """
+        with self.assertRaises(gymnasium.error.Error):
+            gymnasium.utils.seeding.np_random(-5)
+        with self.assertRaises(gymnasium.error.Error):
+            gymnasium.utils.seeding.np_random(-1)
+
         parameters, _ = load_scenario_parameters(SCENARIO_NUMBER)
         env = BalloonPoppingEnv(render_mode=None, parameters=parameters)
-        env.reset(seed=0)
-        env._np_random_seed = -5
+        with self.assertRaises(gymnasium.error.Error):
+            env.reset(seed=-5)
 
-        action = env.action_space.sample()
-        action["launch"] = np.array(1, dtype=action["launch"].dtype)
-        action["launch_inclination_heading"] = np.array(
-            [90.0, 0.0], dtype=action["launch_inclination_heading"].dtype
-        )
-        for key in ("tvc", "throttle", "roll"):
-            action[key] = np.zeros_like(action[key])
-        env.step(action)
-
-        for component in env._rocket_flight.rocket.sensors:
-            sensor = component[0] if isinstance(component, (tuple, list)) else component
-            self.assertIsInstance(sensor._seed, int)
-            self.assertGreater(sensor._seed, 0)
+        # The one that does get out, through the documented assignment path.
+        env.np_random = np.random.default_rng(123)
+        self.assertEqual(env.np_random_seed, -1)
 
     def _launch(self, env):
         action = env.action_space.sample()

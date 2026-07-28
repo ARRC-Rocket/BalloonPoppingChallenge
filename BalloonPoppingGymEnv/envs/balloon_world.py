@@ -31,13 +31,22 @@ logger = logging.getLogger(__name__)
 
 
 def _seed_sequence_to_int(seed_sequence):
-    """Return the full 128-bit state of ``seed_sequence`` as a plain int.
+    """Encode 128 generated state bits of ``seed_sequence`` as a plain int.
 
     Sensors keep whatever seed they were built with and hand it back from
     ``to_dict()``, which the submission packer runs through ``RocketPyEncoder``.
     A ``SeedSequence`` object has no JSON form, so passing one straight to a
-    sensor makes packing a submission fail. An int carries the same entropy and
-    is accepted by ``default_rng``.
+    sensor makes packing a submission fail. An int has one and ``default_rng``
+    accepts it.
+
+    Not a change of representation. ``default_rng(child)`` mixes in the child's
+    ``spawn_key``; ``default_rng(int)`` builds a fresh root sequence from these
+    bits, so the generator draws a different stream from the one the child
+    itself would have produced. That is deliberate: both shipped scenarios run
+    at ``noise_density: 0.0``, so no baseline depends on the old stream, and the
+    three derived values are pinned by a test so a later move is a decision
+    rather than a side effect. Preserving the exact stream needs
+    ``SeedSequence`` serialization upstream (RocketPy-Team/RocketPy#1087).
 
     The words are combined by value rather than through ``tobytes``, so the
     result does not depend on the machine's byte order.
