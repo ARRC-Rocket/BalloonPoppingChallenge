@@ -286,12 +286,24 @@ class TestTheClampingBranches(unittest.TestCase):
         )
 
     @staticmethod
-    def _branch_of(start_a, end_a, start_b, end_b, epsilon=1e-12):
-        """Name the branch a pair reaches, so a case cannot silently stop reaching it.
+    def _where_the_minimum_lies(start_a, end_a, start_b, end_b, epsilon=1e-12):
+        """Name the region a pair's closest approach falls in.
 
-        This repeats a little of the implementation's arithmetic on purpose. Without
-        it a case is only *believed* to exercise a branch, which is how the batch
-        below came to claim four branches while reaching two.
+        This used to name the *branch of the implementation* a pair reached, and
+        duplicated its arithmetic to do so. That drifted twice: the threshold
+        here stayed absolute while production moved to a relative one, and then
+        production stopped having a parallel branch at all, since it now
+        evaluates the stationary point and all four edges and takes the smallest.
+        Both times this helper went on confidently naming a branch that was no
+        longer there.
+
+        So it describes the geometry instead: whether either sweep is a point,
+        whether the two directions are parallel, and where the unconstrained
+        minimum of the distance falls relative to the two segments. Those are
+        facts about the fixture, and they stay true however the minimum is
+        computed. What they are for is unchanged: a case is otherwise only
+        *believed* to exercise what it was chosen for, which is how the batch
+        below came to claim four situations while covering two.
         """
         direction_a = np.asarray(end_a, dtype=float) - np.asarray(start_a, dtype=float)
         direction_b = np.asarray(end_b, dtype=float) - np.asarray(start_b, dtype=float)
@@ -308,7 +320,9 @@ class TestTheClampingBranches(unittest.TestCase):
         c_coeff = float(direction_a @ offset)
         f_coeff = float(direction_b @ offset)
         denominator = a_coeff * e_coeff - b_coeff * b_coeff
-        if abs(denominator) <= epsilon:
+        # sin(angle)**2, so this is about the directions rather than about how
+        # long the segments happen to be.
+        if abs(denominator) <= 8 * np.finfo(float).eps * a_coeff * e_coeff:
             return "parallel"
 
         s_unclipped = (b_coeff * f_coeff - c_coeff * e_coeff) / denominator
@@ -344,13 +358,13 @@ class TestTheClampingBranches(unittest.TestCase):
             best = min(best, float(np.min(np.einsum("ijk,ijk->ij", deltas, deltas))))
         return best
 
-    def _assert_matches_brute_force(self, start_b, end_b, expected_branch):
+    def _assert_matches_brute_force(self, start_b, end_b, expected_region):
         start_a, end_a = self.SEGMENT_A
 
         self.assertEqual(
-            self._branch_of(start_a, end_a, start_b, end_b),
-            expected_branch,
-            "this case no longer reaches the branch it was chosen for",
+            self._where_the_minimum_lies(start_a, end_a, start_b, end_b),
+            expected_region,
+            "this case no longer has the geometry it was chosen for",
         )
         actual = self._distance_squared(start_a, end_a, [start_b], [end_b])[0]
 
@@ -439,11 +453,11 @@ class TestTheClampingBranches(unittest.TestCase):
             ("s_clamped", *self.S_CLAMPED),
         ]
         # The point of the batch, asserted rather than assumed.
-        for expected_branch, start_b, end_b in cases:
+        for expected_region, start_b, end_b in cases:
             self.assertEqual(
-                self._branch_of(start_a, end_a, start_b, end_b),
-                expected_branch,
-                f"the batch no longer covers {expected_branch} via {start_b}",
+                self._where_the_minimum_lies(start_a, end_a, start_b, end_b),
+                expected_region,
+                f"the batch no longer covers {expected_region} via {start_b}",
             )
 
         actual = self._distance_squared(
