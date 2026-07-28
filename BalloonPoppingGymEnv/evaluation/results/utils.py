@@ -207,7 +207,7 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
             "trajectories": env.trajectories,
             "balloon_release_at_step": env._balloon_release_at_step,
             "rocket_flight": json.dumps(env._rocket_flight, cls=RocketPyEncoder),
-            "balloon_flights": env._balloon_flights,
+            # "balloon_flights": env._balloon_flights,  # deliberately omitted, see issue #57.
         },
         "agent_info": {
             "eval_cfg": eval_cfg,
