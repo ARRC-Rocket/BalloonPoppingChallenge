@@ -38,6 +38,8 @@ from pathlib import Path
 
 import numpy as np
 
+from tests.position_tolerance import POSITION_VECTOR_ATOL, assert_positions_match
+
 # Only "1"/"true"/"yes" enable the slow gate; a leftover "0" or "false" does not.
 _RUN_SLOW = os.environ.get("BPC_RUN_SLOW_TESTS", "0").strip().lower() in (
     "1",
@@ -91,8 +93,6 @@ EXPECTED_POPPED_COUNT = 0
 # ``atol + rtol * expected`` -- so a coordinate near zero (the x/y balloon and
 # rocket coordinates pass through 0) cannot drift by the metre floor *plus*
 # another few percent.
-POSITION_RTOL = 0.03
-POSITION_ATOL = 1.0
 # Flight duration is deterministic, so allow only a couple of steps of
 # cross-platform jitter, absolute rather than a percentage: a 2% tolerance on a
 # ~6000-step flight would wave through a full second of early termination.
@@ -200,94 +200,126 @@ class TestScenario1Regression(unittest.TestCase):
         )
 
     def test_rocket_position_trajectory_matches_baseline(self):
-        expected = np.array(self.baseline["rocket_position_downsampled"], dtype=float)
-        actual = self.rocket_positions
-        self._assert_row_count_matches(len(actual), len(expected), "rocket")
-        overlap = min(len(expected), len(actual))
-        self._assert_within_floor(actual[:overlap], expected[:overlap], "rocket")
+        assert_positions_match(
+            self,
+            self.rocket_positions,
+            np.array(self.baseline["rocket_position_downsampled"], dtype=float),
+            "rocket",
+            ROW_COUNT_ABS_TOL,
+        )
 
     def test_balloon_position_trajectory_matches_baseline(self):
         expected = np.array(self.baseline["balloon_position_downsampled"], dtype=float)
         actual = self.balloon_positions
         # Same balloon-index columns on both sides; only the time axis can drift
-        # in length, so clip it to the common prefix (with the same row-count
-        # guard as the rocket so an empty overlap cannot pass vacuously).
+        # in length, and the helper clips that to the common prefix.
         self.assertEqual(actual.shape[1:], expected.shape[1:])
-        self._assert_row_count_matches(actual.shape[0], expected.shape[0], "balloon")
-        overlap = min(expected.shape[0], actual.shape[0])
-        self._assert_within_floor(actual[:overlap], expected[:overlap], "balloon")
 
-    def _assert_row_count_matches(self, actual_rows, expected_rows, label):
-        self.assertLessEqual(
-            abs(actual_rows - expected_rows),
-            ROW_COUNT_ABS_TOL,
-            f"{label} downsampled row count {actual_rows} drifted from baseline "
-            f"{expected_rows} by more than {ROW_COUNT_ABS_TOL} rows "
-            f"(possible launch failure or early termination)",
+        assert_positions_match(self, actual, expected, "balloon", ROW_COUNT_ABS_TOL)
+
+
+class TestTheToleranceShape(unittest.TestCase):
+    """The comparison helper itself, on made-up numbers so it runs anywhere.
+
+    These live here rather than only inside the slow scenario tests, which need
+    the whole Monte Carlo stack and a baseline before they can say anything about
+    the shape of the tolerance.
+    """
+
+    def _compare(self, actual, expected, row_count_abs_tol=1):
+        assert_positions_match(
+            self,
+            np.asarray(actual, dtype=float),
+            np.asarray(expected, dtype=float),
+            "test",
+            row_count_abs_tol,
         )
 
-    def _assert_within_floor(self, actual, expected, label):
-        # Real floor: max(atol, rtol * |expected|), not numpy's additive form. A
-        # NaN in ``actual`` propagates through ``np.max`` and fails the compare.
-        error = np.abs(actual - expected)
-        allowed = np.maximum(POSITION_ATOL, POSITION_RTOL * np.abs(expected))
-        worst = float(np.max(error - allowed))
-        self.assertLessEqual(
-            worst,
-            0.0,
-            f"{label} position exceeds max({POSITION_ATOL} m, "
-            f"{POSITION_RTOL:.0%} of |expected|) by {worst:.4g} m",
-        )
-        # Per-coordinate alone is not enough: three axes each 0.99 m off all pass
-        # a 1 m floor while the point has actually moved 1.71 m, which is more than
-        # the 1.5 m balloon radius the score depends on. Bound the displacement
-        # vector as well, so the two together limit both a single axis relative to
-        # its own magnitude and the total error.
-        vector_error = np.linalg.norm(actual - expected, axis=-1)
-        vector_allowed = np.maximum(
-            POSITION_ATOL, POSITION_RTOL * np.linalg.norm(expected, axis=-1)
-        )
-        worst_vector = float(np.max(vector_error - vector_allowed))
-        self.assertLessEqual(
-            worst_vector,
-            0.0,
-            f"{label} 3D position error exceeds max({POSITION_ATOL} m, "
-            f"{POSITION_RTOL:.0%} of |expected|) by {worst_vector:.4g} m",
-        )
+    def test_three_axes_inside_the_floor_can_still_move_the_point_too_far(self):
+        # The case the per-coordinate check alone cannot see: each axis is 0.99 m
+        # off, inside the 1 m floor, while the point has moved 1.71 m.
+        expected = [[0.0, 0.0, 0.0]]
+        actual = [[0.99, 0.99, 0.99]]
+
+        with self.assertRaises(AssertionError):
+            self._compare(actual, expected)
+
+    def test_the_cap_does_not_grow_with_altitude(self):
+        """The reason this cap is absolute.
+
+        Z is altitude above sea level, so a relative bound scales with distance
+        from sea level rather than with anything about the trajectory. At 1000 m
+        a 3% bound would allow 30 m, and on the committed baseline it reaches
+        48.8 m at apogee while the balloon radius is 1.5 m.
+        """
+        expected = [[0.0, 0.0, 1000.0]]
+        actual = [[0.0, 0.0, 1000.0 + POSITION_VECTOR_ATOL + 0.01]]
+
+        with self.assertRaises(AssertionError):
+            self._compare(actual, expected)
+
+    def test_a_displacement_inside_the_cap_passes_at_altitude(self):
+        expected = [[0.0, 0.0, 1000.0]]
+        actual = [[0.0, 0.0, 1000.0 + POSITION_VECTOR_ATOL - 0.01]]
+
+        self._compare(actual, expected)
+
+    def test_a_non_finite_value_fails_rather_than_being_skipped(self):
+        """NaN comparisons are all false, so a check can pass by ignoring them.
+
+        A diverged trajectory is the case this whole comparison exists for, and
+        reaching for nanmax to keep the numbers tidy would let it through.
+        """
+        expected = [[0.0, 0.0, 10.0], [0.0, 0.0, 20.0]]
+        for bad in (float("nan"), float("inf")):
+            with self.subTest(value=bad):
+                actual = [[0.0, 0.0, 10.0], [0.0, 0.0, bad]]
+
+                with self.assertRaises(AssertionError):
+                    self._compare(actual, expected)
+
+    def test_a_tolerated_row_count_difference_does_not_raise(self):
+        """The one-row drift the count tolerance exists to allow.
+
+        Subtracting the full arrays raises a broadcasting ValueError here rather
+        than comparing anything, so the tolerance silently did not work.
+        """
+        expected = [[0.0, 0.0, 10.0]] * 5
+        actual = [[0.0, 0.0, 10.0]] * 6
+
+        self._compare(actual, expected)
+
+    def test_a_row_count_difference_past_the_tolerance_fails(self):
+        expected = [[0.0, 0.0, 10.0]] * 5
+        actual = [[0.0, 0.0, 10.0]] * 8
+
+        with self.assertRaises(AssertionError):
+            self._compare(actual, expected)
+
+    def test_the_helper_works_on_the_balloon_array_shape(self):
+        expected = np.zeros((4, 3, 3))
+        actual = expected.copy()
+        actual[2, 1, 2] = POSITION_VECTOR_ATOL + 0.01
+
+        with self.assertRaises(AssertionError):
+            self._compare(actual, expected)
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestTheCapStaysBelowTheRadius(unittest.TestCase):
+    """The cap is only meaningful while it is under the balloon radius.
+
+    Read from the scenario rather than written as 1.5 here, so raising the
+    radius in the YAML cannot leave this claim quietly false.
+    """
+
+    def test_the_vector_cap_is_smaller_than_the_balloon_radius(self):
+        for scenario in (0, SCENARIO_NUMBER):
+            with self.subTest(scenario=scenario):
+                parameters, _ = load_scenario_parameters(scenario)
+
+                self.assertLess(POSITION_VECTOR_ATOL, parameters["balloon"]["radius"])
 
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class TestTheToleranceShape(unittest.TestCase):
-    """The per-coordinate floor alone allows more than the balloon radius.
-
-    Pure arithmetic on the helper, so it needs no simulation stack and runs
-    everywhere. Three axes each just inside a 1 m floor put the point 1.71 m away,
-    and scenario 1's balloon radius is 1.5 m, so the score could move while the
-    oracle stayed quiet.
-    """
-
-    def _helper(self):
-        case = TestScenario1Regression("test_popped_count_matches_baseline")
-        return case._assert_within_floor
-
-    def test_three_axes_just_inside_the_floor_are_rejected(self):
-        expected = np.zeros((1, 3))
-        actual = np.full((1, 3), 0.99)
-
-        # Each coordinate is within max(1.0, 3% of 0) = 1.0 m ...
-        np.testing.assert_array_less(np.abs(actual - expected), POSITION_ATOL)
-        # ... while the point has moved further than a balloon radius.
-        self.assertGreater(float(np.linalg.norm(actual - expected)), 1.5)
-
-        with self.assertRaises(AssertionError):
-            self._helper()(actual, expected, "test")
-
-    def test_a_displacement_inside_the_floor_is_accepted(self):
-        expected = np.zeros((1, 3))
-        actual = np.full((1, 3), 0.5)
-        self.assertLess(float(np.linalg.norm(actual - expected)), POSITION_ATOL)
-
-        self._helper()(actual, expected, "test")
