@@ -7,6 +7,7 @@ import re
 import tempfile
 import urllib.request
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from rocketpy._encoders import RocketPyEncoder
 
@@ -84,7 +85,26 @@ def _filename_slug(raw_name, fallback="team"):
     return slug.strip(" ._-") or fallback
 
 
-def _write_atomically(out_path, write_payload):
+def _submission_filename(packed_at, team_name, run_id):
+    """Name a submission so two runs cannot land on the same path.
+
+    The timestamp sorts and the slug identifies; neither makes the name unique.
+    Milliseconds narrow the window rather than closing it, and ``packed_at`` is
+    taken before the integrity check and before serializing a few hundred
+    megabytes, so two packers can share a millisecond and finish minutes apart.
+    ``os.replace`` does not refuse an existing destination, so the second one
+    would atomically replace the first competitor's finished submission, which is
+    a worse failure than the truncated file the atomic write is here to prevent.
+
+    Slugs collide too, which the timestamp cannot help with: ``a/b`` and ``a\\b``
+    both normalise to ``a_b``, and a name of only unsafe characters falls back to
+    ``team``. ``run_id`` is what actually makes the path unique.
+    """
+    stamp = f"{packed_at:%Y%m%dT%H%M%S}.{packed_at.microsecond // 1000:03d}Z"
+    return f"{stamp}_{_filename_slug(team_name)}_{run_id}_submission.pkl"
+
+
+def _write_atomically(out_path, write_payload, mode="wb", encoding=None):
     """Write via a temp file in the same directory, then ``os.replace`` it.
 
     A scenario-1 submission runs to a few hundred megabytes. Writing straight to
@@ -93,10 +113,18 @@ def _write_atomically(out_path, write_payload):
     submission. Same-directory ``os.replace`` is atomic on POSIX and Windows, so
     the final path only ever holds a complete file.
 
-    ``write_payload`` receives the open binary handle. The flush and fsync are
-    what make the rename meaningful: without them a crash can leave the renamed
-    file holding nothing. A disk that fills up surfaces as an error from one of
-    the two, which is the case this is here for, so neither is softened.
+    ``write_payload`` receives the open handle. ``mode`` and ``encoding`` are
+    arguments rather than fixed at ``"wb"`` because the writer is not always
+    binary: ``json.dump`` writes ``str``, and a text writer through a binary
+    handle raises ``TypeError: a bytes-like object is required``. Keeping both
+    here means the JSON submission format can reuse this rather than reimplement
+    the atomicity.
+
+    The flush and fsync are what make the rename meaningful for the case this is
+    here for: a disk that fills up surfaces as an error from one of the two,
+    rather than as a renamed file holding nothing. Full power-loss durability
+    would additionally need an fsync on the parent directory, which is not
+    claimed and is not what #59 was about.
 
     One deliberate difference from a plain ``open``: ``mkstemp`` creates the file
     0600 rather than at the umask default, and the mode survives the rename. The
@@ -107,14 +135,16 @@ def _write_atomically(out_path, write_payload):
         dir=os.path.dirname(out_path) or ".", prefix=".partial_", suffix=".tmp"
     )
     try:
-        with os.fdopen(handle, "wb") as file:
+        with os.fdopen(handle, mode, encoding=encoding) as file:
             write_payload(file)
             file.flush()
             os.fsync(file.fileno())
         os.replace(temp_path, out_path)
     except BaseException:
         # Including KeyboardInterrupt: a stray .partial_ left behind would be a
-        # worse outcome than the truncated file this exists to prevent.
+        # worse outcome than the truncated file this exists to prevent. A
+        # SIGKILL still can, which no handler can cover; what it cannot leave is
+        # a file under the finished name.
         try:
             os.unlink(temp_path)
         except OSError:
@@ -184,10 +214,9 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
     # name, so two runs in the same second no longer overwrite each other. The
     # payload above keeps the second-resolution timestamp and the configured team
     # name untouched, since those are the copies the leaderboard reads.
-    file_timestamp = f"{packed_at:%Y%m%dT%H%M%S}.{packed_at.microsecond // 1000:03d}Z"
     out_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        f"{file_timestamp}_{_filename_slug(team_name)}_submission.pkl",
+        _submission_filename(packed_at, team_name, uuid4().hex),
     )
     _write_atomically(out_path, lambda file: pickle.dump(submission, file))
 

@@ -13,6 +13,7 @@ but a broken import inside this package is a failure and must stay loud.
 """
 
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -155,6 +156,58 @@ class TestAtomicWrite(unittest.TestCase):
         self.assertFalse(os.path.exists(self.out_path))
         self.assertEqual(self._leftovers(), [], "a temp file was left behind")
 
+    def test_a_text_writer_works_too(self):
+        """The mode is a parameter because the writer is not always binary.
+
+        ``json.dump`` writes ``str``, and through a binary handle that raises
+        ``TypeError: a bytes-like object is required`` after the temp file
+        already exists. Measured against the fixed ``"wb"`` this replaces. The
+        JSON submission format reuses this helper rather than reimplementing the
+        atomicity, so both modes have to hold.
+        """
+        utils._write_atomically(
+            self.out_path,
+            lambda file: json.dump({"team": "隊伍"}, file),
+            mode="w",
+            encoding="utf-8",
+        )
+
+        with open(self.out_path, encoding="utf-8") as file:
+            self.assertEqual(json.load(file), {"team": "隊伍"})
+        self.assertEqual(self._leftovers(), [], "a temp file was left behind")
+
+    def test_an_fsync_failure_leaves_the_previous_submission_alone(self):
+        """Delayed writeback errors surface here, not from write().
+
+        A full disk can be reported at fsync rather than at the writes, which is
+        the case this helper exists for, so it needs its own injection rather
+        than standing behind the callback-raises test.
+        """
+        with open(self.out_path, "wb") as file:
+            file.write(b"an earlier good submission")
+
+        with mock.patch.object(os, "fsync", side_effect=OSError("no space left")):
+            with self.assertRaises(OSError):
+                utils._write_atomically(self.out_path, lambda file: file.write(b"new"))
+
+        with open(self.out_path, "rb") as file:
+            self.assertEqual(file.read(), b"an earlier good submission")
+        self.assertEqual(self._leftovers(), [], "a temp file was left behind")
+
+    def test_a_replace_failure_leaves_the_previous_submission_alone(self):
+        # The rename is the other operation this helper introduces. It can fail
+        # on permissions, or on Windows with a scanner holding the destination.
+        with open(self.out_path, "wb") as file:
+            file.write(b"an earlier good submission")
+
+        with mock.patch.object(os, "replace", side_effect=OSError("cannot replace")):
+            with self.assertRaises(OSError):
+                utils._write_atomically(self.out_path, lambda file: file.write(b"new"))
+
+        with open(self.out_path, "rb") as file:
+            self.assertEqual(file.read(), b"an earlier good submission")
+        self.assertEqual(self._leftovers(), [], "a temp file was left behind")
+
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
 class TestPackedOutputPath(unittest.TestCase):
@@ -175,7 +228,9 @@ class TestPackedOutputPath(unittest.TestCase):
                 utils.urllib.request, "urlopen", side_effect=OSError("offline")
             ),
             mock.patch.object(
-                utils, "_write_atomically", lambda path, _writer: recorded.append(path)
+                utils,
+                "_write_atomically",
+                lambda path, _writer, **_kw: recorded.append(path),
             ),
         ):
             utils.pack_for_submission(
@@ -194,27 +249,56 @@ class TestPackedOutputPath(unittest.TestCase):
                 self.assertEqual(os.path.dirname(relative), "")
                 self.assertNotIn("..", relative)
 
-    def test_two_runs_in_the_same_second_get_different_names(self):
-        # The clock is pinned rather than read twice in a row: two real calls
-        # usually land in different milliseconds, but not reliably, and a test
-        # for this property must not depend on how long packing happens to take.
-        same_second = [
-            datetime(2026, 7, 27, 12, 0, 0, 1000, tzinfo=timezone.utc),
-            datetime(2026, 7, 27, 12, 0, 0, 2000, tzinfo=timezone.utc),
-        ]
+    def test_two_runs_in_the_same_millisecond_get_different_names(self):
+        """The same instant, not merely the same second.
+
+        An earlier version of this used 1000 and 2000 microseconds, which are two
+        different milliseconds, so it only proved that a second-resolution name
+        would have collided. Milliseconds narrow that window without closing it:
+        ``packed_at`` is read before the integrity check and before serializing a
+        few hundred megabytes, so two packers can share a millisecond and finish
+        far apart. ``os.replace`` does not refuse an existing destination, so the
+        slower one would have replaced a finished submission.
+        """
+        moment = datetime(2026, 7, 27, 12, 0, 0, 123456, tzinfo=timezone.utc)
         names = []
-        for moment in same_second:
+        for _ in range(2):
             with mock.patch.object(utils, "datetime") as clock:
                 clock.now.return_value = moment
                 names.append(os.path.basename(self._packed_path("team")))
 
-        # Same second, so a second-resolution name would have collided and the
-        # later run would have replaced the earlier one.
         self.assertEqual(
-            names[0][: len("20260727T120000")], names[1][: len("20260727T120000")]
+            names[0][: len("20260727T120000.123Z")],
+            names[1][: len("20260727T120000.123Z")],
+            "the timestamps should be identical, or this proves nothing",
         )
         self.assertNotEqual(names[0], names[1])
-        self.assertRegex(names[0], r"^\d{8}T\d{6}\.\d{3}Z_team_submission\.pkl$")
+        self.assertRegex(
+            names[0], r"^\d{8}T\d{6}\.\d{3}Z_team_[0-9a-f]{32}_submission\.pkl$"
+        )
+
+    def test_two_names_that_slug_the_same_still_get_different_paths(self):
+        """The collision the timestamp cannot help with.
+
+        ``a/b`` and ``a\\b`` both normalise to ``a_b``, and any name made only of
+        unsafe characters falls back to ``team``, so two different competitors
+        can reach the same slug at the same instant.
+        """
+        moment = datetime(2026, 7, 27, 12, 0, 0, 123456, tzinfo=timezone.utc)
+        for first, second in ((r"a/b", "a\\b"), ("   ", "///")):
+            with self.subTest(names=(first, second)):
+                names = []
+                for team_name in (first, second):
+                    with mock.patch.object(utils, "datetime") as clock:
+                        clock.now.return_value = moment
+                        names.append(os.path.basename(self._packed_path(team_name)))
+
+                self.assertEqual(
+                    utils._filename_slug(first),
+                    utils._filename_slug(second),
+                    "these names should slug the same, or this proves nothing",
+                )
+                self.assertNotEqual(names[0], names[1])
 
     def test_the_payload_keeps_the_configured_team_name(self):
         # The slug is a filename concern only. The leaderboard reads the name from
@@ -226,7 +310,9 @@ class TestPackedOutputPath(unittest.TestCase):
                 utils.urllib.request, "urlopen", side_effect=OSError("offline")
             ),
             mock.patch.object(
-                utils, "_write_atomically", lambda _path, writer: writer(io.BytesIO())
+                utils,
+                "_write_atomically",
+                lambda _path, writer, **_kw: writer(io.BytesIO()),
             ),
             mock.patch.object(
                 utils.pickle, "dump", lambda payload, _file: captured.update(payload)
