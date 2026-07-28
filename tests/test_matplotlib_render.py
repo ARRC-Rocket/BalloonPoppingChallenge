@@ -14,10 +14,11 @@ went red. There, rendering a frame is enough to catch this.
 
 ``uv sync`` resolves 3.10.9 from the lockfile, and that is what a local run
 gets. The crashing branch does not exist there, so the draw test passes with or
-without the fix. What holds on 3.10 is the assertion about what the line is
-holding, which is what the fix actually guarantees.
+without the fix. What holds on 3.10 is the assertion that the entries expose the
+``.shape`` ``Line3D.draw`` reaches for, which is what the fix guarantees.
 
-Neither environment covers this on its own, so both assertions stay.
+Neither environment covers this on its own, so both assertions stay. Neither
+covers the coordinates either, which is what the finite case below is for.
 """
 
 import unittest
@@ -74,7 +75,7 @@ class TestTheMatplotlibRendererBeforeLaunch(unittest.TestCase):
             np.isnan(np.asarray(self.info["rocket_states"], dtype=float)).all()
         )
 
-    def test_a_frame_before_launch_leaves_the_line_holding_arrays(self):
+    def test_a_frame_before_launch_leaves_the_line_shaped(self):
         self.env._render_frame()
 
         # get_data_3d is documented public API. What is asserted is the property
@@ -89,6 +90,35 @@ class TestTheMatplotlibRendererBeforeLaunch(unittest.TestCase):
                     hasattr(values, "shape"),
                     f"Line3D.draw reads .shape off this; got {type(values).__name__}",
                 )
+
+    def test_each_coordinate_is_updated_from_its_own_state_entry(self):
+        """The values, which an all-NaN fixture cannot see.
+
+        Every other case here renders with the rocket state at NaN on all three
+        axes, so swapping X with Y, reusing X for all three, or dropping the
+        update entirely all keep the line shaped and drawing. Measured: each of
+        those passed the rest of this file.
+
+        Two renders with different finite states, because one is not enough. The
+        canvas is built on the first call, so a single render leaves the right
+        values in the line whether the update runs or not; only the second can
+        tell an update from an initialization.
+        """
+        first = [10.0, 20.0, 30.0]
+        second = [1.25, -2.5, 3.75]
+        # Pairwise distinct, and disjoint from each other, so a swap or a stale
+        # value is visible on every axis rather than on a lucky one.
+        self.assertEqual(len(set(first + second)), 6)
+
+        self.env._rocket_states[:3] = first
+        self.env._render_frame()
+        self.env._rocket_states[:3] = second
+        self.env._render_frame()
+
+        xs, ys, zs = self.env.render_rocket[0].get_data_3d()
+        np.testing.assert_array_equal(xs, [second[0]])
+        np.testing.assert_array_equal(ys, [second[1]])
+        np.testing.assert_array_equal(zs, [second[2]])
 
     def test_a_frame_before_launch_draws(self):
         """Draws rather than raising, which is the user-visible half.
