@@ -152,18 +152,40 @@ class BalloonPoppingEnv(gym.Env):
         self.render_rocket = None
 
     def _get_obs(self):
+        """The agent's view of the world, detached from the world.
+
+        Copies, not the arrays themselves. What is handed back goes straight to
+        ``agent.get_action()``, and a numpy array handed out by reference is a
+        writable alias: whatever the agent does to it happens to the
+        environment's own state.
+
+        That mattered here more than it usually does, because ``step()``
+        computes the reward from ``_balloon_status`` after the agent has
+        returned, and ``pack_for_submission`` records the resulting count as the
+        score. An agent that never launched and only wrote 2 into the status it
+        was handed scored every balloon in the scenario. ``_balloon_states`` is
+        a slice of ``_balloon_flights``, so writing to that rewrote the balloon
+        trajectory the pop sweep compares against as well.
+
+        The cost is one copy of a few kilobytes per step, which is not
+        measurable against a flight step.
+        """
         sim_time = self.current_step * self.simulation_parameters["time_step"]
         return {
             "simulation_time": sim_time,
-            "balloon_status": self._balloon_status,
-            "balloon_states": self._balloon_states,
-            "rocket_sensors": self._rocket_sensors,
+            "balloon_status": self._balloon_status.copy(),
+            "balloon_states": self._balloon_states.copy(),
+            "rocket_sensors": self._rocket_sensors.copy(),
         }
 
     def _get_info(self):
+        """Same rule. ``_rocket_states`` aliases the flight's own solution
+        vector, so handing it out by reference lets a caller write into the
+        integrator's state between steps.
+        """
         return {
-            "rocket_states": self._rocket_states,
-            "popped_count": self._popped_count,
+            "rocket_states": self._rocket_states.copy(),
+            "popped_count": int(self._popped_count),
         }
 
     def reset(self, seed=None, options=None):
