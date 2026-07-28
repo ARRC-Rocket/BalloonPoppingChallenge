@@ -16,6 +16,7 @@ logging.
 
 import ast
 import importlib.util
+from importlib.util import find_spec
 import io
 import json
 import logging
@@ -36,6 +37,9 @@ from BalloonPoppingGymEnv.console_logging import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+# find_spec answers "is it installed", which is the only case that justifies a
+# skip; the imports inside the tests then fail loudly on a broken stack.
+_STACK_AVAILABLE = find_spec("rocketpy") is not None
 EXAMPLE_SCRIPT = REPO_ROOT / "doc" / "examples" / "run_env_agent.py"
 NOTEBOOK = REPO_ROOT / "doc" / "examples" / "evaluate_scenario_colab.ipynb"
 
@@ -185,6 +189,40 @@ class TestTheConsoleFormat(_LoggingStateMixin, unittest.TestCase):
         self.assertEqual(host_stream.getvalue(), "host wants this\nTotal reward: 7\n")
         # The console still shows only INFO and above.
         self.assertEqual(self.stream.getvalue(), "Total reward: 7\n")
+
+    def test_a_level_name_is_accepted_like_logging_accepts_one(self):
+        """logging takes "INFO"; the arithmetic below it did not.
+
+        With the package logger already carrying an explicit level, comparing a
+        string against an int raised TypeError, and by then the new handler was
+        attached and the old one closed. The caller got an exception and a
+        half-configured logger.
+        """
+        self.package_logger.setLevel(logging.DEBUG)
+
+        configure_console_logging(level="INFO", stream=self.stream)
+
+        logging.getLogger(f"{PACKAGE_LOGGER_NAME}.envs").debug("not on the console")
+        logging.getLogger(f"{PACKAGE_LOGGER_NAME}.envs").info("Total reward: 7")
+        self.assertEqual(self.stream.getvalue(), "Total reward: 7\n")
+
+    def test_an_inherited_level_is_not_raised_either(self):
+        """NOTSET on a non-root logger means ask the ancestors, not no level.
+
+        Reading the raw attribute, finding NOTSET and setting INFO raised the
+        threshold on a package logger whose effective level was DEBUG through
+        the root. Measured before the fix: effective went DEBUG to INFO.
+        """
+        self.package_logger.setLevel(logging.NOTSET)
+        root = logging.getLogger()
+        previous = root.level
+        self.addCleanup(root.setLevel, previous)
+        root.setLevel(logging.DEBUG)
+        self.assertEqual(self.package_logger.getEffectiveLevel(), logging.DEBUG)
+
+        configure_console_logging(level=logging.INFO, stream=self.stream)
+
+        self.assertEqual(self.package_logger.getEffectiveLevel(), logging.DEBUG)
 
     def test_a_logger_with_no_level_gets_the_requested_one(self):
         self.package_logger.setLevel(logging.NOTSET)
@@ -490,6 +528,78 @@ class TestTheEntryPointsConfigureIt(unittest.TestCase):
             and node.value.func.id == "evaluate_scenario"
         ]
         self.assertEqual(bare, [], "the call's result is the cell's displayed value")
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestTheRecordsProductionActuallyEmits(unittest.TestCase):
+    """The four calls #51 introduced, not a stand-in that emits them for us.
+
+    The CLI test replaces evaluate_scenario with a fake that logs the two lines
+    itself, so turning either real logger.info back into a print stays green
+    there. These drive the real functions.
+    """
+
+    def test_evaluate_scenario_logs_the_completion_and_the_score(self):
+        from BalloonPoppingGymEnv.evaluation import evaluate
+
+        env = mock.MagicMock()
+        env.reset.return_value = ({}, {})
+        env.step.return_value = ({}, 0, True, False, {"popped_count": 7})
+        env.trajectories = []
+
+        with mock.patch.object(
+            evaluate,
+            "load_scenario_parameters",
+            return_value=({"scenario": {"random_seed": 0}}, {}),
+        ):
+            with mock.patch.object(evaluate, "BalloonPoppingEnv", return_value=env):
+                with mock.patch.object(evaluate, "save_trajectories"):
+                    with self.assertLogs(
+                        "BalloonPoppingGymEnv.evaluation.evaluate", level="INFO"
+                    ) as caught:
+                        evaluate.evaluate_scenario(
+                            lambda *a, **k: mock.MagicMock(),
+                            agent_name="A",
+                            scenario_number=0,
+                            render_mode=None,
+                        )
+
+        self.assertEqual(
+            [record.getMessage() for record in caught.records],
+            [
+                "Scenario 0 evaluation completed with agent 'A'.",
+                "Total reward: 7",
+            ],
+        )
+        for record in caught.records:
+            self.assertEqual(record.levelno, logging.INFO)
+
+    def test_the_environment_logs_why_the_episode_ended(self):
+        import numpy as np
+
+        from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
+        from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
+
+        parameters, _ = load_scenario_parameters(0)
+        env = BalloonPoppingEnv(render_mode=None, parameters=parameters)
+        env.reset(seed=parameters["scenario"]["random_seed"])
+        action = env.action_space.sample()
+        action["launch"] = np.array(0, dtype=action["launch"].dtype)
+        for key in ("tvc", "throttle", "roll"):
+            action[key] = np.zeros_like(action[key])
+
+        with self.assertLogs(
+            "BalloonPoppingGymEnv.envs.balloon_world", level="INFO"
+        ) as caught:
+            done = False
+            while not done:
+                _obs, _r, terminated, truncated, _info = env.step(action)
+                done = terminated or truncated
+
+        self.assertIn(
+            "Terminated: Reached max time",
+            [record.getMessage() for record in caught.records],
+        )
 
 
 if __name__ == "__main__":
