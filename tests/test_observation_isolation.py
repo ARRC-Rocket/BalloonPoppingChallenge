@@ -8,8 +8,30 @@ API tidiness question, it is the scoring path.
 
 Measured before the fix, on scenario 0: an agent that never sent a launch action
 and only wrote 2 into the status array it was given scored 10 out of 10.
+
+What this is not
+----------------
+It is not a boundary against hostile agent code, and the name of the first class
+here used to say it was. ``_load_agent_class`` runs the submitted module with
+``exec_module`` in the evaluator's own interpreter, and ``get_action`` is called
+from ``evaluate_scenario`` while ``env`` is a local variable there, so an agent
+reaches the environment through the caller frame whatever these arrays are.
+Measured on the fixed code, so this is a limit rather than a regression:
+
+    frame = inspect.currentframe().f_back
+    frame.f_locals["env"]._balloon_status[:, 0] = 2
+
+scored 10 out of 10 with the rocket never launched, and monkey patching at
+import time is available before that. What is asserted below is the narrower
+and still worthwhile thing: the data the environment hands out is a copy, so
+holding onto it does not hold onto the environment.
+
+Running the agent somewhere else would not close that either, because the
+evaluator runs on the competitor's own machine. What covers it is checking the
+submission afterwards, which is what ``scripts/verify_submission.py`` is for.
 """
 
+import copy
 import unittest
 from importlib.util import find_spec
 from pathlib import Path
@@ -34,7 +56,7 @@ if _STACK_AVAILABLE:
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
-class TestTheAgentCannotReachTheEnvironment(unittest.TestCase):
+class TestWhatTheEnvironmentHandsOutIsDetached(unittest.TestCase):
     def setUp(self):
         self.parameters = yaml.safe_load(
             SCENARIO_0_PARAMS.read_text(encoding="utf-8-sig")
@@ -164,12 +186,16 @@ class TestTheAgentCannotReachTheEnvironment(unittest.TestCase):
         np.testing.assert_array_equal(self.env._rocket_sensors, sensors_before)
         np.testing.assert_array_equal(self.env._rocket_states, states_before)
 
-    def test_a_hostile_agent_scores_nothing_over_a_whole_episode(self):
+    def test_rewriting_the_observation_every_step_scores_nothing(self):
         """End to end, because a single step is not where a score is decided.
 
-        An agent that rewrites everything it is handed on every call, and never
-        launches. It should finish with the same score as an agent that does
-        nothing at all, which is none.
+        A caller that rewrites everything it is handed on every call, and never
+        launches. It should finish with the same score as one that does nothing
+        at all, which is none.
+
+        Named for what it drives. It writes to the arrays here rather than from
+        inside an agent the evaluator loaded, so it establishes that the handed
+        out arrays are detached and nothing about what agent code can reach.
         """
         action = self._idle_action()
         observation = self.observation
@@ -186,6 +212,83 @@ class TestTheAgentCannotReachTheEnvironment(unittest.TestCase):
 
         self.assertEqual(info["popped_count"], 0)
         self.assertFalse(self.env.rocket_launched)
+
+
+# Sharing one of these is what lets a write travel. A tuple is descended into
+# rather than reported, since holding the same tuple is harmless and holding a
+# list inside one is not.
+_MUTABLE_CONTAINERS = (list, dict, set, bytearray)
+
+
+def _shared_objects(given, scenario, path=""):
+    """Paths where the two trees hold the same mutable object.
+
+    Identity is tested before descending. The earlier version descended first,
+    which left two ways through: a shared list was never opened, so a shallow
+    copy that gave the outer list a new identity hid everything under it, and a
+    shared dict took the recursion branch and was never reported at all, so a
+    shared dict of plain numbers came back clean.
+    """
+    where = path or "<root>"
+    if given is scenario and isinstance(given, _MUTABLE_CONTAINERS):
+        return [where]
+
+    if isinstance(given, dict) and isinstance(scenario, dict):
+        shared = []
+        for key in given:
+            if key in scenario:
+                shared += _shared_objects(given[key], scenario[key], f"{where}.{key}")
+        return shared
+
+    if isinstance(given, (list, tuple)) and isinstance(scenario, (list, tuple)):
+        shared = []
+        for index, (mine, theirs) in enumerate(zip(given, scenario)):
+            shared += _shared_objects(mine, theirs, f"{where}[{index}]")
+        return shared
+
+    return []
+
+
+class TestTheWalkerFindsSharingItIsPointedAt(unittest.TestCase):
+    """The check above is only worth what this one says it is.
+
+    No simulation stack needed: these are hand built trees, which is the point.
+    A test whose only input is a tree that already passes cannot tell a working
+    walker from one that returns an empty list.
+    """
+
+    def test_a_shared_list_is_reported(self):
+        shared = [1, 2]
+
+        self.assertEqual(_shared_objects({"a": shared}, {"a": shared}), ["<root>.a"])
+
+    def test_a_shared_dict_of_plain_values_is_reported(self):
+        """The one that went missing entirely, because it looked like a branch."""
+        shared = {"x": 1}
+
+        self.assertEqual(_shared_objects({"a": shared}, {"a": shared}), ["<root>.a"])
+
+    def test_sharing_inside_a_copied_list_is_reported(self):
+        """The shallow copy regression this exists for.
+
+        ``original.copy()`` gives the outer list a new identity and leaves every
+        element the same object. Stopping at the container calls that clean.
+        """
+        inner = [1, 2]
+        original = [inner, {"x": 3}]
+
+        found = _shared_objects({"a": list(original)}, {"a": original})
+
+        self.assertEqual(found, ["<root>.a[0]", "<root>.a[1]"])
+
+    def test_a_deep_copy_is_reported_clean(self):
+        """Or reporting everything would pass the tests above."""
+        original = {"a": [[1, 2], {"x": 3}], "b": {"c": [4]}}
+
+        self.assertEqual(_shared_objects(copy.deepcopy(original), original), [])
+
+    def test_equal_but_distinct_objects_are_not_sharing(self):
+        self.assertEqual(_shared_objects({"a": [1, 2]}, {"a": [1, 2]}), [])
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
@@ -211,20 +314,10 @@ class TestTheGivenParametersAreAlsoDetached(unittest.TestCase):
     def test_nothing_in_them_is_the_same_object(self):
         """The property, checked over the whole tree rather than the two known
         offenders, so a new whitelisted key cannot reintroduce this quietly."""
-        shared = []
-
-        def walk(given, scenario, path=""):
-            if isinstance(given, dict) and isinstance(scenario, dict):
-                for key in given:
-                    if key in scenario:
-                        walk(given[key], scenario[key], f"{path}.{key}")
-            elif given is scenario and isinstance(given, (list, dict, set)):
-                shared.append(path)
-
-        walk(self.given, self.scenario)
-
         self.assertEqual(
-            shared, [], "given_parameters shares objects with the scenario"
+            _shared_objects(self.given, self.scenario),
+            [],
+            "given_parameters shares objects with the scenario",
         )
 
     def test_writing_to_them_does_not_reach_the_environment(self):
