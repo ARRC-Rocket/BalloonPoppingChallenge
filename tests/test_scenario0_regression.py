@@ -94,6 +94,14 @@ def post_launch_positions(positions):
     them would let a broken tail slip past the trajectory comparison).
     """
     positions = np.asarray(positions, dtype=float)
+    # The shape, before the finite check. Both runners slice rocket_states to
+    # its first three columns, so a state schema that lost one produces (T, 2)
+    # rather than raising, and the regenerator would write that as the new
+    # expected value. Same silent blessing the balloon helper refuses.
+    if positions.ndim != 2 or positions.shape[1] != 3 or positions.shape[0] == 0:
+        raise AssertionError(
+            f"rocket positions must have shape (T, 3), got {positions.shape}"
+        )
     finite_rows = np.isfinite(positions).all(axis=1)
     launched = np.flatnonzero(finite_rows)
     if launched.size == 0:

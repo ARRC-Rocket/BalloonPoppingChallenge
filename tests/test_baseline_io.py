@@ -76,10 +76,6 @@ class TestWriteBaseline(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(self.directory, "baseline.json")))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 @unittest.skipIf(os.name == "nt", "POSIX permission semantics")
 class TestTheReplacementKeepsThePermissions(unittest.TestCase):
     """Replacing a file is not overwriting it, and the mode follows the file.
@@ -133,20 +129,6 @@ class TestTheReplacementKeepsThePermissions(unittest.TestCase):
 
         self.assertEqual(self._mode(), NEW_BASELINE_MODE)
 
-    def test_a_restrictive_umask_does_not_narrow_a_new_baseline(self):
-        """The policy is stated, not inherited from the process.
-
-        chmod sets permissions outright, so the umask never applies. Consulting
-        it would mean setting and restoring a process-wide value, which is the
-        race below.
-        """
-        previous = os.umask(0o077)
-        self.addCleanup(os.umask, previous)
-
-        write_baseline({"new": True}, self.path)
-
-        self.assertEqual(self._mode(), NEW_BASELINE_MODE)
-
     def test_writing_a_baseline_never_touches_the_process_umask(self):
         """The umask is process-wide, not per thread.
 
@@ -154,6 +136,10 @@ class TestTheReplacementKeepsThePermissions(unittest.TestCase):
         creating a file in that window gets the wrong permissions. Measured with
         the process at 022 and the window widened: an unrelated file opened with
         mode 0666 was created 0600 instead of 0644.
+
+        Asserting the call never happens, rather than setting a restrictive
+        umask and checking the result. An earlier version did the latter, which
+        put this process back into exactly the state the production fix removed.
         """
         with mock.patch.object(
             baseline_io.os,
@@ -225,3 +211,7 @@ class TestTheFailurePathsTheHelperDocuments(unittest.TestCase):
         with open(self.path, encoding="utf-8") as handle:
             self.assertEqual(json.load(handle), {"old": True})
         self.assertEqual(self._leftovers(), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
