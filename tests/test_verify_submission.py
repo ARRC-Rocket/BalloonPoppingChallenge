@@ -49,15 +49,20 @@ if _STACK_AVAILABLE:
     )
 
 
-def _build_submission(steps=40):
+def _build_submission(steps=40, balloons=1):
     """Run the real environment and package what it recorded.
 
     Built here rather than by calling ``pack_for_submission`` so the test does
     not write a file, reach the network for the integrity check, or depend on
     the container format. The fields below are the ones the checker reads.
+
+    ``balloons`` exists because one balloon gives a release schedule of
+    ``arange(1) * 50``, which is ``[0]``, so every balloon is eligible from the
+    first row and the release rule cannot be observed through this fixture at
+    all. Two gives ``[0, 50]``, which is the smallest genuinely mixed mask.
     """
     parameters = yaml.safe_load(SCENARIO_1_PARAMS.read_text(encoding="utf-8"))
-    parameters["balloon"]["num"] = 1
+    parameters["balloon"]["num"] = balloons
     # With one balloon the schedule is arange(1) * step, so it is released at
     # step 0. Asserted in the fixture test below rather than assumed, since a
     # short run past a balloon still on the ground would leave the pop checks
@@ -571,3 +576,96 @@ class TestARealScenario0SubmissionPasses(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestTheReleaseRuleReachesTheVerdict(unittest.TestCase):
+    """The rule was correct and wired to nothing that any test could see.
+
+    Every check above either drives a consumer directly and hands it a mask, or
+    goes through ``verify()`` with a fixture whose mask is all True: scenario 1
+    cut to one balloon releases it at step 0, and scenario 0 starts every
+    balloon released. So the mask had no observable effect at the call site, and
+    measured, replacing it with ``ones_like`` inside ``verify()`` left all 27
+    tests passing. Stubbing it that way also accepted a forged score end to end.
+
+    Two balloons is the smallest fixture that can tell the difference. The
+    schedule becomes ``[0, 50]``, so balloon 1 spends the first fifty steps on
+    the ground and a claim against it there is refusable.
+    """
+
+    RELEASE_STEP = 50
+
+    @classmethod
+    def setUpClass(cls):
+        cls.clean = _build_submission(steps=40, balloons=2)
+
+    def setUp(self):
+        self.submission = copy.deepcopy(self.clean)
+        self.records = self.submission["balloon_world_data"]["trajectories"]
+        official = copy.deepcopy(
+            self.clean["balloon_world_data"]["scenario_parameters"]
+        )
+        patcher = patch(
+            "verify_submission._load_canonical_scenario",
+            lambda number: copy.deepcopy(official),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def failures(self):
+        return [
+            finding.name
+            for finding in verify(self.submission, DEFAULT_TOLERANCE_METRES)
+            if not finding.ok
+        ]
+
+    def test_the_fixture_has_a_balloon_that_is_not_released_yet(self):
+        """Or the two tests below would hold with the rule deleted.
+
+        The run is 40 steps and balloon 1 is released at 50, so it is on the
+        ground for the whole submission. That is what makes a claim against it
+        refusable without any reference to where the rocket went.
+        """
+        schedule = self.submission["balloon_world_data"]["balloon_release_at_step"]
+
+        self.assertEqual(list(schedule), [0, self.RELEASE_STEP])
+        self.assertGreater(self.RELEASE_STEP, len(self.records))
+
+    def test_an_honest_two_balloon_submission_still_passes(self):
+        """The half that stops the next one passing by refusing everything."""
+        self.assertEqual(self.failures(), [])
+
+    def test_a_pop_claimed_before_release_is_refused_through_verify(self):
+        """The forgery the rule exists to stop, driven through the entry point.
+
+        The submitted status is forged to released and then popped, which is
+        exactly what a competitor controls. Only the scenario says balloon 1 is
+        still on the ground, so only a mask taken from the scenario can refuse
+        this, and that mask has to survive the trip from ``verify()`` to the
+        check that reports it.
+        """
+        for record in self.records[1:]:
+            record["balloon_status"][1] = 2
+        self.submission["leaderboard_info"]["final_reward"] = 1
+
+        self.assertIn("no balloon is popped before release", self.failures())
+
+    def test_a_status_matrix_of_the_wrong_width_is_reported_not_raised(self):
+        """The guard that keeps a bad file from ending the run.
+
+        The mask is built from the scenario and the status matrix comes from the
+        submission, so their widths are a competitor's to disagree with. Without
+        the shape guard the two are combined anyway and numpy raises
+
+            operands could not be broadcast together with shapes (2,3) (2,2)
+
+        which is not caught around the ``verify()`` call in ``main()``, so one
+        malformed file takes down every other file in the same batch.
+        """
+        for record in self.records:
+            record["balloon_status"] = list(record["balloon_status"]) + [0]
+
+        findings = verify(self.submission, DEFAULT_TOLERANCE_METRES)
+
+        self.assertTrue([f for f in findings if not f.ok], "a wrong shape passed")
