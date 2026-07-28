@@ -13,6 +13,7 @@ fixture asserts its balloon moves, so that cannot quietly become true again.
 """
 
 import copy
+import os
 import sys
 import unittest
 from importlib.util import find_spec
@@ -282,7 +283,7 @@ class TestWhenAPopIsTooEarly(unittest.TestCase):
     """
 
     @staticmethod
-    def _consistency(status_rows, release_at_step):
+    def _consistency(status_rows, release_at_step, eligibility=None):
         submission = {
             "leaderboard_info": {
                 "final_reward": int((np.asarray(status_rows)[-1] == 2).sum())
@@ -292,11 +293,28 @@ class TestWhenAPopIsTooEarly(unittest.TestCase):
                 "balloon_release_at_step": list(release_at_step),
             },
         }
+        if eligibility is None:
+            status = np.asarray(status_rows, dtype=int)
+            steps = np.arange(1, status.shape[0] + 1)[:, None]
+            eligibility = steps >= np.asarray(release_at_step, dtype=int)[None, :]
         return [
             finding.name
-            for finding in check_internal_consistency(submission)
+            for finding in check_internal_consistency(submission, eligibility)
             if not finding.ok
         ]
+
+    def test_a_scenario_that_starts_released_is_never_too_early(self):
+        """Scenario 0 releases everything at reset and its schedule never fires.
+
+        Measured: with the shipped seed balloon 0 is scheduled for step 400 and
+        the committed baseline pops it at 370, so comparing against the schedule
+        reported the repository's own run as popping before release.
+        """
+        eligible = np.ones((3, 1), dtype=bool)
+
+        failures = self._consistency([[1], [2], [2]], [400], eligibility=eligible)
+
+        self.assertNotIn("no balloon is popped before release", failures)
 
     def test_released_and_popped_on_the_same_step_is_allowed(self):
         # Row 0 holds step 1, so a balloon released on step 1 may read 2 there.
@@ -344,11 +362,17 @@ class TestTheIntervalsThePopCheckLooksAt(unittest.TestCase):
             }
         }
 
-    def _closest(self, rocket_rows, status_rows, balloon_positions):
+    def _closest(self, rocket_rows, status_rows, balloon_positions, eligible=None):
+        status = np.asarray(status_rows, dtype=int)
+        if eligible is None:
+            # These cases are about the interval boundaries, not about release
+            # timing, so every balloon is eligible throughout.
+            eligible = np.ones(status.shape, dtype=bool)
         findings = check_claimed_pops_are_reachable(
             self._submission(rocket_rows, status_rows),
             np.asarray(balloon_positions, dtype=float),
             self.CANONICAL,
+            eligible,
         )
         return [finding for finding in findings if not finding.ok]
 
@@ -396,9 +420,89 @@ class TestTheIntervalsThePopCheckLooksAt(unittest.TestCase):
         status = [[0], [2], [2]]
         # Sitting on the segment the rocket flies between rows 0 and 1.
         balloons = [[[20.0, 0.0, self.ELEVATION]] for _ in range(3)]
+        # Row 0 is step 1 and the balloon is released on step 2, so it becomes
+        # eligible at row 1, which is the end of the interval it is popped over.
+        eligible = np.array([[False], [True], [True]])
 
-        self.assertEqual(self._closest(rocket, status, balloons), [])
+        self.assertEqual(self._closest(rocket, status, balloons, eligible), [])
+
+    def test_a_status_forged_released_before_the_scenario_allows_is_ignored(self):
+        """The release mask comes from the scenario, not from the submission.
+
+        Reading the submitted status let a file claim a balloon was released
+        early, point at a rocket pass from before the real release as its
+        closest approach, and flip to popped on the official step. Both the
+        timing check and this one passed.
+        """
+        rocket = [
+            [0.0, 0.0, self.ELEVATION],
+            [40.0, 0.0, self.ELEVATION],
+            [4000.0, 0.0, self.ELEVATION],
+        ]
+        # The file says released from the first row and popped on the last.
+        status = [[1], [1], [2]]
+        balloons = [[[20.0, 0.0, self.ELEVATION]] for _ in range(3)]
+        # The scenario says it is not released until the last row.
+        eligible = np.array([[False], [False], [True]])
+
+        self.assertNotEqual(self._closest(rocket, status, balloons, eligible), [])
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+@unittest.skipUnless(
+    os.environ.get("BPC_RUN_SLOW_TESTS", "0").strip().lower() in ("1", "true", "yes"),
+    "set BPC_RUN_SLOW_TESTS=1 to run a full scenario",
+)
+class TestARealScenario0SubmissionPasses(unittest.TestCase):
+    """The check this file did not have, and the one that mattered.
+
+    Every other test here builds a submission by hand, from scenario 1 cut to
+    one balloon. None of them ran the shipped scenario 0 end to end, and that is
+    what let the release-eligibility bug ship: scenario 0 starts every balloon
+    released and its schedule never fires, so comparing pops against the
+    schedule reported the repository's own run as popping balloon 0 at step 370
+    when the schedule said 400.
+
+    An honest official submission passing is the cheapest possible statement
+    that the checker is fit to judge one.
+    """
+
+    def test_the_shipped_scenario_0_run_is_not_accused_of_anything(self):
+        from BalloonPoppingGymEnv.agents.example_agents import AttitudeRateControlAgent
+        from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
+
+        parameters, given = load_scenario_parameters(0)
+        env = BalloonPoppingEnv(render_mode=None, parameters=parameters)
+        agent = AttitudeRateControlAgent(
+            given, rate_targets=[0.0, 0.0, 0.0], launch_time=1
+        )
+        observation, _ = env.reset(seed=parameters["scenario"]["random_seed"])
+        terminated = truncated = False
+        while not (terminated or truncated):
+            observation, _, terminated, truncated, _ = env.step(
+                agent.get_action(observation)
+            )
+
+        submission = {
+            "leaderboard_info": {
+                "team_name": "official",
+                "agent_name": "AttitudeRateControlAgent",
+                "scenario_number": 0,
+                "final_reward": int(env._popped_count),
+            },
+            "balloon_world_data": {
+                "scenario_parameters": parameters,
+                "trajectories": copy.deepcopy(env.trajectories),
+                "balloon_release_at_step": list(env._balloon_release_at_step),
+            },
+        }
+
+        findings = verify(submission, DEFAULT_TOLERANCE_METRES)
+        failures = [f"{f.name}: {f.detail}" for f in findings if not f.ok]
+
+        self.assertEqual(failures, [])
+        self.assertGreater(env._popped_count, 0, "this run should pop something")

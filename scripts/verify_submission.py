@@ -253,9 +253,38 @@ def _regenerate_balloon_flights(scenario_parameters):
 
     env = BalloonPoppingEnv(render_mode=None, parameters=scenario_parameters)
     env.reset(seed=scenario_parameters["scenario"]["random_seed"])
-    return np.asarray(env._balloon_flights, dtype=float), np.asarray(
-        env._balloon_release_at_step
+    return (
+        np.asarray(env._balloon_flights, dtype=float),
+        np.asarray(env._balloon_release_at_step),
+        # What the environment says a balloon's state is before any step runs.
+        # Read rather than assumed: scenario 0 starts every balloon released and
+        # its release schedule never fires, so the schedule alone is not the
+        # rule. See _release_eligibility.
+        np.asarray(env._balloon_status[:, 0], dtype=int).copy(),
     )
+
+
+def _release_eligibility(canonical, steps):
+    """``(steps, balloons)`` mask of when each balloon is allowed to be released.
+
+    Taken from the environment rather than from the release schedule, because
+    the schedule is not the rule on its own.
+
+    Scenario 0 starts every balloon released. It still builds a schedule, and
+    with the shipped seed balloon 0 gets step 400, while the committed baseline
+    pops it at step 370. Comparing pops against the schedule therefore reports
+    the repository's own scenario 0 run as popping a balloon before it was
+    released. Measured on the shipped baseline: exactly that balloon.
+
+    So a balloon is eligible from the first step when the environment already
+    has it released, and from its scheduled step otherwise. Deriving it this way
+    rather than naming scenario 0 keeps it right for whatever scenario 2 does.
+    """
+    _flights, release_at_step, initial_status = _regenerate_balloon_flights(canonical)
+    # Row k is step k + 1, the same offset the trajectory comparison uses.
+    step_numbers = np.arange(1, steps + 1)[:, None]
+    scheduled = step_numbers >= release_at_step[None, :]
+    return scheduled | (initial_status[None, :] >= 1)
 
 
 def check_balloon_trajectories(submission, tolerance, trusted_positions, canonical):
@@ -282,7 +311,7 @@ def check_balloon_trajectories(submission, tolerance, trusted_positions, canonic
             )
         ]
 
-    flights, release_at_step = _regenerate_balloon_flights(canonical)
+    flights, release_at_step, _initial_status = _regenerate_balloon_flights(canonical)
 
     expected_balloons = flights.shape[0]
     if claimed.shape[1] != expected_balloons:
@@ -371,7 +400,9 @@ def check_balloon_trajectories(submission, tolerance, trusted_positions, canonic
     return findings
 
 
-def check_claimed_pops_are_reachable(submission, expected_positions, canonical):
+def check_claimed_pops_are_reachable(
+    submission, expected_positions, canonical, eligibility
+):
     """Every balloon claimed popped has to have been somewhere the rocket went.
 
     The checks above catch a balloon that was moved. They do not catch the
@@ -449,10 +480,16 @@ def check_claimed_pops_are_reachable(submission, expected_positions, canonical):
     # pre-launch rows are all-NaN by construction.
     steps = np.flatnonzero(flyable[:-1] & flyable[1:])
     for step in steps:
-        # The status at the *end* of the interval. A balloon released on this
-        # step is released before the environment detects pops on it, so reading
-        # the start would skip the interval it was actually popped over.
-        released = status[step + 1, claimed_popped] >= 1
+        # From the scenario, not from the submission. Reading the submitted
+        # status here let a file mark a balloon released early, point at a rocket
+        # pass that happened before the real release as its closest approach,
+        # and flip to popped on the official step. Both this and the timing
+        # check below passed, while the environment would not have looked at
+        # that balloon during that interval at all.
+        #
+        # The end of the interval rather than its start: a balloon released on
+        # this step is released before pops are detected on it.
+        released = eligibility[step + 1, claimed_popped]
         if not released.any():
             continue
         distance_squared = BalloonPoppingEnv._segment_distance_squared_batch(
@@ -493,7 +530,7 @@ def check_claimed_pops_are_reachable(submission, expected_positions, canonical):
     return findings
 
 
-def check_internal_consistency(submission):
+def check_internal_consistency(submission, eligibility=None):
     """Cheap checks that need no physics, so they cannot disagree with any.
 
     The trajectory check above says the balloons are real. It says nothing about
@@ -536,13 +573,15 @@ def check_internal_consistency(submission):
     # The rule that does hold is about when, not about the shape of the
     # sequence: no balloon is popped before the step it is released on. Row k
     # holds step k+1, the same offset the trajectory comparison uses.
-    release_at_step = np.asarray(world["balloon_release_at_step"], dtype=int)
+    # Against what the scenario allows, not against the release schedule on its
+    # own. Scenario 0 starts every balloon released and its schedule never
+    # fires, so comparing with the schedule reported the repository's own
+    # scenario 0 run as popping balloon 0 before release: the schedule says step
+    # 400 and the committed baseline pops it at 370.
     popped_rows = status == 2
     early = []
-    if release_at_step.shape[0] == status.shape[1]:
-        has_popped = popped_rows.any(axis=0)
-        first_pop_step = popped_rows.argmax(axis=0) + _TRAJECTORY_OFFSET
-        early = np.flatnonzero(has_popped & (first_pop_step < release_at_step))
+    if eligibility is not None and eligibility.shape == status.shape:
+        early = np.flatnonzero((popped_rows & ~eligibility).any(axis=0))
     findings.append(
         Finding(
             "no balloon is popped before release",
@@ -571,10 +610,15 @@ def verify(submission, tolerance):
     # names a scenario this repository does not ship, or whose parameters are
     # not the shipped ones, is reported here rather than checked against itself.
     findings, canonical = check_scenario_is_official(submission)
-    # These need no physics, so they run whatever the scenario turned out to be.
-    findings += check_internal_consistency(submission)
     if canonical is None:
-        return findings
+        # Nothing to measure eligibility against, so run only what needs no
+        # scenario at all.
+        return findings + check_internal_consistency(submission)
+
+    eligibility = _release_eligibility(
+        canonical, len(submission["balloon_world_data"]["trajectories"])
+    )
+    findings += check_internal_consistency(submission, eligibility)
 
     trusted_positions = []
     findings += check_balloon_trajectories(
@@ -584,7 +628,7 @@ def verify(submission, tolerance):
     # against are the ones the seed produced.
     if trusted_positions and all(finding.ok for finding in findings):
         findings += check_claimed_pops_are_reachable(
-            submission, trusted_positions[0], canonical
+            submission, trusted_positions[0], canonical, eligibility
         )
     return findings
 
