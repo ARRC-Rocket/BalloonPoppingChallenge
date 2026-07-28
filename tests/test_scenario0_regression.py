@@ -22,7 +22,12 @@ from pathlib import Path
 
 import numpy as np
 
-from tests.position_tolerance import assert_positions_match
+from tests.position_tolerance import (
+    assert_launch_step_matches,
+    assert_positions_match,
+    displace_flight_in_time,
+    launch_step,
+)
 
 # ActiveRocketPy (imported as ``rocketpy``) is the heavy optional dependency, so
 # skip the whole test when it is genuinely not installed. The BalloonPoppingGymEnv
@@ -57,6 +62,11 @@ DOWNSAMPLE_STRIDE = 50
 STEP_COUNT_ABS_TOL = 2
 # Downsampling turns those few steps into at most one row of difference.
 ROW_COUNT_ABS_TOL = 1
+# How far the flight is moved in the test that proves the launch step is being
+# read. Ten steps is 0.1 s: five times STEP_COUNT_ABS_TOL, so it is not jitter,
+# and a sixth of the 60 steps the trajectory comparison accepts on its own, so
+# nothing but the launch step can be what rejects it.
+DISPLACEMENT_PROBE_STEPS = 10
 # Scenario #0 has 10 static balloons and the fixed agent is expected to pop them
 # all; pin that semantic count so regenerating the baseline cannot quietly bless
 # a regression that pops fewer.
@@ -70,6 +80,10 @@ class RunResult:
 
     ``positions`` is the per-step rocket centre-of-mass position
     ``(num_steps, 3)``, NaN rows before launch included.
+
+    ``record_step`` is the simulation step each row was written at, so a row can
+    be dated. Without it the trajectory comparison is purely launch-relative and
+    the flight could have happened at any time; see ``launch_step``.
 
     ``pop_step`` is, for each balloon, the step at which it first reads as
     popped. Ten numbers, and the reason they are here: the final count alone
@@ -85,6 +99,7 @@ class RunResult:
     """
 
     positions: np.ndarray
+    record_step: np.ndarray
     popped: int
     pop_step: np.ndarray
     status_history: np.ndarray
@@ -120,7 +135,8 @@ def run_scenario_0():
     # step i+1. Read the step back out of the record's own clock rather than
     # writing that offset down here, so this keeps meaning what its name says if
     # the logging ever starts somewhere else. The same offset is already carried
-    # by scenario 1's release timing and by the submission checker.
+    # by scenario 1's release timing and by the submission checker. It dates the
+    # pop steps below and the launch step the baseline is anchored to.
     record_step = np.rint(
         np.asarray([step["time"] for step in env.trajectories], dtype=float)
         / scenario_params["simulation"]["time_step"]
@@ -131,6 +147,7 @@ def run_scenario_0():
     pop_step[has_popped] = record_step[popped_now.argmax(axis=0)[has_popped]]
     return RunResult(
         positions=rocket_states[:, :3],
+        record_step=record_step,
         popped=int(env._popped_count),
         pop_step=pop_step,
         status_history=status_history,
@@ -183,6 +200,9 @@ class TestScenario0Regression(unittest.TestCase):
         cls.popped = cls.run_result.popped
         cls.num_steps = cls.run_result.positions.shape[0]
         cls.positions = post_launch_positions(cls.run_result.positions)
+        cls.launch_step = launch_step(
+            cls.run_result.positions, cls.run_result.record_step
+        )
 
     def test_popped_count_matches_baseline(self):
         # Pin the semantic count, not just the (regenerable) baseline, so a
@@ -297,6 +317,51 @@ class TestScenario0Regression(unittest.TestCase):
             "rocket",
             ROW_COUNT_ABS_TOL,
         )
+
+    def test_the_flight_happens_when_the_baseline_says_it_does(self):
+        """*When*, which the trajectory comparison throws away.
+
+        ``post_launch_positions`` slices from the first finite row, so what is
+        compared above is launch-relative and the same shape of flight passes
+        wherever in the episode it sits.
+        """
+        assert_launch_step_matches(
+            self, self.launch_step, self.baseline["launch_step"], STEP_COUNT_ABS_TOL
+        )
+
+    def test_a_flight_displaced_in_time_is_rejected(self):
+        """The anchor above, pinned by the case that gets past everything else.
+
+        Measured on this file before the anchor existed: the whole flight moved
+        later by k steps, with the episode length preserved, passed all seven
+        tests for every k up to 60. The first k to fail was 61, and it failed on
+        the downsampled row count rather than on any clock.
+
+        Both halves are asserted, because the pass is the point. The trajectory
+        comparison is shown accepting the displaced flight, so the rejection
+        below can only be coming from the launch step; if a later change made the
+        trajectory comparison catch this on its own, the first assertion fails
+        and says so instead of leaving a check here that nothing needs.
+        """
+        displaced = displace_flight_in_time(
+            self.run_result.positions, DISPLACEMENT_PROBE_STEPS
+        )
+
+        assert_positions_match(
+            self,
+            post_launch_positions(displaced),
+            np.array(self.baseline["rocket_position_downsampled"], dtype=float),
+            "rocket",
+            ROW_COUNT_ABS_TOL,
+        )
+
+        with self.assertRaises(AssertionError):
+            assert_launch_step_matches(
+                self,
+                launch_step(displaced, self.run_result.record_step),
+                self.baseline["launch_step"],
+                STEP_COUNT_ABS_TOL,
+            )
 
 
 if __name__ == "__main__":

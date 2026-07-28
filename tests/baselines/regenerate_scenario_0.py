@@ -14,6 +14,7 @@ from pathlib import Path
 from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
 
 from tests.baselines.baseline_io import write_baseline
+from tests.position_tolerance import launch_step
 
 from tests.test_scenario0_regression import (
     AGENT_KWARGS,
@@ -37,6 +38,10 @@ def main():
         "agent_kwargs": AGENT_KWARGS,
         "downsample_stride": DOWNSAMPLE_STRIDE,
         "num_steps_full": int(positions.shape[0]),
+        # The step the rocket first has a state at. The trajectory below is
+        # sliced from that row, so without this the baseline says nothing about
+        # when the flight happened.
+        "launch_step": launch_step(positions, run_result.record_step),
         "popped_count": int(popped),
         # Per balloon, the step it first reads as popped. The count alone cannot
         # see a change to when or why anything was reached.

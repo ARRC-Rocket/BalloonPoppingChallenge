@@ -175,3 +175,79 @@ def _assert_the_unmatched_tail_is_continuous(test_case, compared, unmatched, lab
         f"{CONTINUITY_FACTOR:g}x the largest step in the comparison "
         f"({largest_step:.4g} m). That is not a continuation of this trajectory",
     )
+
+
+def launch_step(positions, record_step):
+    """The step the rocket first has a state at, on the run's own clock.
+
+    Everything above compares a *launch-relative* trajectory: both scenarios
+    slice their positions from the first finite row, so the origin is re-zeroed
+    on launch and nothing that follows carries when the flight happened. That is
+    the hole this closes. Measured against the committed baselines, moving the
+    rocket trajectory later while keeping the total step count passed every
+    check in both files up to 60 steps (0.60 s) on scenario 0 and 62 (0.62 s) on
+    scenario 1. Neither boundary is a clock: 61 and 63 are simply where the
+    downsampled row count finally drifts past ``ROW_COUNT_ABS_TOL``.
+
+    It matters most on scenario 1, which pops nothing and so has no absolute
+    anchor for the rocket at all, while the balloons it is scored against run on
+    the absolute clock from step 0. The two arrays are on different clocks and
+    pop detection depends on their relative phase.
+
+    Scenario 0 is partly covered already, because ``pop_step`` is an absolute
+    step index. Displace it consistently, pops moved with the flight, and the
+    pop-step comparison rejects a single step, so the largest displacement that
+    passes there is 0. That only holds while something pops.
+
+    The step comes out of the record's own time axis rather than off the row
+    number, for the same reason scenario 0 reads its pop steps that way:
+    ``step()`` increments ``current_step`` before it appends the record, so row
+    i is step i+1, and writing that offset down here would make this stop
+    meaning what its name says if the logging ever started somewhere else.
+    """
+    positions = np.asarray(positions, dtype=float)
+    record_step = np.asarray(record_step)
+    if len(record_step) != len(positions):
+        raise AssertionError(
+            f"the clock has {len(record_step)} entries and the trajectory has "
+            f"{len(positions)}, so a row cannot be dated"
+        )
+    launched = np.flatnonzero(np.isfinite(positions).all(axis=1))
+    if launched.size == 0:
+        raise AssertionError("rocket never produced a finite post-launch position")
+    return int(record_step[launched[0]])
+
+
+def assert_launch_step_matches(test_case, actual, expected, step_count_abs_tol):
+    """Compare a launch step against its baseline, in whole steps.
+
+    Absolute, and the same tolerance the flight duration gets, for the same
+    reason: this is a deterministic run, so the only drift to absorb is a step
+    or two of cross-platform jitter in when the integrator first reports a
+    state. A percentage would scale with how late the launch happens to be.
+    """
+    test_case.assertLessEqual(
+        abs(actual - expected),
+        step_count_abs_tol,
+        f"the rocket launched at step {actual}, and the baseline says "
+        f"{expected}. The trajectory comparison cannot see this: it is "
+        f"re-zeroed on the first flown row",
+    )
+
+
+def displace_flight_in_time(positions, steps):
+    """The same flight, launched ``steps`` later, over the same step count.
+
+    The attack the anchor above exists to reject, built here so both scenarios
+    run the identical one. The rocket sits unlaunched for ``steps`` more steps
+    and the tail is dropped, so the episode length, the trajectory shape and
+    every sampled value are unchanged; only the date on them moves.
+    """
+    positions = np.asarray(positions, dtype=float)
+    if not 0 < steps < len(positions):
+        raise AssertionError(
+            f"a displacement of {steps} steps does not fit inside a "
+            f"{len(positions)}-step run"
+        )
+    unlaunched = np.full((steps,) + positions.shape[1:], np.nan)
+    return np.concatenate([unlaunched, positions[:-steps]])
