@@ -13,6 +13,7 @@ fixture asserts its balloon moves, so that cannot quietly become true again.
 """
 
 import copy
+import os
 import sys
 import unittest
 from importlib.util import find_spec
@@ -43,6 +44,7 @@ if _STACK_AVAILABLE:
         DEFAULT_TOLERANCE_METRES,
         CUMULATIVE_DRIFT_TOLERANCE_METRES,
         VELOCITY_CONSISTENCY_TOLERANCE,
+        _release_eligibility,
         check_the_rocket_path_is_a_trajectory,
         _load_canonical_scenario,
         check_claimed_pops_are_reachable,
@@ -51,15 +53,18 @@ if _STACK_AVAILABLE:
     )
 
 
-def _build_submission(steps=40):
+def _build_submission(steps=40, balloons=1):
     """Run the real environment and package what it recorded.
 
     Built here rather than by calling ``pack_for_submission`` so the test does
     not write a file, reach the network for the integrity check, or depend on
     the container format. The fields below are the ones the checker reads.
+
+    ``balloons`` exists because one gives a schedule of ``[0]``, eligible from
+    the first row, so the release rule cannot be seen. Two gives ``[0, 50]``.
     """
     parameters = yaml.safe_load(SCENARIO_1_PARAMS.read_text(encoding="utf-8"))
-    parameters["balloon"]["num"] = 1
+    parameters["balloon"]["num"] = balloons
     # With one balloon the schedule is arange(1) * step, so it is released at
     # step 0. Asserted in the fixture test below rather than assumed, since a
     # short run past a balloon still on the ground would leave the pop checks
@@ -215,6 +220,23 @@ class TestTheSubmissionChecker(unittest.TestCase):
         # the two sources are indistinguishable to the suite.
         self.assertNotIn("balloon trajectories", failures)
 
+    def test_the_canonical_world_is_rebuilt_once(self):
+        """Rebuilding it runs the balloon Monte Carlo.
+
+        It was paid for twice per submission, once for release eligibility and
+        once for the trajectories. The next check to need it makes it three.
+        """
+        import verify_submission
+
+        with patch.object(
+            verify_submission,
+            "_regenerate_balloon_flights",
+            wraps=verify_submission._regenerate_balloon_flights,
+        ) as regenerate:
+            verify(self.submission, DEFAULT_TOLERANCE_METRES)
+
+        self.assertEqual(regenerate.call_count, 1)
+
     def test_a_changed_release_schedule_is_caught(self):
         self.submission["balloon_world_data"]["balloon_release_at_step"][0] += 1
 
@@ -286,7 +308,7 @@ class TestWhenAPopIsTooEarly(unittest.TestCase):
     """
 
     @staticmethod
-    def _consistency(status_rows, release_at_step):
+    def _consistency(status_rows, release_at_step, eligibility="derive"):
         submission = {
             "leaderboard_info": {
                 "final_reward": int((np.asarray(status_rows)[-1] == 2).sum())
@@ -296,17 +318,43 @@ class TestWhenAPopIsTooEarly(unittest.TestCase):
                 "balloon_release_at_step": list(release_at_step),
             },
         }
+        if isinstance(eligibility, str):
+            status = np.asarray(status_rows, dtype=int)
+            steps = np.arange(1, status.shape[0] + 1)[:, None]
+            eligibility = steps >= np.asarray(release_at_step, dtype=int)[None, :]
         return [
             finding.name
-            for finding in check_internal_consistency(submission)
+            for finding in check_internal_consistency(submission, eligibility)
             if not finding.ok
         ]
+
+    def test_a_scenario_that_starts_released_is_never_too_early(self):
+        """Scenario 0 releases everything at reset and its schedule never fires.
+
+        With the shipped seed balloon 0 is scheduled for step 400 and the
+        baseline pops it at 370, which the schedule alone calls too early.
+        """
+        eligible = np.ones((3, 1), dtype=bool)
+
+        failures = self._consistency([[1], [2], [2]], [400], eligibility=eligible)
+
+        self.assertNotIn("no balloon is popped before release", failures)
 
     def test_released_and_popped_on_the_same_step_is_allowed(self):
         # Row 0 holds step 1, so a balloon released on step 1 may read 2 there.
         failures = self._consistency([[0], [2], [2]], release_at_step=[1])
 
         self.assertNotIn("no balloon is popped before release", failures)
+
+    def test_without_a_release_rule_the_check_reports_that_it_did_not_run(self):
+        """An unevaluated check must not look like a passed one.
+
+        It used to leave ``early`` empty and report "every pop is on or after
+        the balloon's release step" about a comparison that never happened.
+        """
+        failures = self._consistency([[2], [2]], [0], eligibility=None)  # really None
+
+        self.assertIn("no balloon is popped before release", failures)
 
     def test_popped_before_the_release_step_is_caught(self):
         # Row 0 is step 1 again, and this balloon is not released until step 50.
@@ -348,11 +396,17 @@ class TestTheIntervalsThePopCheckLooksAt(unittest.TestCase):
             }
         }
 
-    def _closest(self, rocket_rows, status_rows, balloon_positions):
+    def _closest(self, rocket_rows, status_rows, balloon_positions, eligible=None):
+        status = np.asarray(status_rows, dtype=int)
+        if eligible is None:
+            # These cases are about the interval boundaries, not about release
+            # timing, so every balloon is eligible throughout.
+            eligible = np.ones(status.shape, dtype=bool)
         findings = check_claimed_pops_are_reachable(
             self._submission(rocket_rows, status_rows),
             np.asarray(balloon_positions, dtype=float),
             self.CANONICAL,
+            eligible,
         )
         return [finding for finding in findings if not finding.ok]
 
@@ -400,8 +454,312 @@ class TestTheIntervalsThePopCheckLooksAt(unittest.TestCase):
         status = [[0], [2], [2]]
         # Sitting on the segment the rocket flies between rows 0 and 1.
         balloons = [[[20.0, 0.0, self.ELEVATION]] for _ in range(3)]
+        # Row 0 is step 1 and the balloon is released on step 2, so it becomes
+        # eligible at row 1, which is the end of the interval it is popped over.
+        eligible = np.array([[False], [True], [True]])
 
-        self.assertEqual(self._closest(rocket, status, balloons), [])
+        self.assertEqual(self._closest(rocket, status, balloons, eligible), [])
+
+    def test_a_status_forged_released_before_the_scenario_allows_is_ignored(self):
+        """The release mask comes from the scenario, not from the submission.
+
+        Reading the submitted status let a file claim an early release, point at
+        a rocket pass from before the real one, and pop on the official step.
+        """
+        rocket = [
+            [0.0, 0.0, self.ELEVATION],
+            [40.0, 0.0, self.ELEVATION],
+            [4000.0, 0.0, self.ELEVATION],
+        ]
+        # The file says released from the first row and popped on the last.
+        status = [[1], [1], [2]]
+        balloons = [[[20.0, 0.0, self.ELEVATION]] for _ in range(3)]
+        # The scenario says it is not released until the last row.
+        eligible = np.array([[False], [False], [True]])
+
+        self.assertNotEqual(self._closest(rocket, status, balloons, eligible), [])
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestTheReleaseRuleItself(unittest.TestCase):
+    """The rule, straight from the regenerated facts.
+
+    Nothing else here reaches it, both fixtures give an all-True mask. Returning
+    ``ones(...)`` or moving the comparison off by one left every other test green.
+    """
+
+    def test_a_grounded_balloon_is_not_eligible_until_its_step(self):
+        # Row k is step k + 1, so a balloon released on step 3 is eligible from
+        # row 2 onwards.
+        eligibility = _release_eligibility(np.array([3]), np.array([0]), steps=4)
+
+        np.testing.assert_array_equal(eligibility, [[False], [False], [True], [True]])
+
+    def test_a_balloon_that_starts_released_is_eligible_throughout(self):
+        """Scenario 0. Its schedule still says 400 and it never fires."""
+        eligibility = _release_eligibility(np.array([400]), np.array([1]), steps=3)
+
+        np.testing.assert_array_equal(eligibility, [[True], [True], [True]])
+
+    def test_the_two_rules_combine_per_balloon(self):
+        eligibility = _release_eligibility(
+            np.array([2, 400]), np.array([0, 1]), steps=3
+        )
+
+        np.testing.assert_array_equal(
+            eligibility, [[False, True], [True, True], [True, True]]
+        )
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+@unittest.skipUnless(
+    os.environ.get("BPC_RUN_SLOW_TESTS", "0").strip().lower() in ("1", "true", "yes"),
+    "set BPC_RUN_SLOW_TESTS=1 to run a full scenario",
+)
+class TestARealScenario0SubmissionPasses(unittest.TestCase):
+    """The check this file did not have, and the one that mattered.
+
+    Every other test builds its submission by hand from scenario 1 cut to one
+    balloon. None ran the shipped scenario 0 end to end, which let the bug ship.
+    """
+
+    def test_the_shipped_scenario_0_run_is_not_accused_of_anything(self):
+        from BalloonPoppingGymEnv.agents.example_agents import AttitudeRateControlAgent
+        from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
+
+        parameters, given = load_scenario_parameters(0)
+        env = BalloonPoppingEnv(render_mode=None, parameters=parameters)
+        agent = AttitudeRateControlAgent(
+            given, rate_targets=[0.0, 0.0, 0.0], launch_time=1
+        )
+        observation, _ = env.reset(seed=parameters["scenario"]["random_seed"])
+        terminated = truncated = False
+        while not (terminated or truncated):
+            observation, _, terminated, truncated, _ = env.step(
+                agent.get_action(observation)
+            )
+
+        submission = {
+            "leaderboard_info": {
+                "team_name": "official",
+                "agent_name": "AttitudeRateControlAgent",
+                "scenario_number": 0,
+                "final_reward": int(env._popped_count),
+            },
+            "balloon_world_data": {
+                "scenario_parameters": parameters,
+                "trajectories": copy.deepcopy(env.trajectories),
+                "balloon_release_at_step": list(env._balloon_release_at_step),
+            },
+        }
+
+        findings = verify(submission, DEFAULT_TOLERANCE_METRES)
+        failures = [f"{f.name}: {f.detail}" for f in findings if not f.ok]
+
+        self.assertEqual(failures, [])
+        self.assertGreater(env._popped_count, 0, "this run should pop something")
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestTheReleaseRuleReachesTheVerdict(unittest.TestCase):
+    """The rule was correct and wired to nothing any test could see.
+
+    Replacing it with ``ones_like`` in ``verify()`` left all 27 tests green and
+    accepted a forged score. Two balloons, schedule ``[0, 50]``, tells them apart.
+    """
+
+    RELEASE_STEP = 50
+
+    @classmethod
+    def setUpClass(cls):
+        cls.clean = _build_submission(steps=40, balloons=2)
+
+    def setUp(self):
+        self.submission = copy.deepcopy(self.clean)
+        self.records = self.submission["balloon_world_data"]["trajectories"]
+        official = copy.deepcopy(
+            self.clean["balloon_world_data"]["scenario_parameters"]
+        )
+        patcher = patch(
+            "verify_submission._load_canonical_scenario",
+            lambda number: copy.deepcopy(official),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def failures(self):
+        return [
+            finding.name
+            for finding in verify(self.submission, DEFAULT_TOLERANCE_METRES)
+            if not finding.ok
+        ]
+
+    def test_the_fixture_has_a_balloon_that_is_not_released_yet(self):
+        """Or the two tests below would hold with the rule deleted.
+
+        The run is 40 steps and balloon 1 is released at 50, so it is on the
+        ground throughout and a claim against it is refusable on its own.
+        """
+        schedule = self.submission["balloon_world_data"]["balloon_release_at_step"]
+
+        self.assertEqual(list(schedule), [0, self.RELEASE_STEP])
+        self.assertGreater(self.RELEASE_STEP, len(self.records))
+
+    def test_an_honest_two_balloon_submission_still_passes(self):
+        """The half that stops the next one passing by refusing everything."""
+        self.assertEqual(self.failures(), [])
+
+    def test_a_pop_claimed_before_release_is_refused_through_verify(self):
+        """The forgery the rule exists to stop, driven through the entry point.
+
+        The status is forged to released and then popped. Only the scenario
+        knows balloon 1 is on the ground, so only its mask can refuse this.
+        """
+        for record in self.records[1:]:
+            record["balloon_status"][1] = 2
+        self.submission["leaderboard_info"]["final_reward"] = 1
+
+        self.assertIn("no balloon is popped before release", self.failures())
+
+    def test_a_status_matrix_of_the_wrong_width_is_reported_not_raised(self):
+        """The guard that keeps a bad file from ending the run.
+
+        Named, not just "something failed": the shape check below and the
+        release rule can both refuse this, and which one did is the difference
+        between a report a competitor can act on and a misleading one.
+        """
+        for record in self.records:
+            record["balloon_status"] = list(record["balloon_status"]) + [0]
+
+        self.assertIn("balloon_status", self.failures())
+
+    def test_a_scenario_that_disagrees_with_its_own_balloon_count_is_reported(self):
+        """The other way the mask and the status can differ in width, and the
+        only one the shape check cannot see: it takes its count from the
+        scenario file, and this is the scenario file disagreeing with the
+        environment it configures. Unguarded, numpy raises out of ``verify``."""
+        import verify_submission
+
+        real = verify_submission._regenerate_balloon_flights
+
+        def one_balloon_short(parameters):
+            flights, release_at_step, initial_status = real(parameters)
+            return flights[:-1], release_at_step[:-1], initial_status[:-1]
+
+        with patch.object(
+            verify_submission, "_regenerate_balloon_flights", one_balloon_short
+        ):
+            failures = self.failures()
+
+        self.assertIn("balloon status shape", failures)
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestWhatABadShapeCostsBeforeItIsRefused(unittest.TestCase):
+    """Rebuilding the world runs the balloon Monte Carlo, a hundred flights for
+    scenario 1. A file that could be refused for nothing should not pay it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.clean = _build_submission(steps=40, balloons=2)
+
+    def setUp(self):
+        self.submission = copy.deepcopy(self.clean)
+        self.records = self.submission["balloon_world_data"]["trajectories"]
+        official = copy.deepcopy(
+            self.clean["balloon_world_data"]["scenario_parameters"]
+        )
+        patcher = patch(
+            "verify_submission._load_canonical_scenario",
+            lambda number: copy.deepcopy(official),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def refused_without_regenerating(self):
+        """Run ``verify`` with the Monte Carlo booby trapped, and return the
+        failures. Reaching it at all is the failure being tested for."""
+        with patch(
+            "verify_submission._regenerate_balloon_flights",
+            side_effect=AssertionError("regenerated before checking the shape"),
+        ):
+            findings = verify(self.submission, DEFAULT_TOLERANCE_METRES)
+        return [finding.name for finding in findings if not finding.ok]
+
+    def test_an_honest_submission_is_the_one_that_pays_for_it(self):
+        """The half that stops every test here passing over a checker that
+        refuses everything before it gets as far as the physics."""
+        with self.assertRaises(AssertionError):
+            self.refused_without_regenerating()
+
+    def test_a_ragged_status_row_is_refused_first(self):
+        """``np.asarray`` raises on this rather than giving an array, so
+        unchecked it comes out of ``verify`` as a traceback."""
+        self.records[3]["balloon_status"] = [0]
+
+        self.assertIn("balloon_status", self.refused_without_regenerating())
+
+    def test_a_states_array_of_the_wrong_width_is_refused_first(self):
+        for record in self.records:
+            record["balloon_states"] = [row[:5] for row in record["balloon_states"]]
+
+        self.assertIn("balloon_states", self.refused_without_regenerating())
+
+    def test_a_record_missing_a_field_is_refused_first(self):
+        del self.records[2]["rocket_states"]
+
+        self.assertIn("rocket_states", self.refused_without_regenerating())
+
+    def test_a_record_that_is_not_a_mapping_is_refused_first(self):
+        self.records[1] = [0.0, 1.0]
+
+        self.assertIn("record structure", self.refused_without_regenerating())
+
+    def test_a_number_too_large_for_a_float_is_reported_not_raised(self):
+        """A submission is a file somebody else writes, so the shape check has
+        to answer rather than raise. `10**400` came out of `verify()` as an
+        OverflowError traceback."""
+        self.records[0]["balloon_states"][0][0] = 10**400
+
+        self.assertIn("balloon_states", self.refused_without_regenerating())
+
+    def test_the_wrong_number_of_balloons_is_refused_first(self):
+        """The count comes from the canonical scenario, so this needs no
+        Monte Carlo to answer either."""
+        for record in self.records:
+            record["balloon_status"] = list(record["balloon_status"]) + [0]
+
+        self.assertIn("balloon_status", self.refused_without_regenerating())
+
+
+class TestOneBadFileDoesNotStopTheBatch(unittest.TestCase):
+    """``main()`` caught a failed read and not a failed check, and checking is
+    the half that touches the arrays the submission controls."""
+
+    def test_a_verify_that_raises_costs_that_file_only(self):
+        import verify_submission
+
+        submissions = [{"leaderboard_info": {}}, {"leaderboard_info": {}}]
+        seen = []
+
+        def explode_once(submission, tolerance):
+            seen.append(submission)
+            if len(seen) == 1:
+                raise ValueError("ragged")
+            return [verify_submission.Finding("checked", True, "fine")]
+
+        with (
+            patch.object(
+                verify_submission,
+                "load_submission",
+                lambda path: submissions[len(seen)],
+            ),
+            patch.object(verify_submission, "verify", explode_once),
+        ):
+            status = verify_submission.main(["first.pkl", "second.pkl"])
+
+        self.assertEqual(len(seen), 2, "the second file was never checked")
+        self.assertEqual(status, 1)
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")

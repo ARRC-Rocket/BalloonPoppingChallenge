@@ -39,6 +39,7 @@ import argparse
 import json
 import os
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 import numpy as np
@@ -240,6 +241,53 @@ def check_scenario_is_official(submission):
     return findings, canonical
 
 
+# What each per-step record must hold, and how wide. `None` is the balloon
+# count, which comes from the canonical scenario rather than from the file.
+_RECORD_WIDTHS = {
+    "balloon_states": (None, 6),
+    "balloon_status": (None,),
+    "rocket_states": (13,),
+}
+
+
+def check_the_records_are_the_right_shape(submission, canonical):
+    """Cheap shape checks, before the scenario is rebuilt.
+
+    Rebuilding runs the balloon Monte Carlo, a hundred flights for scenario 1.
+    Paying for that and then rejecting the file on a shape it could have been
+    rejected on for nothing is the wrong order for untrusted input, and a ragged
+    record raises out of the checks below rather than being reported by them.
+    """
+    records = submission["balloon_world_data"]["trajectories"]
+    if not all(isinstance(record, Mapping) for record in records):
+        return [Finding("record structure", False, "a step record is not a mapping")]
+
+    balloons = canonical["balloon"]["num"]
+    findings = []
+    for field, width in _RECORD_WIDTHS.items():
+        expected = (len(records),) + tuple(balloons if w is None else w for w in width)
+        missing = [i for i, record in enumerate(records) if field not in record]
+        if missing:
+            findings.append(
+                Finding(field, False, f"{len(missing)} step records have no {field!r}")
+            )
+            continue
+        try:
+            # Ragged rows raise here rather than giving an object array, which
+            # is the report this exists to make instead of a traceback.
+            got = np.asarray([record[field] for record in records], dtype=float).shape
+        except Exception as error:  # noqa: BLE001 - the answer is "cannot read it"
+            # Not a list of the errors it can raise. `10**400` in a position
+            # raises OverflowError, which was not on that list and came out of
+            # `verify()` as a traceback, from a file a competitor writes.
+            findings.append(Finding(field, False, f"not a rectangular array: {error}"))
+            continue
+        findings.append(
+            Finding(field, got == expected, f"expected {expected}, got {got}")
+        )
+    return findings
+
+
 def _regenerate_balloon_flights(scenario_parameters):
     """Run the environment's own reset to get the flights the seed implies.
 
@@ -252,12 +300,31 @@ def _regenerate_balloon_flights(scenario_parameters):
 
     env = BalloonPoppingEnv(render_mode=None, parameters=scenario_parameters)
     env.reset(seed=scenario_parameters["scenario"]["random_seed"])
-    return np.asarray(env._balloon_flights, dtype=float), np.asarray(
-        env._balloon_release_at_step
+    return (
+        np.asarray(env._balloon_flights, dtype=float),
+        np.asarray(env._balloon_release_at_step),
+        # The state before any step runs. Scenario 0 starts every balloon
+        # released and its schedule never fires, so the schedule alone is not
+        # the rule. See _release_eligibility.
+        np.asarray(env._balloon_status[:, 0], dtype=int).copy(),
     )
 
 
-def check_balloon_trajectories(submission, tolerance, trusted_positions, canonical):
+def _release_eligibility(release_at_step, initial_status, steps):
+    """``(steps, balloons)`` mask of when each balloon may be released.
+
+    From step one where the environment already has it released, from its
+    schedule otherwise: scenario 0 schedules balloon 0 at 400 and pops it at 370.
+    """
+    # Row k is step k + 1, the same offset the trajectory comparison uses.
+    step_numbers = np.arange(1, steps + 1)[:, None]
+    scheduled = step_numbers >= release_at_step[None, :]
+    return scheduled | (initial_status[None, :] >= 1)
+
+
+def check_balloon_trajectories(
+    submission, tolerance, trusted_positions, flights, release_at_step
+):
     """The main check: every recorded balloon state came out of the simulator.
 
     ``canonical`` is the scenario as shipped, never the copy in the submission.
@@ -280,8 +347,6 @@ def check_balloon_trajectories(submission, tolerance, trusted_positions, canonic
                 f"expected (steps, balloons, 6), got {claimed.shape}",
             )
         ]
-
-    flights, release_at_step = _regenerate_balloon_flights(canonical)
 
     expected_balloons = flights.shape[0]
     if claimed.shape[1] != expected_balloons:
@@ -370,7 +435,9 @@ def check_balloon_trajectories(submission, tolerance, trusted_positions, canonic
     return findings
 
 
-def check_claimed_pops_are_reachable(submission, expected_positions, canonical):
+def check_claimed_pops_are_reachable(
+    submission, expected_positions, canonical, eligibility
+):
     """Every balloon claimed popped has to have been somewhere the rocket went.
 
     The checks above catch a balloon that was moved. They do not catch the
@@ -448,10 +515,10 @@ def check_claimed_pops_are_reachable(submission, expected_positions, canonical):
     # pre-launch rows are all-NaN by construction.
     steps = np.flatnonzero(flyable[:-1] & flyable[1:])
     for step in steps:
-        # The status at the *end* of the interval. A balloon released on this
-        # step is released before the environment detects pops on it, so reading
-        # the start would skip the interval it was actually popped over.
-        released = status[step + 1, claimed_popped] >= 1
+        # From the scenario, not from the submission: a submitted status can
+        # claim an early release and point at a rocket pass from before it. End
+        # of the interval, since a release lands before pops are detected on it.
+        released = eligibility[step + 1, claimed_popped]
         if not released.any():
             continue
         distance_squared = BalloonPoppingEnv._segment_distance_squared_batch(
@@ -492,7 +559,7 @@ def check_claimed_pops_are_reachable(submission, expected_positions, canonical):
     return findings
 
 
-def check_internal_consistency(submission):
+def check_internal_consistency(submission, eligibility=None):
     """Cheap checks that need no physics, so they cannot disagree with any.
 
     The trajectory check above says the balloons are real. It says nothing about
@@ -535,13 +602,33 @@ def check_internal_consistency(submission):
     # The rule that does hold is about when, not about the shape of the
     # sequence: no balloon is popped before the step it is released on. Row k
     # holds step k+1, the same offset the trajectory comparison uses.
-    release_at_step = np.asarray(world["balloon_release_at_step"], dtype=int)
+    # Against what the scenario allows, not the schedule; see _release_eligibility.
     popped_rows = status == 2
-    early = []
-    if release_at_step.shape[0] == status.shape[1]:
-        has_popped = popped_rows.any(axis=0)
-        first_pop_step = popped_rows.argmax(axis=0) + _TRAJECTORY_OFFSET
-        early = np.flatnonzero(has_popped & (first_pop_step < release_at_step))
+    # Two different failures. Having no scenario to compare against is not the
+    # same as having one and a status matrix that does not line up with it, and
+    # reporting the second as the first sends the reader looking for a scenario.
+    if eligibility is None:
+        # Not evaluated rather than passed. Reporting "every pop is on or after
+        # release" when nothing was compared puts an affirmative line under a
+        # report that has already failed for want of a scenario.
+        findings.append(
+            Finding(
+                "no balloon is popped before release",
+                False,
+                "not evaluated: no release schedule to compare against",
+            )
+        )
+        return findings
+    if eligibility.shape != status.shape:
+        findings.append(
+            Finding(
+                "balloon status shape",
+                False,
+                f"expected {eligibility.shape}, the submission has {status.shape}",
+            )
+        )
+        return findings
+    early = np.flatnonzero((popped_rows & ~eligibility).any(axis=0))
     findings.append(
         Finding(
             "no balloon is popped before release",
@@ -800,24 +887,43 @@ def verify(submission, tolerance):
     # names a scenario this repository does not ship, or whose parameters are
     # not the shipped ones, is reported here rather than checked against itself.
     findings, canonical = check_scenario_is_official(submission)
-    # These need no physics, so they run whatever the scenario turned out to be.
-    findings += check_internal_consistency(submission)
     if canonical is None:
+        # Nothing to measure eligibility against, so run only what needs no
+        # scenario at all.
+        return findings + check_internal_consistency(submission)
+
+    # Before the rebuild below, which is the expensive half. A file whose
+    # records are the wrong shape is rejected for nothing rather than after a
+    # hundred flights, and a ragged one is reported rather than raising.
+    shapes = check_the_records_are_the_right_shape(submission, canonical)
+    findings += shapes
+    if not all(finding.ok for finding in shapes):
         return findings
 
     # Before the balloons, because it needs nothing from them and it is what
-    # says the rocket path is worth comparing anything against.
+    # says the rocket path is worth comparing anything against. Also before
+    # the rebuild below, so a path that is not a trajectory costs nothing.
     findings += check_the_rocket_path_is_a_trajectory(submission, canonical)
+
+    # Once. Rebuilding it runs the balloon Monte Carlo, which for scenario 1 is
+    # a hundred flights, and it was being paid for twice per submission.
+    flights, release_at_step, initial_status = _regenerate_balloon_flights(canonical)
+    eligibility = _release_eligibility(
+        release_at_step,
+        initial_status,
+        len(submission["balloon_world_data"]["trajectories"]),
+    )
+    findings += check_internal_consistency(submission, eligibility)
 
     trusted_positions = []
     findings += check_balloon_trajectories(
-        submission, tolerance, trusted_positions, canonical
+        submission, tolerance, trusted_positions, flights, release_at_step
     )
     # Only worth asking where the rocket went if the balloons it is compared
     # against are the ones the seed produced.
     if trusted_positions and all(finding.ok for finding in findings):
         findings += check_claimed_pops_are_reachable(
-            submission, trusted_positions[0], canonical
+            submission, trusted_positions[0], canonical, eligibility
         )
     return findings
 
@@ -864,15 +970,17 @@ def main(argv=None):
             f"scenario {info.get('scenario_number')}, claimed score "
             f"{info.get('final_reward')}"
         )
-        # Every field below is a competitor's to shape. Without this the first
-        # malformed file ends the batch with a traceback and every file after it
-        # goes unchecked.
         try:
             findings = verify(submission, args.tolerance)
         except Exception as exc:  # noqa: BLE001 - report and move to the next file
+            # One unreadable file in a directory should cost that file, not the
+            # rest of the batch. Reading is already isolated this way; checking
+            # was not, and it is the half that touches the untrusted arrays,
+            # every field of which is a competitor's to shape.
             print(f"  [FAIL] could not be checked: {type(exc).__name__}: {exc}")
             failed = True
             continue
+
         for finding in findings:
             print(f"  {finding}")
         if any(not finding.ok for finding in findings):
