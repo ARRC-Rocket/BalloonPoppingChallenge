@@ -30,6 +30,81 @@ from rocketpy.tools import euler313_to_quaternions
 
 logger = logging.getLogger(__name__)
 
+# How many numbers each action field holds. The environment indexes `tvc` and
+# `launch_inclination_heading` by position, so a wrong count is not usable
+# either, and an empty array passes a finiteness test on its own.
+ACTION_FIELD_SIZES = {
+    "launch_inclination_heading": 2,
+    "tvc": 2,
+    "roll": 1,
+    "throttle": 1,
+}
+
+
+# Which repetition of an unusable action gets a log line. A broken policy stays
+# broken, and one line per step for the rest of the horizon is its own problem.
+_UNUSABLE_ACTION_LOG_STEPS = frozenset({1, 10, 100, 1000})
+
+
+def _is_launch_command(action):
+    """Whether `action["launch"]` asks for a launch, without guessing.
+
+    `bool(np.nan)` is True and a two element array raises, so the truthiness of
+    whatever arrives is not a safe question to ask directly.
+    """
+    try:
+        values = np.asarray(action["launch"]).reshape(-1)
+    except (KeyError, TypeError, ValueError):
+        return False
+    if values.size != 1:
+        return False
+    try:
+        value = float(values[0])
+    except (TypeError, ValueError, OverflowError):
+        return False
+    # Finite first: `nan != 0` is True, so a NaN would otherwise launch.
+    return bool(np.isfinite(value)) and value != 0.0
+
+
+def check_action(action):
+    """The action fields the environment cannot use, by name.
+
+    A policy that diverges emits NaN, and it is the most ordinary failure there
+    is while training one. An empty list means every field is usable.
+
+    Public so an agent can ask the same question before returning an action:
+
+        if check_action(action):
+            action = last_good_action
+    """
+    return sorted(_usable_action_fields(action)[1])
+
+
+def _usable_action_fields(action):
+    """The fields as arrays of the right size, and the names of the rest.
+
+    Validating a converted copy and then handing the original to the actuators
+    would check something other than what is used: a scalar `tvc` converts to a
+    finite array and then fails at `action["tvc"][0]`. So the converted values
+    are what the caller gets.
+    """
+    usable = {}
+    unusable = set()
+    for field, size in ACTION_FIELD_SIZES.items():
+        if field not in action:
+            unusable.add(field)
+            continue
+        try:
+            values = np.atleast_1d(np.asarray(action[field], dtype=float))
+        except (TypeError, ValueError, OverflowError):
+            unusable.add(field)
+            continue
+        if values.size != size or not np.all(np.isfinite(values)):
+            unusable.add(field)
+            continue
+        usable[field] = values
+    return usable, unusable
+
 
 def _remove_monte_carlo_workspace(directory):
     """Delete a Monte Carlo scratch directory, saying so if it will not go.
@@ -148,6 +223,8 @@ class BalloonPoppingEnv(gym.Env):
         self._balloon_states = np.array(np.zeros((self.balloon_parameters["num"], 6)))
         # (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ)
         self._rocket_sensors = np.full(12, np.nan)
+        # Steps whose action the environment could not use, for rate limiting.
+        self._unusable_action_steps = 0
         # (posX, posY, posZ, velX, velY, velZ, e0, e1, e2, e3, w1, w2, w3)
         self._rocket_states = np.full(13, np.nan)
         # Where the next pop sweep starts. Tracked separately from
@@ -294,6 +371,8 @@ class BalloonPoppingEnv(gym.Env):
 
         self._balloon_states = self._balloon_flights[:, :, 0]
         self._rocket_sensors = np.full(12, np.nan)
+        # Steps whose action the environment could not use, for rate limiting.
+        self._unusable_action_steps = 0
         self._rocket_states = np.full(13, np.nan)
         self._sweep_origin = None
         self.trajectories = None
@@ -325,28 +404,53 @@ class BalloonPoppingEnv(gym.Env):
         ground_mask = self._balloon_status[:, 0] == 0
         self._balloon_status[released_mask & ground_mask, 0] = 1
 
+        # A diverging policy emits NaN, and it is the most ordinary failure there
+        # is while training one. A step it cannot command is not a run it should
+        # lose, so the command is dropped and the episode carries on.
+        commands, unusable = _usable_action_fields(action)
+        if unusable:
+            # Rate limited, since a policy that breaks stays broken and one line
+            # per step for the rest of the horizon is its own denial of service.
+            self._unusable_action_steps += 1
+            if self._unusable_action_steps in _UNUSABLE_ACTION_LOG_STEPS:
+                logger.warning(
+                    "Step %d: ignoring %s, which the environment cannot use "
+                    "(%d such steps so far)",
+                    self.current_step,
+                    ", ".join(sorted(unusable)),
+                    self._unusable_action_steps,
+                )
+
         if not self.rocket_launched:
             _rocket_finished = False
-            if action["launch"]:  # Init rocket flight with first launch action
-                self.rocket_launched = True
-                self.__get_init_rocket_states(
-                    action["launch_inclination_heading"][0],
-                    action["launch_inclination_heading"][1],
-                )
+            # Refused rather than dropped, because there is no previous attitude
+            # to fall back on. The agent can launch on any later step.
+            if _is_launch_command(action) and "launch_inclination_heading" in commands:
+                attitude = commands["launch_inclination_heading"]
+                self.__get_init_rocket_states(attitude[0], attitude[1])
                 self.initial_solution[0] = (
                     self.current_step * self.simulation_parameters["time_step"]
                 )
                 self.__init_rocket_simulation()
                 self._sweep_origin = np.asarray(self.initial_solution[1:4], dtype=float)
+                # Last, so a failure above leaves the environment unlaunched
+                # rather than launched with no flight for the next step to use.
+                self.rocket_launched = True
         else:  # Apply action to step the rocket simulation and get sensor measurements
-            self._rocket_flight.rocket.roll_control.roll_torque = action["roll"]
-            self._rocket_flight.rocket.thrust_vector_control.gimbal_angle_x = action[
-                "tvc"
-            ][0]
-            self._rocket_flight.rocket.thrust_vector_control.gimbal_angle_y = action[
-                "tvc"
-            ][1]
-            self._rocket_flight.rocket.throttle_control.throttle = action["throttle"]
+            # Each actuator keeps the value it already holds when its field is
+            # dropped, which is what a real one does between commands.
+            if "roll" in commands:
+                self._rocket_flight.rocket.roll_control.roll_torque = float(
+                    commands["roll"][0]
+                )
+            if "tvc" in commands:
+                thrust_vector = self._rocket_flight.rocket.thrust_vector_control
+                thrust_vector.gimbal_angle_x = float(commands["tvc"][0])
+                thrust_vector.gimbal_angle_y = float(commands["tvc"][1])
+            if "throttle" in commands:
+                self._rocket_flight.rocket.throttle_control.throttle = float(
+                    commands["throttle"][0]
+                )
             self._rocket_flight.step_simulation()
             _sensor = self._rocket_flight.sensors
             self._rocket_sensors[:3] = _sensor[0].measurement  # gyro
