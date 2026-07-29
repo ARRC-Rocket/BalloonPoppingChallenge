@@ -24,6 +24,10 @@ dev = [
 	"ruff==0.15.20",
 	"pytest>=8.0",
 	"pytest-cov>=5.0",
+	# Reads this file's own requirement strings in test_optional_dependencies.
+	# It arrives transitively today, and a test that only works by accident is
+	# one release away from disappearing.
+	"packaging>=23.0",
 ]
 vpython = [
 	"vpython>=7.6.5",

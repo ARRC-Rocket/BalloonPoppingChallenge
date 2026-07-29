@@ -12,6 +12,7 @@
   },
   "downsample_stride": 50,
   "num_steps_full": 6012,
+  "launch_step": 102,
   "popped_count": 10,
   "pop_step": [
     370,

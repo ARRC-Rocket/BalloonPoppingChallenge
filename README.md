@@ -279,7 +279,7 @@ Keywords: GNC, autonomous rocket, optimization, path-finding.
 ### Competition Leaderboard
 
 Submit your results to: [https://balloonpoppingchallenge.arrcrocket.org/](https://balloonpoppingchallenge.arrcrocket.org/).
-To generate the required .pkl file for submission, please follow these steps:
+To generate the required .json file for submission, please follow these steps:
 
 1. Register for the competition [with this form](https://docs.google.com/forms/d/e/1FAIpQLSegCqnI4t-R_6Nxtbkf-XJ-V3L5-_DlyDxmSU_FY2Qa1lvLXQ/viewform). Organizers will send the `team_name` and `team_secret` through email.
 2. Edit [eval_cfg.yaml](./BalloonPoppingGymEnv/evaluation/configs/example_eval_cfg.yaml)
@@ -296,7 +296,7 @@ To generate the required .pkl file for submission, please follow these steps:
     python .\BalloonPoppingGymEnv\evaluation\evaluate.py .\BalloonPoppingGymEnv\evaluation\configs\{eval_cfg}.yaml
     ```
 
-4. Upload your .pkl file generated in [/results](BalloonPoppingGymEnv\evaluation\results) folder to the [leaderboard](https://balloonpoppingchallenge.arrcrocket.org/)
+4. Upload your .json file generated in [/results](BalloonPoppingGymEnv\evaluation\results) folder to the [leaderboard](https://balloonpoppingchallenge.arrcrocket.org/). The file is plain JSON, and it holds your `team_secret` in the clear, so treat it as a credential.
 
 ### Competition Scenarios
 

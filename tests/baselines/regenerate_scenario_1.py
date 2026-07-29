@@ -16,6 +16,7 @@ from pathlib import Path
 from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
 
 from tests.baselines.baseline_io import write_baseline
+from tests.position_tolerance import launch_step
 
 from tests.test_scenario1_regression import (
     AGENT_KWARGS,
@@ -43,6 +44,10 @@ def main():
         "balloon_time_stride": BALLOON_TIME_STRIDE,
         "balloon_index_stride": BALLOON_INDEX_STRIDE,
         "num_steps_full": int(run.rocket_positions.shape[0]),
+        # The step the rocket first has a state at. The rocket trajectory below
+        # is sliced from that row while the balloons are sampled from step 0, so
+        # without this the two are on clocks that can slide against each other.
+        "launch_step": launch_step(run.rocket_positions, run.record_step),
         "final_balloon_status_counts": run.status_counts,
         "popped_count": int(run.popped_count),
         "rocket_position_downsampled": post_launch_rocket_positions(

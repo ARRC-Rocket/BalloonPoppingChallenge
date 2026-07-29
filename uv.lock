@@ -454,6 +454,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "packaging" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
@@ -466,6 +467,7 @@ vpython = [
 requires-dist = [
     { name = "activerocketpy", extras = ["all"], editable = "ActiveRocketPy" },
     { name = "gymnasium", specifier = ">=1.2.3" },
+    { name = "packaging", marker = "extra == 'dev'", specifier = ">=23.0" },
     { name = "pymap3d", specifier = ">=3.2.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },

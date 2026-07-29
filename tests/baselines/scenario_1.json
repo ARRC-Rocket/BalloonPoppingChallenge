@@ -14,6 +14,7 @@
   "balloon_time_stride": 200,
   "balloon_index_stride": 1,
   "num_steps_full": 5964,
+  "launch_step": 102,
   "final_balloon_status_counts": {
     "ground": 0,
     "released": 100,

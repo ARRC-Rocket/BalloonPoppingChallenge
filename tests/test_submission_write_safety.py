@@ -12,6 +12,7 @@ Only ``rocketpy`` is guarded: a missing simulation stack is a legitimate skip,
 but a broken import inside this package is a failure and must stay loud.
 """
 
+import logging
 import io
 import json
 import os
@@ -107,10 +108,151 @@ class TestAtomicWrite(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.directory = directory.name
-        self.out_path = os.path.join(self.directory, "submission.pkl")
+        self.out_path = os.path.join(self.directory, "submission.json")
 
     def _leftovers(self):
-        return [name for name in os.listdir(self.directory) if name != "submission.pkl"]
+        return [
+            name for name in os.listdir(self.directory) if name != "submission.json"
+        ]
+
+    def test_a_failure_before_the_handle_has_an_owner_closes_it(self):
+        """`mkstemp` returns a raw descriptor and only `fdopen` gives it an owner.
+
+        A failure in between used to unlink the name and leave the descriptor
+        open on an anonymous inode, which a long-lived process repeats until it
+        runs out of them.
+        """
+        opened = {}
+        real_mkstemp = tempfile.mkstemp
+
+        def remember(*args, **kwargs):
+            handle, path = real_mkstemp(*args, **kwargs)
+            opened["handle"] = handle
+            return handle, path
+
+        with (
+            mock.patch.object(utils.tempfile, "mkstemp", remember),
+            mock.patch.object(os, "fdopen", side_effect=ValueError("bad mode")),
+            self.assertRaises(ValueError),
+        ):
+            utils._write_atomically(self.out_path, lambda file: None)
+
+        with self.assertRaises(OSError):
+            os.fstat(opened["handle"])
+        self.assertEqual(self._leftovers(), [])
+
+    def test_a_descriptor_the_wrapper_closed_is_not_closed_again(self):
+        """`os.fdopen` closes the descriptor itself on some failures.
+
+        An unknown encoding is one: it raises after the descriptor is gone. A
+        cleanup path holding the old number then closes whatever has since been
+        given it. Proved by taking that number back with a real file and
+        checking it is still open afterwards.
+        """
+        opened = {}
+        real_mkstemp = tempfile.mkstemp
+
+        def remember(*args, **kwargs):
+            handle, path = real_mkstemp(*args, **kwargs)
+            opened["handle"] = handle
+            return handle, path
+
+        victim = {}
+        real_unlink = os.unlink
+
+        def take_the_number_back(path, *args, **kwargs):
+            """Stand in for another thread claiming the freed descriptor."""
+            if ".partial_" in os.fspath(path) and "file" not in victim:
+                victim["file"] = open(os.devnull, "rb")
+            return real_unlink(path, *args, **kwargs)
+
+        with (
+            mock.patch.object(utils.tempfile, "mkstemp", remember),
+            mock.patch.object(os, "unlink", take_the_number_back),
+            self.assertRaises(LookupError),
+        ):
+            utils._write_atomically(
+                self.out_path, lambda _file: None, mode="w", encoding="not-an-encoding"
+            )
+
+        self.addCleanup(victim["file"].close)
+        # Readable, so nothing closed the number out from under it.
+        self.assertEqual(victim["file"].read(), b"")
+        self.assertNotIn(opened["handle"], (None,))
+
+    def test_the_descriptor_is_closed_before_the_rename(self):
+        """Windows refuses to rename a file that still has an open handle."""
+        order = []
+        real_close, real_replace = os.close, os.replace
+
+        def note_close(handle):
+            order.append("close")
+            return real_close(handle)
+
+        def note_replace(source, target):
+            order.append("replace")
+            return real_replace(source, target)
+
+        with (
+            mock.patch.object(os, "close", note_close),
+            mock.patch.object(os, "replace", note_replace),
+        ):
+            utils._write_atomically(self.out_path, lambda file: file.write(b"x"))
+
+        self.assertEqual(order, ["close", "replace"])
+
+    def test_a_logger_that_raises_does_not_replace_the_write_error(self):
+        """Filters and handlers are the application's code and can raise."""
+
+        class _Exploding(logging.Filter):
+            def filter(self, record):
+                raise RuntimeError("logging failed")
+
+        exploding = _Exploding()
+        utils.logger.addFilter(exploding)
+        self.addCleanup(utils.logger.removeFilter, exploding)
+
+        real_unlink = os.unlink
+
+        def refuse(path, *args, **kwargs):
+            if ".partial_" in os.fspath(path):
+                raise PermissionError("cleanup denied")
+            return real_unlink(path, *args, **kwargs)
+
+        def fail(_file):
+            raise OSError("disk full")
+
+        with (
+            mock.patch.object(os, "unlink", refuse),
+            self.assertRaisesRegex(OSError, "disk full"),
+        ):
+            utils._write_atomically(self.out_path, fail)
+
+    def test_a_cleanup_that_fails_is_reported_rather_than_swallowed(self):
+        """The original error still raises, but the file left behind is named.
+
+        `except OSError: pass` meant a partial submission could sit in the
+        directory with nothing anywhere saying so.
+        """
+        real_unlink = os.unlink
+
+        def refuse(path, *args, **kwargs):
+            if ".partial_" in os.fspath(path):
+                raise PermissionError("cleanup denied")
+            return real_unlink(path, *args, **kwargs)
+
+        def fail(_file):
+            raise OSError("disk full")
+
+        with (
+            mock.patch.object(os, "unlink", refuse),
+            self.assertLogs(utils.logger, logging.WARNING) as caught,
+            self.assertRaisesRegex(OSError, "disk full"),
+        ):
+            utils._write_atomically(self.out_path, fail)
+
+        self.assertIn(".partial_", "".join(caught.output))
+        self.assertFalse(os.path.exists(self.out_path))
 
     def test_a_successful_write_lands_at_the_final_path(self):
         utils._write_atomically(self.out_path, lambda file: file.write(b"payload"))
@@ -274,7 +416,7 @@ class TestPackedOutputPath(unittest.TestCase):
         )
         self.assertNotEqual(names[0], names[1])
         self.assertRegex(
-            names[0], r"^\d{8}T\d{6}\.\d{3}Z_team_[0-9a-f]{32}_submission\.pkl$"
+            names[0], r"^\d{8}T\d{6}\.\d{3}Z_team_[0-9a-f]{32}_submission\.json$"
         )
 
     def test_two_names_that_slug_the_same_still_get_different_paths(self):
@@ -315,7 +457,9 @@ class TestPackedOutputPath(unittest.TestCase):
                 lambda _path, writer, **_kw: writer(io.BytesIO()),
             ),
             mock.patch.object(
-                utils.pickle, "dump", lambda payload, _file: captured.update(payload)
+                utils.json,
+                "dump",
+                lambda payload, _file, **_k: captured.update(payload),
             ),
         ):
             utils.pack_for_submission(
