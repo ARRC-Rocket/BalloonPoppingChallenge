@@ -55,8 +55,8 @@ Run what CI runs:
 ```shell
 uvx ruff@0.15.20 check BalloonPoppingGymEnv/ tests/
 uvx ruff@0.15.20 format --check BalloonPoppingGymEnv/ tests/
-uv lock --check
-BPC_RUN_SLOW_TESTS=1 pytest tests/ --cov=BalloonPoppingGymEnv
+uv sync --locked --extra dev
+BPC_RUN_SLOW_TESTS=1 uv run --no-sync pytest tests/ --cov=BalloonPoppingGymEnv
 ```
 
 `make format` fixes import order and formatting in place, using the same pinned
@@ -75,11 +75,10 @@ ruff failed
 So an editor integration or a stale environment tells you, instead of formatting a
 file that CI then rejects.
 
-`uv lock --check` matters more than it looks. CI installs with pip, so nothing
-else notices `uv.lock` going stale, and it goes stale for more reasons than the
-submodule: the release that moved `version` in `pyproject.toml` was enough. It
-compares the lockfile against the project metadata, the path dependencies and
-their declared versions.
+`--locked` matters more than it looks. It fails when `uv.lock` has gone
+stale against the ActiveRocketPy submodule, and it is what makes a green run a
+statement about a known set of versions: CI installs from the lockfile too, so
+what you run here and what CI runs are the same software.
 
 What it does not check is the simulator's source. ActiveRocketPy is an editable
 path dependency, so the lockfile records its version and dependencies with no
