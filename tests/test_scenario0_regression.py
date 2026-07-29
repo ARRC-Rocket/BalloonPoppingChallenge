@@ -62,10 +62,9 @@ DOWNSAMPLE_STRIDE = 50
 STEP_COUNT_ABS_TOL = 2
 # Downsampling turns those few steps into at most one row of difference.
 ROW_COUNT_ABS_TOL = 1
-# How far the flight is moved in the test that proves the launch step is being
-# read. Ten steps is 0.1 s: five times STEP_COUNT_ABS_TOL, so it is not jitter,
-# and a sixth of the 60 steps the trajectory comparison accepts on its own, so
-# nothing but the launch step can be what rejects it.
+# How far the flight is moved in the test that proves the launch step is read.
+# Ten steps is 0.1 s: five times STEP_COUNT_ABS_TOL, so not jitter, and a sixth
+# of the 60 steps the trajectory comparison accepts on its own.
 DISPLACEMENT_PROBE_STEPS = 10
 # Scenario #0 has 10 static balloons and the fixed agent is expected to pop them
 # all; pin that semantic count so regenerating the baseline cannot quietly bless
@@ -135,8 +134,7 @@ def run_scenario_0():
     # step i+1. Read the step back out of the record's own clock rather than
     # writing that offset down here, so this keeps meaning what its name says if
     # the logging ever starts somewhere else. The same offset is already carried
-    # by scenario 1's release timing and by the submission checker. It dates the
-    # pop steps below and the launch step the baseline is anchored to.
+    # by scenario 1's release timing and by the submission checker.
     record_step = np.rint(
         np.asarray([step["time"] for step in env.trajectories], dtype=float)
         / scenario_params["simulation"]["time_step"]
@@ -318,25 +316,15 @@ class TestScenario0Regression(unittest.TestCase):
             ROW_COUNT_ABS_TOL,
         )
 
-    # The pipeline lag between the step whose clock first reaches launch_time and
-    # the first row carrying a finite state. Measured as 2 on both scenarios, and
-    # it is structural rather than tuned: the launch action is read on one step
-    # and the integrator reports its first state on the next.
+    # The lag between the step whose clock first reaches launch_time and the
+    # first row carrying a finite state. Measured as 2 on both scenarios, and
+    # structural: the action is read on one step, the state arrives on the next.
     LAUNCH_PIPELINE_LAG = 2
 
     def test_the_launch_step_is_the_one_the_agent_was_asked_for(self):
-        """So regenerating cannot bless a flight that launches late.
-
-        The baseline value is compared against the baseline, which says nothing
-        about whether it is right. Measured: moving the agent's launch_time from
-        1 s to 3 s and regenerating writes launch_step 302 and every test here
-        passes. This file already guards popped_count against exactly that, on
-        the stated grounds that a regression must not be blessed by regenerating,
-        and the new field needs the same.
-
-        Derived from the agent's own configuration and the scenario clock, so it
-        is an independent statement rather than the baseline restating itself.
-        """
+        """So regenerating cannot bless a flight that launches late: moving the
+        agent's launch_time from 1 s to 3 s and regenerating writes launch_step
+        302 with every test passing. Derived from the agent's own configuration."""
         parameters, _given = load_scenario_parameters(0)
         implied = AGENT_KWARGS["launch_time"] / parameters["simulation"]["time_step"]
 
@@ -350,33 +338,21 @@ class TestScenario0Regression(unittest.TestCase):
 
     def test_the_flight_happens_when_the_baseline_says_it_does(self):
         """*When*, which the trajectory comparison throws away.
-
-        ``post_launch_positions`` slices from the first finite row, so what is
-        compared above is launch-relative and the same shape of flight passes
-        wherever in the episode it sits.
-        """
+        ``post_launch_positions`` slices from the first finite row, so the same
+        shape of flight passes wherever in the episode it sits."""
         assert_launch_step_matches(
             self, self.launch_step, self.baseline["launch_step"], STEP_COUNT_ABS_TOL
         )
 
     def test_a_flight_displaced_in_time_is_rejected(self):
-        """The anchor above, pinned by the case that gets past everything else.
-
-        Measured on this file before the anchor existed: the whole flight moved
-        later by k steps, with the episode length preserved, passed all seven
-        tests for every k up to 60. The first k to fail was 61, and it failed on
-        the downsampled row count rather than on any clock.
-
-        Both halves are asserted, because the pass is the point. The trajectory
-        comparison is shown accepting the displaced flight, so the rejection
-        below can only be coming from the launch step; if a later change made the
-        trajectory comparison catch this on its own, the first assertion fails
-        and says so instead of leaving a check here that nothing needs.
-        """
+        """The anchor above, pinned by the case that gets past everything else:
+        the whole flight moved later by k steps, episode length preserved, passed
+        all seven tests for every k up to 60, and 61 failed on the row count."""
         displaced = displace_flight_in_time(
             self.run_result.positions, DISPLACEMENT_PROBE_STEPS
         )
 
+        # Asserted to pass, so the rejection below can only be the launch step.
         assert_positions_match(
             self,
             post_launch_positions(displaced),
@@ -385,14 +361,9 @@ class TestScenario0Regression(unittest.TestCase):
             ROW_COUNT_ABS_TOL,
         )
 
-        # Matched on the message, not merely on the type. ``launch_step``
-        # raises AssertionError for its own input guards too, so a bare
-        # assertRaises passes when the helper rejects the arguments rather
-        # than the clock. Measured: dropping the tail trim in
-        # ``displace_flight_in_time``, which breaks the same-step-count
-        # contract its docstring promises, left this test passing while
-        # the real failure was "the clock has 6012 entries and the
-        # trajectory has 6022".
+        # Matched on the message, not just the type: ``launch_step`` raises
+        # AssertionError for its own input guards too. Dropping the tail trim in
+        # ``displace_flight_in_time`` left this passing on "6012 entries, 6022".
         with self.assertRaisesRegex(AssertionError, "launched at step"):
             assert_launch_step_matches(
                 self,

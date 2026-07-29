@@ -109,10 +109,9 @@ EXPECTED_POPPED_COUNT = 0
 # ~6000-step flight would wave through a full second of early termination.
 STEP_COUNT_ABS_TOL = 2
 ROW_COUNT_ABS_TOL = 1
-# How far the flight is moved in the test that proves the launch step is being
-# read. Ten steps is 0.1 s: five times STEP_COUNT_ABS_TOL, so it is not jitter,
-# and a sixth of the 62 steps the trajectory comparison accepts on its own, so
-# nothing but the launch step can be what rejects it.
+# How far the flight is moved in the test that proves the launch step is read.
+# Ten steps is 0.1 s: five times STEP_COUNT_ABS_TOL, so not jitter, and a sixth
+# of the 62 steps the trajectory comparison accepts on its own.
 DISPLACEMENT_PROBE_STEPS = 10
 
 
@@ -192,11 +191,9 @@ def run_scenario_1():
     # ``step_record`` already carries ``balloon_status`` for every step, so the
     # release *timing* needs no extra instrumentation in the environment.
     status_history = np.asarray([step["balloon_status"] for step in env.trajectories])
-    # A simulation step, not a row number, read back out of the record's own
-    # clock rather than from the row index: ``step()`` increments
-    # ``current_step`` before it appends the record, so row i is step i+1, and
-    # the offset is better derived than written down. Scenario 0 dates its pop
-    # steps the same way.
+    # A simulation step, not a row number, read back off the record's own clock:
+    # ``step()`` increments ``current_step`` before it appends the record, so row
+    # i is step i+1. Scenario 0 dates its pop steps the same way.
     record_step = np.rint(
         np.asarray([step["time"] for step in env.trajectories], dtype=float)
         / scenario_params["simulation"]["time_step"]
@@ -420,31 +417,9 @@ class TestScenario1Regression(unittest.TestCase):
         )
 
     def test_the_release_schedule_matches_what_the_parameters_imply(self):
-        """Derived from the scenario file, not read back from the environment.
-
-        The timing check compares against the environment's own
-        ``_balloon_release_at_step``. If the schedule were generated wrongly and
-        the status update followed the same wrong schedule, the two would still
-        agree. This is the independent half: balloon k leaves the ground at
-        ``k * release_interval`` seconds, whatever the shuffle does to the order.
-
-        Independent now means it does not recompute what the environment
-        computes. The previous version asked for
-        ``arange(num) * int(release_interval / time_step)``, which is the same
-        float division on the same two numbers that ``_release_spacing_in_steps``
-        performs, so an error in that expression landed identically on both
-        sides and cancelled. Measured on the arithmetic the two shared:
-        ``0.3 / 0.1`` is 2.9999999999999996, so both truncated it to a spacing
-        of 2 while the answer is 3, and the comparison was of 2 against 2. Same
-        at 0.7 / 0.1 (6 against 7) and 2.3 / 0.1 (22 against 23).
-
-        So the comparison is in seconds, where the scenario file states the
-        interval, and the only conversion left here is a multiplication. The
-        tolerance is half a time step because the schedule can only land on
-        whole steps: that is the coarsest a correct schedule can be off by, and
-        it is tighter than the one whole step the truncation cost at the very
-        first balloon.
-        """
+        """Derived from the scenario file, not read back from the environment:
+        the old ``int(release_interval / time_step)`` repeated the environment's
+        own division, comparing 2 against 2 where ``0.3 / 0.1`` should give 3."""
         parameters, _ = load_scenario_parameters(SCENARIO_NUMBER)
         time_step = parameters["simulation"]["time_step"]
         release_interval = parameters["balloon"]["release_interval"]
@@ -452,6 +427,7 @@ class TestScenario1Regression(unittest.TestCase):
         scheduled_seconds = np.sort(self.run_result.release_at_step) * time_step
         expected_seconds = np.arange(parameters["balloon"]["num"]) * release_interval
 
+        # Half a time step: a correct schedule can only land on whole steps.
         np.testing.assert_allclose(
             scheduled_seconds, expected_seconds, rtol=0, atol=time_step / 2
         )
@@ -505,25 +481,15 @@ class TestScenario1Regression(unittest.TestCase):
 
         assert_positions_match(self, actual, expected, "balloon", ROW_COUNT_ABS_TOL)
 
-    # The pipeline lag between the step whose clock first reaches launch_time and
-    # the first row carrying a finite state. Measured as 2 on both scenarios, and
-    # it is structural rather than tuned: the launch action is read on one step
-    # and the integrator reports its first state on the next.
+    # The lag between the step whose clock first reaches launch_time and the
+    # first row carrying a finite state. Measured as 2 on both scenarios, and
+    # structural: the action is read on one step, the state arrives on the next.
     LAUNCH_PIPELINE_LAG = 2
 
     def test_the_launch_step_is_the_one_the_agent_was_asked_for(self):
-        """So regenerating cannot bless a flight that launches late.
-
-        The baseline value is compared against the baseline, which says nothing
-        about whether it is right. Measured: moving the agent's launch_time from
-        1 s to 3 s and regenerating writes launch_step 302 and every test here
-        passes. This file already guards popped_count against exactly that, on
-        the stated grounds that a regression must not be blessed by regenerating,
-        and the new field needs the same.
-
-        Derived from the agent's own configuration and the scenario clock, so it
-        is an independent statement rather than the baseline restating itself.
-        """
+        """So regenerating cannot bless a flight that launches late: moving the
+        agent's launch_time from 1 s to 3 s and regenerating writes launch_step
+        302 with every test passing. Derived from the agent's own configuration."""
         parameters, _given = load_scenario_parameters(1)
         implied = AGENT_KWARGS["launch_time"] / parameters["simulation"]["time_step"]
 
@@ -536,36 +502,22 @@ class TestScenario1Regression(unittest.TestCase):
         )
 
     def test_the_flight_happens_when_the_baseline_says_it_does(self):
-        """*When*, which matters more here than it does on scenario 0.
-
-        This run pops nothing, so there is no pop step to date the rocket by,
-        and ``post_launch_rocket_positions`` re-zeroes the trajectory on its own
-        first flown row. The balloons, meanwhile, are compared on the absolute
-        clock from step 0. Without this the two halves of the comparison are on
-        clocks that can slide against each other freely, and their relative
-        phase is exactly what pop detection depends on.
-        """
+        """*When*, which matters more here than on scenario 0. This run pops
+        nothing, so nothing dates the rocket, while the balloons are compared on
+        the absolute clock from step 0, and pop detection is their relative phase."""
         assert_launch_step_matches(
             self, self.launch_step, self.baseline["launch_step"], STEP_COUNT_ABS_TOL
         )
 
     def test_a_flight_displaced_in_time_is_rejected(self):
-        """The anchor above, pinned by the case that gets past everything else.
-
-        Measured on this file before the anchor existed: the whole rocket flight
-        moved later by k steps, with the episode length preserved and the
-        balloons left where they were, passed all twelve tests for every k up to
-        62. The first k to fail was 63, and it failed on the downsampled row
-        count rather than on any clock.
-
-        Both halves are asserted, because the pass is the point. The trajectory
-        comparison is shown accepting the displaced flight, so the rejection
-        below can only be coming from the launch step.
-        """
+        """The anchor above, pinned by the case that gets past everything else:
+        the rocket moved later by k steps, balloons left alone, passed all twelve
+        tests for every k up to 62, and 63 failed on the downsampled row count."""
         displaced = displace_flight_in_time(
             self.run_result.rocket_positions, DISPLACEMENT_PROBE_STEPS
         )
 
+        # Asserted to pass, so the rejection below can only be the launch step.
         assert_positions_match(
             self,
             post_launch_rocket_positions(displaced),
@@ -574,14 +526,9 @@ class TestScenario1Regression(unittest.TestCase):
             ROW_COUNT_ABS_TOL,
         )
 
-        # Matched on the message, not merely on the type. ``launch_step``
-        # raises AssertionError for its own input guards too, so a bare
-        # assertRaises passes when the helper rejects the arguments rather
-        # than the clock. Measured: dropping the tail trim in
-        # ``displace_flight_in_time``, which breaks the same-step-count
-        # contract its docstring promises, left this test passing while
-        # the real failure was "the clock has 6012 entries and the
-        # trajectory has 6022".
+        # Matched on the message, not just the type: ``launch_step`` raises
+        # AssertionError for its own input guards too. Dropping the tail trim in
+        # ``displace_flight_in_time`` left this passing on "6012 entries, 6022".
         with self.assertRaisesRegex(AssertionError, "launched at step"):
             assert_launch_step_matches(
                 self,
@@ -594,21 +541,13 @@ class TestScenario1Regression(unittest.TestCase):
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
 class TestTheReleaseSpacing(unittest.TestCase):
     """The interval-to-steps conversion on its own, without running a scenario.
-
-    The scenario test above can only see this through the shipped numbers, and
-    the shipped numbers divide exactly, so the whole class of error it is meant
-    to catch is invisible there. These call the conversion directly on intervals
-    the scenarios do not use, which costs no simulation.
-    """
+    The shipped numbers divide exactly, so the error this catches is invisible in
+    the scenario test above; these call it on intervals the scenarios never use."""
 
     def test_an_interval_that_divides_just_under_a_whole_step(self):
-        """Both operands are float seconds, so their quotient is a binary float.
-
-        Measured: 0.3 / 0.1 is 2.9999999999999996, 0.7 / 0.1 is
-        6.999999999999999 and 2.3 / 0.1 is 22.999999999999996. Truncating any of
-        them loses a whole step, and every balloon after the first is then
-        released early by a growing multiple of it.
-        """
+        """Both operands are float seconds, so their quotient is a binary float:
+        0.3 / 0.1 is 2.9999999999999996, 0.7 / 0.1 is 6.999999999999999 and
+        2.3 / 0.1 is 22.999999999999996. Truncating any of them loses a step."""
         for release_interval, time_step, expected in (
             (0.3, 0.1, 3),
             (0.7, 0.1, 7),
@@ -621,11 +560,8 @@ class TestTheReleaseSpacing(unittest.TestCase):
 
     def test_the_shipped_scenarios_keep_the_spacing_they_already_had(self):
         """Rounding instead of truncating must not move a committed baseline.
-
-        1 / 0.01 and 0.5 / 0.01 both come out exactly integral, so the two
-        scenarios are unaffected by the change above. Pinned rather than argued,
-        because a future scenario edit is exactly when it would stop being true.
-        """
+        1 / 0.01 and 0.5 / 0.01 are exactly integral, so the two scenarios are
+        unaffected; pinned because a scenario edit is when that would change."""
         for scenario, expected in ((0, 100), (SCENARIO_NUMBER, 50)):
             with self.subTest(scenario=scenario):
                 parameters, _ = load_scenario_parameters(scenario)
