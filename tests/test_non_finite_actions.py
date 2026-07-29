@@ -14,7 +14,10 @@ one bad step.
 """
 
 import logging
+import signal
 import unittest
+from contextlib import contextmanager
+from unittest import mock
 from importlib.util import find_spec
 
 import numpy as np
@@ -27,6 +30,41 @@ if _STACK_AVAILABLE:
         check_action,
     )
     from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
+
+# A step takes milliseconds. This is a bound on a run that has stopped
+# returning, not a performance assertion, so it is far above anything real.
+STEP_TIME_LIMIT_SECONDS = 30.0
+
+
+@contextmanager
+def _returns_within(seconds):
+    """Fail rather than hang if the block does not finish.
+
+    A step count cannot bound a step that does not return, and this is exactly
+    the shape that produced one: without the guard, a NaN on the first step
+    after launch left the solver refusing to accept a step, and the test ran
+    twenty two minutes before it was killed by hand.
+
+    `SIGALRM` is delivered between bytecodes, and the solver's inner loop calls
+    back into Python for the derivative, so it does arrive. Verified against the
+    real hang: it fired at 3.00 s of a run that would not have ended. POSIX
+    only, and skipped where the signal does not exist.
+    """
+    if not hasattr(signal, "SIGALRM"):
+        yield
+        return
+
+    def ring(_signum, _frame):
+        raise AssertionError(f"a step did not return within {seconds} seconds")
+
+    previous = signal.signal(signal.SIGALRM, ring)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
 
 SCENARIO = 0
 LAUNCH_STEP = 1
@@ -189,26 +227,76 @@ class TestAnActionTheEnvironmentCannotUse(unittest.TestCase):
         return action
 
     def _flown(self, env, steps, corrupt=None):
-        """Launch, then step, optionally corrupting one field throughout."""
+        """Launch, then step, optionally corrupting one field throughout.
+
+        Returns the environment and how the last step ended, because "the run
+        carried on" is a claim about those flags rather than about the number of
+        records: a terminal step appends one too.
+        """
+        terminated = truncated = False
         for index in range(LAUNCH_STEP + steps):
             action = self._action(env, launch=index == LAUNCH_STEP - 1)
             if corrupt and index >= LAUNCH_STEP:
                 action[corrupt] = np.full_like(
                     np.asarray(action[corrupt], dtype=float), np.nan
                 )
-            env.step(action)
-        return env
+            with _returns_within(STEP_TIME_LIMIT_SECONDS):
+                _observation, _reward, terminated, truncated, _info = env.step(action)
+        return env, terminated, truncated
 
     def test_a_control_field_of_nans_does_not_end_the_run(self):
-        """The case ActiveRocketPy #19 turns into a ValueError without this."""
+        """The case ActiveRocketPy #19 turns into a ValueError without this.
+
+        Each step is given a wall clock bound as well. Without the guard this is
+        the test that stops returning, and a run that never finishes reports
+        nothing: it takes the CI job's whole budget to say so.
+        """
         for field in ("tvc", "roll", "throttle"):
             with self.subTest(field=field):
-                env = self._flown(self._fresh(), STEPS_AFTER_LAUNCH, corrupt=field)
+                env, terminated, truncated = self._flown(
+                    self._fresh(), STEPS_AFTER_LAUNCH, corrupt=field
+                )
 
                 self.assertTrue(env.rocket_launched)
+                self.assertFalse(terminated, "the flight ended")
+                self.assertFalse(truncated, "the episode ran out of horizon")
                 self.assertEqual(
                     len(env.trajectories), LAUNCH_STEP + STEPS_AFTER_LAUNCH
                 )
+
+    def test_the_recorded_state_stays_finite_through_a_dropped_command(self):
+        """Dropping the field has to keep the NaN out of the simulation, not
+        only out of the score. A run whose recorded state is already NaN passes
+        every check above.
+
+        Every step after launch, not every step: the record for the step before
+        the rocket exists is all NaN by design, and a clean run has the same one.
+        """
+        for field in ("tvc", "roll", "throttle"):
+            with self.subTest(field=field):
+                env, _terminated, _truncated = self._flown(
+                    self._fresh(), STEPS_AFTER_LAUNCH, corrupt=field
+                )
+                states = np.asarray(
+                    [record["rocket_states"] for record in env.trajectories],
+                    dtype=float,
+                )
+                flown = states[LAUNCH_STEP:]
+
+                self.assertEqual(len(flown), STEPS_AFTER_LAUNCH)
+                self.assertTrue(np.isfinite(flown).all())
+
+    def test_the_only_record_that_is_not_finite_is_the_one_before_launch(self):
+        """The control for the test above: it would pass on a run that recorded
+        nothing after launch, and it would look like a promise the environment
+        does not make about the first record."""
+        env, _terminated, _truncated = self._flown(self._fresh(), STEPS_AFTER_LAUNCH)
+        states = np.asarray(
+            [record["rocket_states"] for record in env.trajectories], dtype=float
+        )
+        finite = [index for index, row in enumerate(states) if np.isfinite(row).all()]
+
+        self.assertEqual(finite, list(range(LAUNCH_STEP, len(states))))
 
     def test_the_actuator_keeps_the_value_it_had(self):
         """Dropping the command has to mean keeping the last one, not zeroing
@@ -239,6 +327,25 @@ class TestAnActionTheEnvironmentCannotUse(unittest.TestCase):
         env.step(action)
 
         self.assertFalse(env.rocket_launched)
+
+    def test_a_launch_that_fails_part_way_leaves_the_environment_unlaunched(self):
+        """The flag is what the next step reads to decide which branch to take.
+
+        Set before the flight is built, a failure in between leaves the
+        environment marked as launched with no flight, and the next step
+        dereferences `_rocket_flight.rocket`.
+        """
+        env = self._fresh()
+        with mock.patch.object(
+            BalloonPoppingEnv,
+            "_BalloonPoppingEnv__init_rocket_simulation",
+            side_effect=RuntimeError("the motor would not build"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "motor"):
+                env.step(self._action(env, launch=True))
+
+        self.assertFalse(env.rocket_launched)
+        self.assertIsNone(env._rocket_flight)
 
     def test_the_agent_can_launch_on_a_later_step(self):
         """The half that stops the refusal above being a way to lose the run."""
