@@ -13,6 +13,8 @@ skip, but a broken import inside this package is a failure and must stay loud.
 """
 
 import unittest
+
+from tests.bounded_episode import run_episode
 from importlib.util import find_spec
 
 import numpy as np
@@ -47,14 +49,9 @@ class TestNeverLaunchingAgent(unittest.TestCase):
         env.reset(seed=scenario_params["scenario"]["random_seed"])
 
         action = _idle_action(env)
-        terminated = truncated = False
-        steps = 0
         # Before the fix this raised AttributeError on the final step, because
         # the timeout branch post-processed a flight that was never created.
-        while not (terminated or truncated):
-            _observation, _reward, terminated, truncated, info = env.step(action)
-            steps += 1
-            self.assertLess(steps, env.num_timesteps + 5, "episode did not end")
+        steps, terminated, truncated, info = run_episode(env, lambda _o: action)
 
         # Running out of horizon is truncation, not termination: nothing about
         # the rocket ended the episode, the precomputed clock did. Reporting it
@@ -83,9 +80,7 @@ class TestWhatATruncatedEpisodeReports(unittest.TestCase):
 
     def _run_to_the_horizon(self, env):
         action = _idle_action(env)
-        terminated = truncated = False
-        while not (terminated or truncated):
-            _observation, _reward, terminated, truncated, _info = env.step(action)
+        _steps, terminated, truncated, _info = run_episode(env, lambda _o: action)
         return terminated, truncated
 
     def test_running_out_of_time_is_logged_as_truncation(self):
@@ -154,14 +149,9 @@ class TestAFinishedFlightTerminates(unittest.TestCase):
         )
         observation, _ = env.reset(seed=scenario_params["scenario"]["random_seed"])
 
-        terminated = truncated = False
-        steps = 0
-        while not (terminated or truncated):
-            observation, _reward, terminated, truncated, _info = env.step(
-                agent.get_action(observation)
-            )
-            steps += 1
-            self.assertLess(steps, env.num_timesteps + 5)
+        steps, terminated, truncated, _info = run_episode(
+            env, agent.get_action, observation
+        )
 
         self.assertTrue(terminated, "the flight finished, so the episode ended")
         self.assertFalse(truncated)
