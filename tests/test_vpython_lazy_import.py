@@ -16,7 +16,11 @@ AST-only, so it runs without rocketpy, vpython, or anything heavy.
 """
 
 import ast
+import subprocess
+import sys
+import textwrap
 import unittest
+from importlib.util import find_spec
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -53,11 +57,14 @@ def _dynamic_vpython_import(node):
         return False
     if name not in ("__import__", "import_module"):
         return False
+    # Keywords as well as positionals: `import_module(name="vpython")` is the
+    # same call, and reading only `Call.args` let it through.
+    arguments = list(node.args) + [keyword.value for keyword in node.keywords]
     return any(
         isinstance(argument, ast.Constant)
         and isinstance(argument.value, str)
         and argument.value.split(".", 1)[0] == "vpython"
-        for argument in node.args
+        for argument in arguments
     )
 
 
@@ -175,6 +182,50 @@ class TestVpythonIsImportedOnlyWhereItIsUsed(unittest.TestCase):
             [],
             "vpython may only be imported by the render branch itself",
         )
+
+
+class TestTheModuleImportsWithVpythonBlocked(unittest.TestCase):
+    """The behaviour the AST check is a proxy for.
+
+    An alias defeats the source check without much trouble
+    (`from importlib import import_module as load`), and chasing that needs name
+    binding analysis. This asks the question directly instead: with vpython
+    refused by the import system, does the package still import?
+
+    In a subprocess because the answer depends on what is already in
+    `sys.modules`, and this one is only meaningful from a clean interpreter.
+    """
+
+    def test_importing_the_environment_does_not_need_vpython(self):
+        if find_spec("rocketpy") is None:
+            self.skipTest("simulation stack not installed")
+
+        program = textwrap.dedent("""
+            import sys
+
+            class Refuse:
+                def find_spec(self, name, path=None, target=None):
+                    if name.split(".", 1)[0] == "vpython":
+                        raise ImportError("vpython is not available here")
+                    return None
+
+            sys.meta_path.insert(0, Refuse())
+            import BalloonPoppingGymEnv.envs.balloon_world  # noqa: F401
+            print("imported")
+        """)
+        finished = subprocess.run(
+            [sys.executable, "-c", program],
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+        )
+
+        self.assertEqual(
+            finished.returncode,
+            0,
+            f"importing the environment reached vpython:\n{finished.stderr[-2000:]}",
+        )
+        self.assertIn("imported", finished.stdout)
 
 
 class TestTheCheckerCatchesWhatItIsFor(unittest.TestCase):
