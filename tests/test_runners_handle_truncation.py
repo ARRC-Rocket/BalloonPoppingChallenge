@@ -333,6 +333,146 @@ def guard_problem(loop):
     return None
 
 
+# The names the loop reads to decide whether to go round again. Writing to
+# either between the step and the next evaluation makes the guard read something
+# other than what the environment said.
+DECISION_NAMES = frozenset({"terminated", "truncated"})
+
+
+def _rechecks_and_leaves(statement):
+    """Whether this ``if`` reads both decision names and leaves on them.
+
+    A loop may step again in the same pass as long as it has looked at what the
+    last step said first, which is what the condition would have done.
+    """
+    mentioned = {
+        node.id
+        for node in ast.walk(statement.test)
+        if isinstance(node, ast.Name) and node.id in DECISION_NAMES
+    }
+    return mentioned == DECISION_NAMES and _leaves_the_loop(statement.body)
+
+
+def _steps_along_the_longest_path(body, env_names):
+    """The most environment steps one pass through ``body`` can make.
+
+    Branches are the maximum of their arms rather than the sum, since only one
+    arm runs; statements in sequence add up. Anything past a ``break``,
+    ``return`` or ``raise`` is not reached and does not count.
+    """
+    total = 0
+    for statement in body:
+        if isinstance(statement, ast.Assign) and _is_env_step_call(
+            statement.value, env_names
+        ):
+            total += 1
+            continue
+        if isinstance(statement, ast.Expr) and _is_env_step_call(
+            statement.value, env_names
+        ):
+            total += 1
+            continue
+        if isinstance(statement, STEP_BARRIERS):
+            # A nested function or loop is not this loop's own pass.
+            continue
+        if isinstance(statement, (ast.Break, ast.Return, ast.Raise)):
+            break
+        if isinstance(statement, ast.If):
+            if _rechecks_and_leaves(statement):
+                # The flags have been read again and the loop left if either
+                # fired, so anything after this is a fresh pass, not a second
+                # step on a stale answer.
+                total = 0
+                continue
+            total += max(
+                _steps_along_the_longest_path(statement.body, env_names),
+                _steps_along_the_longest_path(statement.orelse, env_names),
+            )
+            continue
+        if isinstance(statement, (ast.Try, ast.With)):
+            total += _steps_along_the_longest_path(statement.body, env_names)
+            for handler in getattr(statement, "handlers", ()):
+                total += _steps_along_the_longest_path(handler.body, env_names)
+            total += _steps_along_the_longest_path(
+                getattr(statement, "orelse", []), env_names
+            )
+            total += _steps_along_the_longest_path(
+                getattr(statement, "finalbody", []), env_names
+            )
+            continue
+    return total
+
+
+def second_step_problem(loop):
+    """Whether one pass can step more than once, or None.
+
+    The condition is only read between passes. A second step in the same pass
+    runs whatever the first one said, which is the thing this file is about.
+    """
+    most = _steps_along_the_longest_path(loop.node.body, loop.env_names)
+    if most > 1:
+        return (
+            f"one pass through the loop can call step() {most} times, and the "
+            f"condition is only read between passes"
+        )
+    return None
+
+
+def _writes_to_decision_names(statement):
+    """The decision names this statement assigns to.
+
+    Its own recursion rather than ``ast.walk``, which yields every descendant
+    before anything can decline one, so a guard written as a ``continue`` there
+    prunes nothing. A ``lambda`` is stepped over because a walrus inside one
+    binds in the lambda; a comprehension is not, because a walrus inside one
+    binds out here, which is the whole reason it is worth looking for.
+    """
+    written = set()
+
+    def visit(node):
+        if isinstance(node, ast.Lambda):
+            return
+        targets = []
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign, ast.NamedExpr)):
+            targets = [node.target]
+        for target in targets:
+            for name in ast.walk(target):
+                if isinstance(name, ast.Name) and name.id in DECISION_NAMES:
+                    written.add(name.id)
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    visit(statement)
+    return written
+
+
+def overwritten_flag_problem(loop):
+    """Whether the loop writes a decision name other than from a step, or None.
+
+    ``terminated = truncated = False`` after the unpack leaves the guard reading
+    what the loop decided rather than what the environment reported, and the
+    loop never ends.
+    """
+    from_step = {id(node) for node in _step_assignments(loop.node, loop.env_names)}
+    for statement in _nodes_of_the_loop(loop.node):
+        if not isinstance(
+            statement, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.NamedExpr)
+        ):
+            continue
+        if id(statement) in from_step:
+            continue
+        written = _writes_to_decision_names(statement)
+        if written:
+            return (
+                f"the loop assigns {', '.join(sorted(written))} from something "
+                f"other than step(), so the condition stops reading what the "
+                f"environment reported"
+            )
+    return None
+
+
 def unpack_problem(loop):
     """What is wrong with how this loop takes ``step()`` apart, or None."""
     for assignment in _step_assignments(loop.node, loop.env_names):
@@ -447,6 +587,164 @@ class TestTheRunnersInThisRepository(unittest.TestCase):
         for path, loop in self.loops:
             with self.subTest(runner=f"{path}:{loop.lineno}"):
                 self.assertIsNone(unpack_problem(loop), f"{path} line {loop.lineno}")
+
+    def test_no_loop_steps_twice_on_one_answer(self):
+        for path, loop in self.loops:
+            with self.subTest(runner=f"{path}:{loop.lineno}"):
+                self.assertIsNone(
+                    second_step_problem(loop), f"{path} line {loop.lineno}"
+                )
+
+    def test_no_loop_writes_over_what_the_environment_said(self):
+        for path, loop in self.loops:
+            with self.subTest(runner=f"{path}:{loop.lineno}"):
+                self.assertIsNone(
+                    overwritten_flag_problem(loop), f"{path} line {loop.lineno}"
+                )
+
+
+class TestASecondStepOnTheSameAnswer(unittest.TestCase):
+    """The condition is read between passes, not during one.
+
+    Both shapes here passed every check this file had: they take the flags apart
+    correctly and their condition is exactly right, and they step again anyway.
+    """
+
+    HEAD = (
+        "def run(env, action, debug):\n"
+        "    terminated = truncated = False\n"
+        "    while not (terminated or truncated):\n"
+    )
+    STEP = "        o, r, terminated, truncated, i = env.step(action)\n"
+
+    def _only_loop(self, body):
+        loops = episode_loops(ast.parse(self.HEAD + body))
+        self.assertEqual(len(loops), 1)
+        return loops[0]
+
+    def test_one_step_is_fine(self):
+        self.assertIsNone(second_step_problem(self._only_loop(self.STEP)))
+
+    def test_two_steps_in_a_row_are_not(self):
+        problem = second_step_problem(self._only_loop(self.STEP + self.STEP))
+
+        self.assertIn("2 times", problem)
+
+    def test_a_second_step_under_a_condition_is_not(self):
+        body = self.STEP + "        if debug:\n    " + self.STEP
+
+        self.assertIsNotNone(second_step_problem(self._only_loop(body)))
+
+    def test_one_step_in_each_arm_is_fine(self):
+        """Only one arm runs, so a pass still makes one step."""
+        body = "        if debug:\n    " + self.STEP + "        else:\n    " + self.STEP
+
+        self.assertIsNone(second_step_problem(self._only_loop(body)))
+
+    def test_stepping_again_after_reading_the_flags_is_fine(self):
+        """The check is about a stale answer, not about the number of calls."""
+        body = (
+            self.STEP
+            + "        if terminated or truncated:\n            break\n"
+            + self.STEP
+        )
+
+        self.assertIsNone(second_step_problem(self._only_loop(body)))
+
+    def test_reading_only_one_flag_before_stepping_again_is_not(self):
+        body = self.STEP + "        if terminated:\n            break\n" + self.STEP
+
+        self.assertIsNotNone(second_step_problem(self._only_loop(body)))
+
+    def test_reading_the_flags_without_leaving_is_not(self):
+        body = (
+            self.STEP
+            + "        if terminated or truncated:\n            pass\n"
+            + self.STEP
+        )
+
+        self.assertIsNotNone(second_step_problem(self._only_loop(body)))
+
+    def test_a_step_in_a_nested_loop_is_not_this_loops_pass(self):
+        """The inner ``while`` is its own episode loop and is judged separately.
+
+        Counting its step as the outer loop's would report a second step on the
+        same answer where there is none.
+        """
+        body = self.STEP + "        while debug:\n    " + self.STEP
+        loops = episode_loops(ast.parse(self.HEAD + body))
+        self.assertEqual(len(loops), 2)
+        outer = min(loops, key=lambda loop: loop.lineno)
+
+        self.assertIsNone(second_step_problem(outer))
+
+
+class TestWritingOverWhatTheEnvironmentSaid(unittest.TestCase):
+    """A guard that reads what the loop decided is not a guard.
+
+    ``terminated = truncated = False`` after the unpack passed every check this
+    file had, and never ends.
+    """
+
+    HEAD = TestASecondStepOnTheSameAnswer.HEAD
+    STEP = TestASecondStepOnTheSameAnswer.STEP
+
+    def _only_loop(self, body):
+        loops = episode_loops(ast.parse(self.HEAD + body))
+        self.assertEqual(len(loops), 1)
+        return loops[0]
+
+    def test_the_step_unpack_itself_is_not_an_overwrite(self):
+        self.assertIsNone(overwritten_flag_problem(self._only_loop(self.STEP)))
+
+    def test_clearing_both_flags_is(self):
+        body = self.STEP + "        terminated = truncated = False\n"
+
+        problem = overwritten_flag_problem(self._only_loop(body))
+
+        self.assertIn("terminated", problem)
+        self.assertIn("truncated", problem)
+
+    def test_narrowing_one_flag_is(self):
+        body = self.STEP + "        terminated = bool(terminated and debug)\n"
+
+        self.assertIsNotNone(overwritten_flag_problem(self._only_loop(body)))
+
+    def test_an_augmented_assignment_is(self):
+        body = self.STEP + "        truncated |= debug\n"
+
+        self.assertIsNotNone(overwritten_flag_problem(self._only_loop(body)))
+
+    def test_a_walrus_is(self):
+        body = self.STEP + "        print(truncated := debug)\n"
+
+        self.assertIsNotNone(overwritten_flag_problem(self._only_loop(body)))
+
+    def test_writing_an_unrelated_name_is_not(self):
+        """The control: this check has to leave ordinary loop bodies alone."""
+        body = self.STEP + "        steps = steps + 1\n"
+
+        self.assertIsNone(overwritten_flag_problem(self._only_loop(body)))
+
+    def test_a_write_inside_a_nested_function_is_not_this_loops(self):
+        body = self.STEP + "        def reset_them():\n            terminated = False\n"
+
+        self.assertIsNone(overwritten_flag_problem(self._only_loop(body)))
+
+    def test_a_walrus_inside_a_lambda_is_not_this_loops(self):
+        """It binds in the lambda. The first version of this reported it, since
+        `ast.walk` hands back every descendant before anything can decline one,
+        so declining with `continue` there pruned nothing."""
+        body = self.STEP + "        f = lambda: (terminated := False)\n"
+
+        self.assertIsNone(overwritten_flag_problem(self._only_loop(body)))
+
+    def test_a_walrus_inside_a_comprehension_is_this_loops(self):
+        """That one binds out here, which is why the lambda case cannot be
+        handled by skipping nested scopes as a group."""
+        body = self.STEP + "        x = [(truncated := False) for _ in range(1)]\n"
+
+        self.assertIsNotNone(overwritten_flag_problem(self._only_loop(body)))
 
 
 class TestTheLoopTheReadmeShows(unittest.TestCase):
