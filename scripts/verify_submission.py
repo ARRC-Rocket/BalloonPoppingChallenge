@@ -277,7 +277,10 @@ def check_the_records_are_the_right_shape(submission, canonical):
             # Ragged rows raise here rather than giving an object array, which
             # is the report this exists to make instead of a traceback.
             got = np.asarray([record[field] for record in records], dtype=float).shape
-        except (TypeError, ValueError) as error:
+        except Exception as error:  # noqa: BLE001 - the answer is "cannot read it"
+            # Not a list of the errors it can raise. `10**400` in a position
+            # raises OverflowError, which was not on that list and came out of
+            # `verify()` as a traceback, from a file a competitor writes.
             findings.append(Finding(field, False, f"not a rectangular array: {error}"))
             continue
         findings.append(

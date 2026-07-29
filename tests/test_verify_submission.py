@@ -711,6 +711,14 @@ class TestWhatABadShapeCostsBeforeItIsRefused(unittest.TestCase):
 
         self.assertIn("record structure", self.refused_without_regenerating())
 
+    def test_a_number_too_large_for_a_float_is_reported_not_raised(self):
+        """A submission is a file somebody else writes, so the shape check has
+        to answer rather than raise. `10**400` came out of `verify()` as an
+        OverflowError traceback."""
+        self.records[0]["balloon_states"][0][0] = 10**400
+
+        self.assertIn("balloon_states", self.refused_without_regenerating())
+
     def test_the_wrong_number_of_balloons_is_refused_first(self):
         """The count comes from the canonical scenario, so this needs no
         Monte Carlo to answer either."""
