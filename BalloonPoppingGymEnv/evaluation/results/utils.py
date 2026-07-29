@@ -285,10 +285,14 @@ def _write_atomically(out_path, write_payload, mode="wb", encoding=None):
         raise
 
 
-def pack_for_submission(eval_cfg, env, scenario_parameters):
+def build_submission_payload(eval_cfg, env, scenario_parameters, packed_at):
+    """What goes into a submission, without deciding how it is written.
 
+    Separate from `pack_for_submission` so the contents can be tested without a
+    serializer: capturing the payload by mocking `pickle.dump` would tie what a
+    submission contains to how it is encoded, and #58 replaces the encoder.
+    """
     team_name = eval_cfg["team_name"]
-    packed_at = datetime.now(timezone.utc)
     timestamp = f"{packed_at:%Y%m%dT%H%M%SZ}"
 
     # Read agent source
@@ -296,8 +300,7 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
     with open(agent_module_path, "r", encoding="utf-8") as f:
         agent_module_file = f.read()
 
-    # Submission payload
-    submission = {
+    return {
         "format_version": 0,
         "team": {
             "name": team_name,
@@ -322,6 +325,13 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
             "agent_module_file": agent_module_file,
         },
     }
+
+
+def pack_for_submission(eval_cfg, env, scenario_parameters):
+
+    team_name = eval_cfg["team_name"]
+    packed_at = datetime.now(timezone.utc)
+    submission = build_submission_payload(eval_cfg, env, scenario_parameters, packed_at)
 
     # Save submission. The filename carries milliseconds and a path-safe team
     # name, so two runs in the same second no longer overwrite each other. The

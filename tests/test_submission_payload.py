@@ -4,21 +4,24 @@ That array was 71% of a scenario-1 submission and nothing read it. Dropping it
 rests on one claim, so this pins the claim rather than only the removal: the
 balloon data the array holds is already in ``trajectories``, one step across.
 
-The version this replaced mocked ``utils.open`` and ``utils.pickle.dump``, which
-is not the write path: ``pack_for_submission`` goes through ``_write_atomically``
-to ``mkstemp``, ``fsync`` and ``os.replace``. With ``dump`` replaced by a no-op
-the write still ran and renamed an empty file into place, so every call left a
-finished-looking zero byte submission in the package directory. Across the
-worktrees on one machine that had reached 130 files. The writer is mocked at its
-own boundary now and the payload is serialized into memory.
+What a submission contains is asked of ``build_submission_payload`` directly.
+The version this replaced captured it by mocking ``pickle.dump``, which tied the
+contents to the encoding and would have broken on #58 replacing the encoder with
+JSON. It also mocked ``utils.open``, which is not the write path:
+``pack_for_submission`` goes through ``_write_atomically`` to ``mkstemp``,
+``fsync`` and ``os.replace``, so with ``dump`` doing nothing the write still ran
+and renamed an empty file into place. Every call left a finished-looking zero
+byte submission in the package directory, 130 across the worktrees on one
+machine. That the writer is reached at all is now its own test, with the writer
+mocked at its own boundary.
 
 Only ``rocketpy`` is guarded: a missing simulation stack is a legitimate skip,
 but a broken import inside this package is a failure and must stay loud.
 """
 
 import copy
-import io
 import unittest
+from datetime import datetime, timezone
 from importlib.util import find_spec
 from unittest import mock
 
@@ -68,34 +71,12 @@ class _FakeEnv:
 class TestBalloonFlightsIsNotShipped(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.payload, cls.writer = cls._capture_payload()
-
-    @staticmethod
-    def _capture_payload():
-        """Run the real packer, serialize into memory, touch no filesystem."""
-        captured = []
-
-        def in_memory(_path, write_payload, *_args, **_kwargs):
-            write_payload(io.BytesIO())
-
-        dump = mock.Mock(side_effect=lambda payload, _file: captured.append(payload))
-        writer = mock.Mock(side_effect=in_memory)
-
-        with (
-            mock.patch.object(utils, "_write_atomically", writer),
-            mock.patch.object(utils.pickle, "dump", dump),
-            mock.patch.object(utils, "_check_evaluate_integrity"),
-        ):
-            utils.pack_for_submission(
-                dict(EVAL_CFG, agent_module_path=__file__),
-                _FakeEnv(),
-                {"scenario": {}},
-            )
-
-        dump.assert_called_once()
-        if len(captured) != 1:
-            raise AssertionError(f"expected one payload, captured {len(captured)}")
-        return captured[0], writer
+        cls.payload = utils.build_submission_payload(
+            dict(EVAL_CFG, agent_module_path=__file__),
+            _FakeEnv(),
+            {"scenario": {}},
+            datetime(2026, 7, 30, tzinfo=timezone.utc),
+        )
 
     def test_the_array_is_absent(self):
         self.assertNotIn("balloon_flights", self.payload["balloon_world_data"])
@@ -121,14 +102,24 @@ class TestBalloonFlightsIsNotShipped(unittest.TestCase):
         on the fixture rather than on anything real."""
         self.assertIsInstance(self.payload["agent_info"]["agent_module_file"], str)
 
-    def test_packing_goes_through_the_atomic_writer_once(self):
+    def test_packing_writes_through_the_atomic_writer_and_nowhere_else(self):
         """The failure that prompted the rewrite, kept as a test.
 
         Asserted on the writer rather than on the directory, because results/ is
         in .gitignore: the leftover files never appeared in ``git status``, so a
         clean-worktree check in CI would not have caught this either.
         """
-        self.assertEqual(self.writer.call_count, 1)
+        with (
+            mock.patch.object(utils, "_write_atomically") as writer,
+            mock.patch.object(utils, "_check_evaluate_integrity"),
+        ):
+            utils.pack_for_submission(
+                dict(EVAL_CFG, agent_module_path=__file__),
+                _FakeEnv(),
+                {"scenario": {}},
+            )
+
+        self.assertEqual(writer.call_count, 1)
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
