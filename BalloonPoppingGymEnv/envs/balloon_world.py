@@ -202,6 +202,28 @@ def _seed_sequence_to_int(seed_sequence):
     return sum(int(word) << (32 * position) for position, word in enumerate(words))
 
 
+def _release_spacing_in_steps(release_interval, time_step):
+    """How many simulation steps apart two consecutive balloon releases are.
+
+    Rounded rather than truncated. Both operands are float seconds read out of
+    the scenario YAML, so their quotient is a binary float that can land just
+    under the whole number it means: measured, 0.3 / 0.1 is 2.9999999999999996,
+    0.7 / 0.1 is 6.999999999999999 and 2.3 / 0.1 is 22.999999999999996.
+    Truncating any of those drops a whole step, and since the schedule is
+    ``arange(num) * spacing`` the error grows with the balloon index, so the
+    last of a hundred balloons leaves the ground a full second early.
+
+    Latent for the two shipped scenarios, which is why it survived: 1 / 0.01 and
+    0.5 / 0.01 are both exactly integral, so this returns 100 and 50 either way
+    and no committed baseline moves. It would have surfaced on the first
+    scenario whose interval is not exact.
+
+    A schedule can only land on whole steps, so nearest is the best available
+    answer for an interval that is genuinely not a whole number of them.
+    """
+    return int(round(release_interval / time_step))
+
+
 class BalloonPoppingEnv(gym.Env):
     metadata = {"render_modes": ["vpython", "matplotlib"]}
 
@@ -867,7 +889,7 @@ class BalloonPoppingEnv(gym.Env):
         n = self.balloon_parameters["num"]
         i = self.balloon_parameters["release_interval"]
         t = self.simulation_parameters["time_step"]
-        self._balloon_release_at_step = np.arange(n) * int(i / t)
+        self._balloon_release_at_step = np.arange(n) * _release_spacing_in_steps(i, t)
         self._np_random.shuffle(self._balloon_release_at_step)
 
     def __generate_balloon_flights(self):
