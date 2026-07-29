@@ -93,11 +93,25 @@ class TestWhichFieldsAreUnusable(unittest.TestCase):
         self.assertEqual(check_action(action), ["tvc"])
 
     def test_an_action_that_is_not_a_mapping_has_no_usable_field(self):
-        """`field not in action` raises on these, and it is reached after the
-        step has already advanced the balloons."""
+        """The lookup raises on these, and it happens after the step has already
+        advanced the balloons."""
         for action in (None, 42, [1.0, 2.0], "launch"):
             with self.subTest(action=repr(action)):
                 self.assertEqual(check_action(action), sorted(_CLEAN))
+
+    def test_a_value_that_refuses_to_become_an_array_is_not_usable(self):
+        """The competitors here are writing policies, and a torch tensor that
+        still carries its graph raises `RuntimeError` out of `__array__`, not
+        one of the conversion errors. Reproduced rather than imported, since
+        torch is not a dependency of this package."""
+
+        class StillNeedsDetaching:
+            def __array__(self, dtype=None, copy=None):
+                raise RuntimeError("Can't call numpy() on Tensor that requires grad")
+
+        action = dict(_CLEAN, tvc=StillNeedsDetaching())
+
+        self.assertEqual(check_action(action), ["tvc"])
 
     def test_infinity_counts_too(self):
         """`np.clip` would carry an infinity straight through, and the actuator

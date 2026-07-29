@@ -4,7 +4,6 @@ import os
 import shutil
 import tempfile
 from collections import Counter
-from collections.abc import Mapping
 
 import gymnasium as gym
 import matplotlib.pyplot as plt
@@ -80,27 +79,24 @@ def _usable_action_fields(action):
     finite array and then fails at `action["tvc"][0]`. So the converted values
     are what the caller gets.
     """
-    # Nothing to index. Raising here instead would end the run over exactly the
-    # kind of bad action the rest of this exists to survive.
-    if not isinstance(action, Mapping):
-        return {}, set(ACTION_FIELD_SIZES)
     usable = {}
     unusable = set()
     for field, size in ACTION_FIELD_SIZES.items():
-        if field not in action:
-            unusable.add(field)
-            continue
         try:
             given = np.asarray(action[field])
             # Before the cast, which discards the imaginary part with a warning
             # rather than refusing it: 1+9j would gimbal to 1.
             if np.iscomplexobj(given):
-                unusable.add(field)
-                continue
+                raise TypeError("a complex command is not a command")
             # Flat, because the size alone let a (1, 2) through to raise at
             # `float(tvc[0])` and a (1, 2) attitude to raise at `attitude[1]`.
             values = np.asarray(given, dtype=float).reshape(-1)
-        except (TypeError, ValueError, OverflowError):
+        except Exception:  # noqa: BLE001 - see below
+            # Anything unreadable is a field the environment cannot use, which
+            # is this function's whole answer. Narrower than this and the list
+            # has to be guessed: a torch tensor that still carries its graph
+            # raises RuntimeError here, and an action that is not a mapping at
+            # all raises TypeError on the lookup.
             unusable.add(field)
             continue
         if values.size != size or not np.all(np.isfinite(values)):
