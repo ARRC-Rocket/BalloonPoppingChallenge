@@ -2,14 +2,15 @@ import hashlib
 import http.client
 import json
 import logging
+import math
 import os
-import pickle
 import re
 import tempfile
 import urllib.request
 from datetime import datetime, timezone
 from uuid import uuid4
 
+import numpy as np
 from rocketpy._encoders import RocketPyEncoder
 
 logger = logging.getLogger(__name__)
@@ -221,6 +222,38 @@ def _filename_slug(raw_name, fallback="team"):
     return slug.strip(" ._-") or fallback
 
 
+def _json_safe(value):
+    """``value`` with every non-finite float replaced by ``None``.
+
+    ``json.dump`` writes ``NaN`` and ``Infinity`` for non-finite floats. Python
+    reads those back, so the pipeline works either way, but RFC 8259 has no such
+    tokens and ``jq`` and a browser's ``JSON.parse`` both refuse the file.
+
+    Rocket states before launch are ``NaN``, so this is ordinary data rather than
+    an edge case. ``None`` is what the leaderboard's replay builder already
+    substitutes before anything reaches the viewer, so this moves that step
+    upstream and the viewer sees no change.
+
+    A float array with nothing to fix is returned untouched so the encoder can
+    stream it: converting it here would turn tens of megabytes of ``float64``
+    into individually allocated Python floats for no benefit.
+    """
+    if isinstance(value, (float, np.floating)):
+        return value if math.isfinite(value) else None
+    if isinstance(value, np.ndarray):
+        if value.dtype.kind != "f":
+            return value
+        if np.isfinite(value).all():
+            return value
+        # object dtype, so the None survives tolist()
+        return np.where(np.isfinite(value), value, None).tolist()
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
 def _submission_filename(packed_at, team_name, run_id):
     """Name a submission so two runs cannot land on the same path.
 
@@ -237,7 +270,7 @@ def _submission_filename(packed_at, team_name, run_id):
     ``team``. ``run_id`` is what actually makes the path unique.
     """
     stamp = f"{packed_at:%Y%m%dT%H%M%S}.{packed_at.microsecond // 1000:03d}Z"
-    return f"{stamp}_{_filename_slug(team_name)}_{run_id}_submission.pkl"
+    return f"{stamp}_{_filename_slug(team_name)}_{run_id}_submission.json"
 
 
 def _write_atomically(out_path, write_payload, mode="wb", encoding=None):
@@ -337,7 +370,7 @@ def build_submission_payload(eval_cfg, env, scenario_parameters, packed_at):
         agent_module_file = f.read()
 
     return {
-        "format_version": 0,
+        "format_version": 1,
         "team": {
             "name": team_name,
             "secret": eval_cfg["team_secret"],
@@ -353,7 +386,13 @@ def build_submission_payload(eval_cfg, env, scenario_parameters, packed_at):
             "scenario_parameters": scenario_parameters,
             "trajectories": env.trajectories,
             "balloon_release_at_step": env._balloon_release_at_step,
-            "rocket_flight": json.dumps(env._rocket_flight, cls=RocketPyEncoder),
+            # Round tripped rather than left as text: the encoder can turn the
+            # Flight into JSON, but only as a string, so its own non-finite floats
+            # would slip past `_json_safe`. A few megabytes, so the extra pass is
+            # not worth avoiding.
+            "rocket_flight": json.loads(
+                json.dumps(env._rocket_flight, cls=RocketPyEncoder, allow_pickle=False)
+            ),
             # "balloon_flights": env._balloon_flights,  # deliberately omitted, see issue #57.
         },
         "agent_info": {
@@ -377,7 +416,20 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
         os.path.dirname(os.path.abspath(__file__)),
         _submission_filename(packed_at, team_name, uuid4().hex),
     )
-    _write_atomically(out_path, lambda file: pickle.dump(submission, file))
+    # JSON, not pickle. The upload endpoint is unauthenticated, so the format must
+    # not be able to execute code on load the way pickle did (the leaderboard side
+    # is Leaderboard#7); `json.load` cannot. `allow_pickle=False` keeps callables
+    # out: with the default the encoder hex encodes a Function's source with dill,
+    # which is inert under `json.load` but is executable material for anything that
+    # later runs `dill.loads` on it.
+    _write_atomically(
+        out_path,
+        lambda file: json.dump(
+            _json_safe(submission), file, cls=RocketPyEncoder, allow_pickle=False
+        ),
+        mode="w",
+        encoding="utf-8",
+    )
 
     print(f"Submission saved to:\n{out_path}")
 
