@@ -36,24 +36,9 @@ elements with the flags in positions 2 and 3. Evaluating the condition is safe
 by construction: it is refused first unless the only names in it are the two
 flags, and it runs with no builtins.
 
-What a checker gets wrong is what it cannot see
------------------------------------------------
-The three things below were each measured, and each one is a loop going
-unchecked rather than a loop reported wrongly, which is the failure a checker
-can carry indefinitely without anyone noticing.
-
-* Which name the environment is under is the author's choice. The receiver used
-  to be matched with ``"env" in name.lower()``, so ``world = gym.make(...)`` was
-  never discovered and never checked, while ``envelope_follower.step(sample)``
-  was reported for flags it has nothing to do with. Resolved against what the
-  module actually binds now.
-* A ``while`` answers for its own body. The step assignments were collected with
-  ``ast.walk``, which crosses into a nested ``def`` and into a nested ``while``,
-  so ``while episodes_remaining:`` around ``while not (terminated or
-  truncated):`` was reported for the inner loop's step.
-* What the scan does not open cannot fail it. It covered three directories, and
-  ``tests/`` was not one of them; two loops there were waiting on ``terminated``
-  alone when it was widened to the repository.
+Three ways this went unchecked, each measured: ``"env" in name.lower()`` never
+found ``world = gym.make(...)``, ``ast.walk`` gave an outer ``while`` the inner
+loop's step, and the scan skipped ``tests/``, where two loops waited on one flag.
 
 AST only, so it runs without the simulation stack.
 """
@@ -66,23 +51,16 @@ from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# Everything under the repository root except these. The previous list was
-# ``("BalloonPoppingGymEnv", "doc", "scripts")``, which left ``tests/`` and the
-# root itself unscanned, and two loops in ``tests/`` were waiting on
-# ``terminated`` alone at the time this was widened. Pruned during the walk
-# rather than filtered afterwards, so ``.venv`` and the ActiveRocketPy submodule
-# are never opened: the whole scan is 46 files in 0.03 s that way. ActiveRocketPy
-# is a fork of RocketPy with its own runners, and this file has no say over them.
+# Everything under the repository root except these, pruned during the walk so
+# ``.venv`` and the ActiveRocketPy fork are never opened: 46 files in 0.03 s. The
+# old ``("BalloonPoppingGymEnv", "doc", "scripts")`` left ``tests/`` unscanned.
 EXCLUDED_DIRECTORIES = frozenset(
     {".venv", ".ci-venv", "ActiveRocketPy", "build", "dist", "node_modules"}
 )
 
 # The loops that exist today, each pinned to the function it lives in (``None``
-# for one written at module level). The pin used to be the path alone, which
-# only asked whether *some* episode loop had been found in that file: a decoy
-# loop anywhere else in it satisfied that while the real runner had stopped
-# being discovered and was going unchecked. Adding a runner is still fine,
-# losing one silently is not.
+# for one written at module level). Adding a runner is fine, losing one silently
+# is not.
 KNOWN_RUNNERS = {
     Path("BalloonPoppingGymEnv/evaluation/evaluate.py"): "evaluate_scenario",
     Path("doc/examples/run_env_agent.py"): "run_for_development",
@@ -116,8 +94,7 @@ GYM_MODULE_NAMES = frozenset({"gym", "gymnasium"})
 
 # Scopes of their own, so a name written inside one is not the loop's business.
 # Only ``FunctionDef``/``AsyncFunctionDef``/``ClassDef`` can hold an assignment
-# today; a lambda and the comprehensions are listed so the barrier does not
-# depend on that staying true.
+# today; the lambda and the comprehensions are listed so that need not stay true.
 NESTED_SCOPES = (
     ast.FunctionDef,
     ast.AsyncFunctionDef,
@@ -129,43 +106,16 @@ NESTED_SCOPES = (
     ast.GeneratorExp,
 )
 
-# A step under a nested ``while`` belongs to that ``while``, which is judged on
-# its own. Without this an outer ``while episodes_remaining:`` inherits the inner
-# loop's step and gets asked for flags that are the inner loop's job, which is
-# how the idiomatic multi-episode runner came out reported.
-#
-# ``for`` is not a barrier, and the reason is narrower than "a ``for`` is never
-# an episode loop". Sometimes it is. A bounded runner,
-#
-#     while retries:
-#         for _ in range(max_steps):
-#             o, r, terminated, truncated, i = env.step(a)
-#             if terminated or truncated:
-#                 break
-#
-# is correct and gets its enclosing ``while retries:`` reported for a condition
-# that belongs to the inner loop. That is a known false positive, and a bounded
-# runner written without any enclosing ``while`` is not discovered at all.
-#
-# The repair, making ``for`` a barrier and judging a stepping ``for`` on its
-# exits the way ``while True`` is judged, was tried and is worse here. It reports
-# the two loops in tests/test_coordinate_contract.py, which step inside
-# ``for _ in range(600)`` and answer both flags with ``self.fail(...)``. Leaving
-# by raising is a real exit that ``_leaves_the_loop`` does not model, and
-# widening it to accept any call would accept most things. Neither missing shape
-# exists in this repository, and two correct loops do, so it stays as it is until
-# the exit rule can read a raise.
+# ``ast.While`` too, or an outer ``while episodes_remaining:`` inherits the inner
+# loop's step. ``for`` is deliberately not one: making it a barrier reports the
+# two correct loops in tests/test_coordinate_contract.py, which leave by raising.
 STEP_BARRIERS = NESTED_SCOPES + (ast.While,)
 
 
 class EpisodeLoop(NamedTuple):
     """A ``while`` that steps an environment, with what it took to recognise it.
-
-    ``env_names`` travels with the loop because ``unpack_problem`` has to find
-    the same step assignments the discovery did. Handing it a loop without them
-    made it look at a runner that binds the environment to some other name, find
-    no step call, and report nothing wrong.
-    """
+    ``env_names`` travels with the loop so ``unpack_problem`` finds the same step
+    assignments discovery did, rather than none at all under some other name."""
 
     node: ast.While
     env_names: frozenset
@@ -177,11 +127,9 @@ class EpisodeLoop(NamedTuple):
 
 
 def _receiver_name(node):
-    """The identifier a receiver expression hangs off, or None.
-
-    ``self.env`` answers ``env`` and ``envs[0]`` answers ``envs``, so the name
-    that was bound is what gets compared.
-    """
+    """The identifier a receiver expression hangs off, or None. ``self.env``
+    answers ``env`` and ``envs[0]`` answers ``envs``, so the name that was bound
+    is what gets compared."""
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.Attribute):
@@ -203,14 +151,9 @@ def _is_env_constructor(node):
 
 
 def _bound_names(target, value):
-    """The names ``target`` binds, if ``value`` is where an environment comes from.
-
-    The test is whether a constructor appears anywhere in ``value`` rather than
-    whether ``value`` *is* one, which is what lets a list of them and a wrapped
-    ``env = TimeLimit(gym.make(...))`` be recognised by the same rule. A tuple
-    target is paired off element by element, so ``env, agent = gym.make(...),
-    Agent()`` does not hand the agent the environment's name.
-    """
+    """The names ``target`` binds, if ``value`` is where an environment comes
+    from. A constructor anywhere in ``value`` counts, so ``TimeLimit(gym.make())``
+    does; a tuple target is paired off, so ``env, agent = ...`` binds only env."""
     if isinstance(target, (ast.Tuple, ast.List)):
         if not isinstance(value, (ast.Tuple, ast.List)):
             return []
@@ -228,18 +171,9 @@ def _bound_names(target, value):
 
 
 def environment_names(tree):
-    """Every name this module binds an environment to.
-
-    Matching the receiver by substring was the whole check before, and it read
-    both ways: ``world = gym.make(...)`` was never discovered at all, so it was
-    never checked, and an unrelated ``envelope_follower.step(sample)`` was
-    reported for flags it has no reason to have.
-
-    Collected for the module rather than per scope, so a name one function binds
-    counts in another. The alternative is a scope analysis, and what being
-    generous costs is that an unrelated ``.step()`` on a name some other function
-    used for the environment gets asked for the flags.
-    """
+    """Every name this module binds an environment to. Collected for the module
+    rather than per scope, so an unrelated ``.step()`` on a name some other
+    function used for the environment gets asked for the flags."""
     names = set(PLAIN_ENV_NAMES)
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
@@ -255,12 +189,9 @@ def environment_names(tree):
 
 
 def _is_env_step_call(node, env_names):
-    """A call to ``.step()`` on something this module bound an environment to.
-
-    The receiver is resolved so that a future ``optimizer.step()`` or
-    ``scheduler.step()`` inside a ``while`` is not conscripted into being an
-    episode loop and asked for flags it has no reason to have.
-    """
+    """A call to ``.step()`` on something this module bound an environment to,
+    so a future ``optimizer.step()`` or ``scheduler.step()`` inside a ``while``
+    is not conscripted into being an episode loop."""
     if not (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
@@ -271,12 +202,9 @@ def _is_env_step_call(node, env_names):
 
 
 def _nodes_of_the_loop(loop):
-    """Everything below ``loop`` that is the loop's own, stopping at the barriers.
-
-    ``ast.walk`` was used here and crosses every scope boundary there is, so a
-    step written inside a nested ``def`` or under a nested ``while`` counted as
-    the outer loop's own.
-    """
+    """Everything below ``loop`` that is the loop's own, stopping at the
+    barriers. ``ast.walk`` crosses every scope boundary there is, so a step
+    inside a nested ``def`` or ``while`` counted as the outer loop's own."""
     nodes = []
 
     def descend(node):
@@ -320,12 +248,9 @@ def episode_loops(tree):
 
 
 def missing_runners(loops):
-    """Known runners whose own stepping loop is not in ``loops``.
-
-    Pinned to (path, enclosing function) rather than to the path, so a decoy
-    episode loop elsewhere in the same file cannot stand in for a runner that
-    has stopped being discovered.
-    """
+    """Known runners whose own stepping loop is not in ``loops``. Pinned to
+    (path, enclosing function), so a decoy episode loop elsewhere in the same
+    file cannot stand in for a runner that has stopped being discovered."""
     found = {(path, loop.scope) for path, loop in loops}
     return sorted(
         path for path, scope in KNOWN_RUNNERS.items() if (path, scope) not in found
@@ -334,13 +259,8 @@ def missing_runners(loops):
 
 def _behaviour(expression):
     """How ``expression`` reads over the four flag combinations, or a complaint.
-
-    The flags go in as globals. They were locals, and a name inside a ``lambda``
-    or a comprehension in the condition resolves through globals and builtins at
-    call time, never through the locals ``eval`` was handed, so a guard written
-    as ``(lambda: not (terminated or truncated))()`` raised NameError and took
-    the run down instead of returning a verdict.
-    """
+    The flags go in as globals: a ``lambda`` in the condition resolves names
+    through globals at call time, and as locals it raised NameError."""
     names = {inner.id for inner in ast.walk(expression) if isinstance(inner, ast.Name)}
     if not names:
         return None, "never looks at either flag"
@@ -378,21 +298,9 @@ def _leaves_the_loop(body):
 
 
 def _exit_problem(loop):
-    """What is wrong with how a ``while True`` leaves on the flags, or None.
-
-    Two loops in this repository are written this way, for a reason they state:
-    they step first and leave on the flags afterwards, so the step count can be
-    checked against a bound on the way round and a termination regression fails
-    with a number instead of hanging until the CI timeout. Reading only
-    ``loop.test`` calls that "never looks at either flag", which is true of the
-    text and wrong about the loop.
-
-    Only the ``if`` statements the loop body runs every time round count. An exit
-    nested inside another branch is reached conditionally, and one inside a
-    nested ``for`` ends that ``for`` rather than this loop, so neither is an
-    answer to whether *this* loop stops. A loop that puts its exit somewhere else
-    is reported rather than guessed at.
-    """
+    """What is wrong with how a ``while True`` leaves on the flags, or None. Two
+    loops here step first and leave after, so a termination regression fails with
+    a number. Only the ``if`` exits the body runs every time round count."""
     for statement in loop.node.body:
         if not isinstance(statement, ast.If) or not _leaves_the_loop(statement.body):
             continue
@@ -406,11 +314,9 @@ def _exit_problem(loop):
 
 
 def guard_problem(loop):
-    """What is wrong with this loop's condition, or None.
-
-    Judged by what it does rather than by what it says. ``not (terminated and
-    truncated)`` mentions both names and keeps stepping after either one fires.
-    """
+    """What is wrong with this loop's condition, or None. Judged by what it does
+    rather than by what it says: ``not (terminated and truncated)`` mentions both
+    names and keeps stepping after either one fires."""
     test = loop.node.test
     if isinstance(test, ast.Constant) and test.value:
         return _exit_problem(loop)
@@ -470,22 +376,17 @@ def _fence_run(stripped):
 
 
 def _fence_language(stripped, run):
-    """The language word of an info string, lowercased.
-
-    Everything after the first word is the rest of the info string, which
-    CommonMark allows and this only has to get out of the way of.
-    """
+    """The language word of an info string, lowercased. Everything after the
+    first word is the rest of the info string, which CommonMark allows and this
+    only has to get out of the way of."""
     words = stripped[len(run) :].strip().split()
     return words[0].lower() if words else ""
 
 
 def source_files():
-    """Every Python file in this repository.
-
-    ``os.walk`` rather than ``rglob`` so the excluded directories are pruned
-    before they are opened. Dotted directories go too: ``.git``, ``.venv`` and
-    the caches are all of them, and none holds this repository's source.
-    """
+    """Every Python file in this repository. ``os.walk`` rather than ``rglob``
+    so the excluded directories are pruned before they are opened, and the
+    dotted ones (``.git``, ``.venv``, the caches) with them."""
     for directory, subdirectories, filenames in os.walk(REPO_ROOT):
         subdirectories[:] = sorted(
             name
@@ -559,16 +460,9 @@ class TestTheLoopTheReadmeShows(unittest.TestCase):
 
     @staticmethod
     def _python_blocks(text):
-        """The Python fenced blocks in ``text``.
-
-        Every part of this beyond the plain `````python`` case is here because
-        the previous version failed silently rather than loudly. A fence left
-        open ran off the end of the file with the block still in hand and
-        returned it to nobody, so the README test below ran over zero blocks and
-        passed for it; `````Python``, `````python title=x`` and ``~~~python``
-        were each read as prose for the same reason. None of them says anything
-        about the snippet being wrong, and all of them stop it being checked.
-        """
+        """The Python fenced blocks in ``text``. An unclosed fence used to
+        return nothing, so the README test ran over zero blocks and passed;
+        ``Python``, ``python title=x`` and ``~~~python`` were read as prose."""
         blocks = []
         collecting = None
         fence = None
@@ -931,12 +825,9 @@ if __name__ == "__main__":
 
 
 class TestHowALoopIsAllowedToLeave(unittest.TestCase):
-    """Two branches of the ``while True`` exit rule that nothing failed on.
-
-    Each admits a genuinely broken loop when it breaks, so each is pinned here
-    rather than left to the reader. Found by mutating the rule, not by reading
-    it: both survived a full run of this file.
-    """
+    """Two branches of the ``while True`` exit rule that nothing failed on. Each
+    admits a genuinely broken loop when it breaks, and both survived a full run
+    of this file before they were pinned here."""
 
     def problem(self, body):
         source = (
@@ -954,10 +845,9 @@ class TestHowALoopIsAllowedToLeave(unittest.TestCase):
         )
 
     def test_leaving_only_when_both_flags_are_set_is_leaving_never(self):
-        """The exit has to be the mirror of the guard rather than a mention of
-        both names. ``and`` here keeps stepping after either one fires, which is
-        the failure this file is about, and comparing the behaviour to anything
-        other than ``LEAVE_NOW`` lets it through."""
+        """The exit has to mirror the guard, not mention both names. ``and``
+        here keeps stepping after either one fires, and comparing the behaviour
+        to anything other than ``LEAVE_NOW`` lets it through."""
         self.assertIsNotNone(
             self.problem("    if terminated and truncated:\n        break\n")
         )
