@@ -253,8 +253,13 @@ def _regenerate_balloon_flights(scenario_parameters):
 
     env = BalloonPoppingEnv(render_mode=None, parameters=scenario_parameters)
     env.reset(seed=scenario_parameters["scenario"]["random_seed"])
-    return np.asarray(env._balloon_flights, dtype=float), np.asarray(
-        env._balloon_release_at_step
+    # The initial status as well as the schedule. Scenario 0 marks every balloon
+    # released in reset and never consults the schedule it just built, so the
+    # schedule alone does not say when a balloon became eligible to be popped.
+    return (
+        np.asarray(env._balloon_flights, dtype=float),
+        np.asarray(env._balloon_release_at_step),
+        np.asarray(env._balloon_status).reshape(-1),
     )
 
 
@@ -282,7 +287,7 @@ def check_balloon_trajectories(submission, tolerance, trusted_positions, canonic
             )
         ]
 
-    flights, release_at_step = _regenerate_balloon_flights(canonical)
+    flights, release_at_step, initial_status = _regenerate_balloon_flights(canonical)
 
     expected_balloons = flights.shape[0]
     if claimed.shape[1] != expected_balloons:
@@ -368,7 +373,70 @@ def check_balloon_trajectories(submission, tolerance, trusted_positions, canonic
             else "does not match the schedule the seed produces",
         )
     )
+    findings += _check_pops_are_not_before_release(
+        submission, release_at_step, initial_status
+    )
     return findings
+
+
+def _check_pops_are_not_before_release(submission, release_at_step, initial_status):
+    """No balloon is popped before the step it became eligible to be popped.
+
+    Derived the way ``step`` does rather than from the schedule alone. ``reset``
+    builds a schedule for every scenario, and scenario 0 then marks every balloon
+    released and never consults it, so comparing against the schedule reported an
+    honest scenario 0 run as having popped a balloon 30 steps before a release
+    that had already happened on step 1 (issue #123).
+
+    A balloon released in ``reset`` is eligible from step 1, and otherwise from
+    its scheduled step. A schedule of 0 needs no special case: the first record
+    is step 1, so no pop can be earlier than a schedule of 0 either way. Checked
+    against scenario 1, where the schedule is honoured: for all 100 balloons the
+    release the status history shows equals ``max(schedule, 1)``.
+
+    Both inputs come from the regenerated scenario, not from the submission. The
+    status history is what a forgery would edit, so it is what this is checked
+    against rather than what it is derived from: reading eligibility out of the
+    history cannot work, because a popped balloon reads 2, which is also
+    released, so a pop can never appear before its own release.
+    """
+    records = submission["balloon_world_data"]["trajectories"]
+    status = np.asarray([record["balloon_status"] for record in records], dtype=int)
+    status = status.reshape(status.shape[0], -1)
+    # Reported rather than skipped. The balloon count check above compares
+    # ``balloon_states``, so a submission whose ``balloon_status`` is a different
+    # width reaches here having passed it, and returning nothing would let the
+    # pop timing go unchecked without saying so.
+    if status.shape[1] != release_at_step.shape[0]:
+        return [
+            Finding(
+                "no balloon is popped before release",
+                False,
+                f"the status records cover {status.shape[1]} balloons and the "
+                f"scenario has {release_at_step.shape[0]}, so pop timing cannot "
+                "be checked",
+            )
+        ]
+
+    eligible_from = np.where(initial_status >= 1, _TRAJECTORY_OFFSET, release_at_step)
+    popped_rows = status == 2
+    # ``argmax`` answers 0 for a row of zeros, so a balloon that is never popped
+    # would report a first pop on step 1 and be accused wherever the schedule is
+    # later than that. Every balloon in scenario 1 that the rocket never reaches
+    # is one of those.
+    has_popped = popped_rows.any(axis=0)
+    first_pop_step = popped_rows.argmax(axis=0) + _TRAJECTORY_OFFSET
+    early = np.flatnonzero(has_popped & (first_pop_step < eligible_from))
+    return [
+        Finding(
+            "no balloon is popped before release",
+            early.size == 0,
+            "every pop is on or after the step the balloon was released on"
+            if early.size == 0
+            else f"{early.size} balloons are popped before they are released, "
+            f"first {early[:5].tolist()}",
+        )
+    ]
 
 
 def check_claimed_pops_are_reachable(submission, expected_positions, canonical):
@@ -527,32 +595,16 @@ def check_internal_consistency(submission):
         )
     )
 
-    # Not "2 never follows 0". That reads like the rule and is not one: step()
-    # marks a balloon released, detects pops, and only then writes the record,
-    # so a balloon released and popped on the same step legitimately records 0
-    # then 2 with nothing in between. Asserting that transition away would
-    # accuse an honest competitor of the one thing they cannot argue with.
+    # "no balloon is popped before release" used to live here, against the
+    # schedule the submission carries. It moved to where the scenario is known
+    # (_check_pops_are_not_before_release): the schedule alone does not say when a
+    # balloon became eligible, because scenario 0 releases every balloon in reset
+    # and never consults it, and the check accused honest runs (issue #123).
     #
-    # The rule that does hold is about when, not about the shape of the
-    # sequence: no balloon is popped before the step it is released on. Row k
-    # holds step k+1, the same offset the trajectory comparison uses.
-    release_at_step = np.asarray(world["balloon_release_at_step"], dtype=int)
-    popped_rows = status == 2
-    early = []
-    if release_at_step.shape[0] == status.shape[1]:
-        has_popped = popped_rows.any(axis=0)
-        first_pop_step = popped_rows.argmax(axis=0) + _TRAJECTORY_OFFSET
-        early = np.flatnonzero(has_popped & (first_pop_step < release_at_step))
-    findings.append(
-        Finding(
-            "no balloon is popped before release",
-            len(early) == 0,
-            "every pop is on or after the balloon's release step"
-            if len(early) == 0
-            else f"{len(early)} balloons are popped before they are released, "
-            f"first {early[:5].tolist()}",
-        )
-    )
+    # Not "2 never follows 0" either. That reads like the rule and is not one:
+    # step() marks a balloon released, detects pops, and only then writes the
+    # record, so a balloon released and popped on the same step legitimately
+    # records 0 then 2 with nothing in between.
     return findings
 
 

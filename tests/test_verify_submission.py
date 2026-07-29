@@ -39,6 +39,7 @@ if _STACK_AVAILABLE:
     from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
     from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
     from verify_submission import (
+        _check_pops_are_not_before_release,
         DEFAULT_TOLERANCE_METRES,
         _load_canonical_scenario,
         check_claimed_pops_are_reachable,
@@ -153,6 +154,25 @@ class TestTheSubmissionChecker(unittest.TestCase):
         self.submission["leaderboard_info"]["final_reward"] = 87
 
         self.assertIn("score matches the record", self.failures())
+
+    def test_the_release_timing_check_runs_at_all(self):
+        """Whether it is wired in, which none of its own tests can say.
+
+        Every test of the rule itself calls `_check_pops_are_not_before_release`
+        directly, so removing the line that calls it from the pipeline passed all
+        of them. An honest submission reports the finding as ok; a check that is
+        not called reports nothing, and the name is simply missing.
+
+        Not forged here: the fixture's one balloon is scheduled for step 0, so
+        every pop in it is legitimately on or after its release, and a forgery
+        would have to move the schedule too, which is a different finding.
+        """
+        names = [
+            finding.name
+            for finding in verify(self.submission, DEFAULT_TOLERANCE_METRES)
+        ]
+
+        self.assertIn("no balloon is popped before release", names)
 
     def test_a_status_going_backwards_is_caught(self):
         half = len(self.records) // 2
@@ -298,17 +318,118 @@ class TestWhenAPopIsTooEarly(unittest.TestCase):
             if not finding.ok
         ]
 
-    def test_released_and_popped_on_the_same_step_is_allowed(self):
-        # Row 0 holds step 1, so a balloon released on step 1 may read 2 there.
-        failures = self._consistency([[0], [2], [2]], release_at_step=[1])
 
-        self.assertNotIn("no balloon is popped before release", failures)
+class TestWhenABalloonBecomesEligibleToBePopped(unittest.TestCase):
+    """Against the scenario, not against the schedule the submission carries.
 
-    def test_popped_before_the_release_step_is_caught(self):
-        # Row 0 is step 1 again, and this balloon is not released until step 50.
-        failures = self._consistency([[2], [2], [2]], release_at_step=[50])
+    ``reset`` builds a release schedule for every scenario, and scenario 0 then
+    marks every balloon released and never consults it. Checking against the
+    schedule reported an honest scenario 0 run as having popped a balloon 30
+    steps before a release that had already happened on step 1 (issue #123).
+
+    Reading eligibility out of the status history instead cannot work, and the
+    first attempt at this fix did: a popped balloon reads 2, which is also
+    released, so a pop can never appear before its own release and the check is
+    vacuous. Both of these are pinned below.
+    """
+
+    @staticmethod
+    def _failures(status_rows, release_at_step, initial_status):
+        submission = {
+            "balloon_world_data": {
+                "trajectories": [{"balloon_status": list(row)} for row in status_rows]
+            }
+        }
+        return [
+            finding.name
+            for finding in _check_pops_are_not_before_release(
+                submission,
+                np.asarray(release_at_step),
+                np.asarray(initial_status),
+            )
+            if not finding.ok
+        ]
+
+    def test_a_scenario_0_balloon_is_eligible_from_the_first_step(self):
+        """Released in reset, so its schedule entry says nothing about it."""
+        failures = self._failures(
+            [[0]] * 369 + [[2]], release_at_step=[400], initial_status=[1]
+        )
+
+        self.assertEqual(failures, [])
+
+    def test_a_scenario_1_balloon_popped_before_its_schedule_is_caught(self):
+        failures = self._failures([[2], [2], [2]], [50], initial_status=[0])
 
         self.assertIn("no balloon is popped before release", failures)
+
+    def test_the_pop_need_not_be_on_the_first_row_to_be_early(self):
+        failures = self._failures([[0], [2], [2]], [50], initial_status=[0])
+
+        self.assertIn("no balloon is popped before release", failures)
+
+    def test_released_and_popped_on_the_same_step_is_allowed(self):
+        """step() releases, detects pops, then writes the record, so 0 followed
+        by 2 with nothing between is what an honest same-step pop looks like."""
+        failures = self._failures([[0], [0], [1], [2]], [3], initial_status=[0])
+
+        self.assertEqual(failures, [])
+
+    def test_the_first_row_is_step_one(self):
+        """A balloon scheduled for step 1 may read 2 on row 0; one scheduled for
+        step 2 may not."""
+        self.assertEqual(self._failures([[2]], [1], initial_status=[0]), [])
+        self.assertIn(
+            "no balloon is popped before release",
+            self._failures([[2], [2]], [2], initial_status=[0]),
+        )
+
+    def test_a_schedule_of_zero_is_the_first_step_too(self):
+        """Nothing is recorded for step 0, so a balloon scheduled for it is first
+        seen released on step 1 rather than accused of being early."""
+        self.assertEqual(self._failures([[2]], [0], initial_status=[0]), [])
+
+    def test_a_balloon_that_is_never_popped_is_not_accused(self):
+        """`argmax` answers 0 for a row of zeros, so without the popped filter an
+        untouched balloon reports a pop on step 1 and is early against any later
+        schedule. Most of scenario 1's hundred balloons are untouched."""
+        failures = self._failures(
+            [[0, 0], [1, 1], [1, 2]], [800, 3], initial_status=[0, 0]
+        )
+
+        self.assertEqual(failures, [])
+
+    def test_the_accusation_still_lands_on_the_balloon_that_earned_it(self):
+        """The control for the test above: with one balloon genuinely early, the
+        filter must not have suppressed the finding as well."""
+        failures = self._failures(
+            [[0, 2], [1, 2], [1, 2]], [800, 50], initial_status=[0, 0]
+        )
+
+        self.assertIn("no balloon is popped before release", failures)
+
+    def test_a_status_width_the_scenario_does_not_have_is_reported(self):
+        """The balloon count check upstream compares `balloon_states`, so a
+        submission whose `balloon_status` is a different width arrives here having
+        passed it. Comparing the two anyway raises; skipping quietly would leave
+        pop timing unchecked with nothing said."""
+        failures = self._failures([[2, 2]], [50], initial_status=[0])
+
+        self.assertIn("no balloon is popped before release", failures)
+
+    def test_the_history_alone_could_not_have_caught_any_of_this(self):
+        """The first fix read eligibility from the status history, where a popped
+        balloon already reads released. Kept as a test so the reasoning is not
+        rediscovered: every forgery above passes that rule."""
+        for rows in ([[2], [2], [2]], [[0], [2], [2]], [[2], [2]]):
+            with self.subTest(rows=rows):
+                status = np.asarray(rows, dtype=int)
+                popped = status == 2
+                released = status >= 1
+
+                self.assertGreaterEqual(
+                    int(popped.argmax(axis=0)[0]), int(released.argmax(axis=0)[0])
+                )
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
