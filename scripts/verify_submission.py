@@ -16,7 +16,7 @@ rather than quietly blessed.
 
 Run it against a submission downloaded from the leaderboard::
 
-    uv run python scripts/verify_submission.py 20260728T115315Z_team_submission.pkl
+    uv run python scripts/verify_submission.py 20260728T115315.000Z_team_<id>_submission.json
 
 Exit status is 0 when every check passes and 1 otherwise, so it can be used in
 a loop over a directory of submissions.
@@ -82,8 +82,8 @@ class Finding:
 def load_submission(path):
     """Read a submission, whichever container it is in.
 
-    Submissions are pickle today and JSON once the format change lands. Reading
-    by suffix means this keeps working across that without a second copy.
+    Submissions are JSON. Reading by suffix keeps the pickle path working for a
+    file packed before the change, without a second copy of everything below.
 
     The pickle is loaded with the restricted unpickler the leaderboard uses if
     it is importable, and refused otherwise: a submission being checked for

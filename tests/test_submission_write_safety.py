@@ -108,10 +108,12 @@ class TestAtomicWrite(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.directory = directory.name
-        self.out_path = os.path.join(self.directory, "submission.pkl")
+        self.out_path = os.path.join(self.directory, "submission.json")
 
     def _leftovers(self):
-        return [name for name in os.listdir(self.directory) if name != "submission.pkl"]
+        return [
+            name for name in os.listdir(self.directory) if name != "submission.json"
+        ]
 
     def test_a_failure_before_the_handle_has_an_owner_closes_it(self):
         """`mkstemp` returns a raw descriptor and only `fdopen` gives it an owner.
@@ -414,7 +416,7 @@ class TestPackedOutputPath(unittest.TestCase):
         )
         self.assertNotEqual(names[0], names[1])
         self.assertRegex(
-            names[0], r"^\d{8}T\d{6}\.\d{3}Z_team_[0-9a-f]{32}_submission\.pkl$"
+            names[0], r"^\d{8}T\d{6}\.\d{3}Z_team_[0-9a-f]{32}_submission\.json$"
         )
 
     def test_two_names_that_slug_the_same_still_get_different_paths(self):
@@ -455,7 +457,9 @@ class TestPackedOutputPath(unittest.TestCase):
                 lambda _path, writer, **_kw: writer(io.BytesIO()),
             ),
             mock.patch.object(
-                utils.pickle, "dump", lambda payload, _file: captured.update(payload)
+                utils.json,
+                "dump",
+                lambda payload, _file, **_k: captured.update(payload),
             ),
         ):
             utils.pack_for_submission(
