@@ -820,10 +820,6 @@ class TestTheDiscoveryPin(unittest.TestCase):
         self.assertEqual(missing_runners(found), [path])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestHowALoopIsAllowedToLeave(unittest.TestCase):
     """Two branches of the ``while True`` exit rule that nothing failed on. Each
     admits a genuinely broken loop when it breaks, and both survived a full run
@@ -858,3 +854,7 @@ class TestHowALoopIsAllowedToLeave(unittest.TestCase):
         self.assertIsNone(
             self.problem("    if terminated or truncated:\n        break\n")
         )
+
+
+if __name__ == "__main__":
+    unittest.main()
