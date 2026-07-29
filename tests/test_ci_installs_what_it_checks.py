@@ -40,6 +40,46 @@ def _runs(job, fragment):
     return any(fragment in line for line in _commands(job))
 
 
+class TestWhatTheWorkflowMustNotGiveAway(unittest.TestCase):
+    """Properties that a later edit would undo without anything noticing."""
+
+    def setUp(self):
+        self.jobs = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))["jobs"]
+
+    def test_no_job_holds_a_secret_in_its_environment(self):
+        """A secret in a job's `env` is handed to uv, pip, pytest and anything
+        they start. Only the step that needs it should get it, through `with`."""
+        for name, job in self.jobs.items():
+            for key, value in (job.get("env") or {}).items():
+                with self.subTest(job=name, variable=key):
+                    text = str(value)
+                    # `secrets.X != ''` carries whether a secret exists, which is
+                    # what a step's `if` can read. The value itself is the leak.
+                    self.assertFalse(
+                        "secrets." in text and "!=" not in text,
+                        f"{name}.env.{key} puts a secret in the job environment",
+                    )
+
+    def test_every_job_has_a_timeout(self):
+        """The default ceiling is six hours, and a non-finite command has already
+        left this project's solver refusing to return."""
+        for name, job in self.jobs.items():
+            with self.subTest(job=name):
+                self.assertIsInstance(job.get("timeout-minutes"), int)
+
+    def test_a_run_with_no_coverage_cannot_upload_nothing(self):
+        """`warn` lets a run that produced no coverage report look fine."""
+        uploads = [
+            step
+            for step in self.jobs[GATING_JOB]["steps"]
+            if "upload-artifact" in str(step.get("uses", ""))
+        ]
+        self.assertTrue(uploads)
+        for step in uploads:
+            with self.subTest(step=step.get("name")):
+                self.assertEqual(step["with"].get("if-no-files-found"), "error")
+
+
 class TestTheGatingJob(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
