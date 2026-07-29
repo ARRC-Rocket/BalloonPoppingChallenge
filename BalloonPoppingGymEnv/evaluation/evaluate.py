@@ -1,11 +1,19 @@
+import copy
 import importlib.util
+import logging
 import os
 import sys
 
 import yaml
 
+from BalloonPoppingGymEnv.console_logging import configure_console_logging
 from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
 from BalloonPoppingGymEnv.evaluation.results.utils import save_trajectories
+
+# Named rather than __name__: running this file as a script makes __name__
+# "__main__", which puts its records outside the package logger the console
+# setup below attaches to, and shows up in the output as "__main__".
+logger = logging.getLogger("BalloonPoppingGymEnv.evaluation.evaluate")
 
 
 def _extract_nested_parameters(scenario_parameters, given_parameters_spec):
@@ -22,13 +30,27 @@ def _extract_nested_parameters(scenario_parameters, given_parameters_spec):
     -------
     dict
         Filtered parameters containing only specified keys
+
+    Notes
+    -----
+    Deep copied, because this is what the agent's constructor is handed and the
+    agent is a competitor's code. The dict comprehension builds new dicts, so
+    replacing a value in the result did not reach the environment, but any list
+    value was the same object the environment reads. Measured: four of them were
+    shared, and writing to one of those reached the physics.
+
+    ``given["rocket"]["control"]["throttle_range"][1] = 99.0`` made the
+    environment build the throttle actuator with a range of ``[0.0, 99.0]``, and
+    ``given["rocket"]["rocket_body"]["inertia"][0]`` changed the rocket's moment
+    of inertia. Both are read when the flight is constructed on the launch
+    action, which is after the agent has already run.
     """
     given_parameters = {}
 
     for section, keys in given_parameters_spec.items():
         if isinstance(keys, list):
             given_parameters[section] = {
-                key: scenario_parameters[section][key]
+                key: copy.deepcopy(scenario_parameters[section][key])
                 for key in keys
                 if key in scenario_parameters[section]
             }
@@ -36,7 +58,7 @@ def _extract_nested_parameters(scenario_parameters, given_parameters_spec):
             given_parameters[section] = {}
             for subsection, sub_keys in keys.items():
                 given_parameters[section][subsection] = {
-                    key: scenario_parameters[section][subsection][key]
+                    key: copy.deepcopy(scenario_parameters[section][subsection][key])
                     for key in sub_keys
                     if key in scenario_parameters[section][subsection]
                 }
@@ -138,44 +160,54 @@ def evaluate_scenario(
 
     observation, info = env.reset(seed=scenario_parameters["scenario"]["random_seed"])
     terminated = False
+    truncated = False
 
-    while not terminated:
+    while not (terminated or truncated):
         action = agent.get_action(observation)
-        observation, reward, terminated, _, info = env.step(action)
+        observation, reward, terminated, truncated, info = env.step(action)
 
     save_trajectories(trajectories=env.trajectories)
-    print(f"Scenario {scenario_number} evaluation completed with agent '{agent_name}'.")
-    print(f"Total reward: {info['popped_count']}")
+    logger.info(
+        "Scenario %s evaluation completed with agent '%s'.",
+        scenario_number,
+        agent_name,
+    )
+    logger.info("Total reward: %s", info["popped_count"])
 
     return env, agent, scenario_parameters
 
 
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
+def main(argv=None):
+    """The command line entry point, as a function so it can be driven.
+
+    Split out of the ``__main__`` block so a test can exercise the console
+    configuration and the exact output without launching a subprocess that runs
+    a full simulation, a renderer and the submission path just to see a
+    formatter.
+    """
+    configure_console_logging()
+
+    arguments = sys.argv[1:] if argv is None else list(argv)
+    if not arguments:
         raise ValueError(
             "Configuration file path is required. "
             "Usage: python evaluate.py <path_to_eval_config.yaml>"
         )
 
-    eval_cfg_path = sys.argv[1]
+    eval_cfg_path = arguments[0]
     with open(eval_cfg_path, "r", encoding="utf-8-sig") as file:
         eval_cfg = yaml.safe_load(file)
 
-    scenario_number = eval_cfg["scenario_number"]
-    render_mode = eval_cfg["render_mode"]
-    agent_module_path = eval_cfg["agent_module_path"]
-    agent_class_name = eval_cfg["agent_class_name"]
-    agent_name = eval_cfg["agent_name"]
-    agent_kwargs = eval_cfg["agent_kwargs"]
-
     # Load agent class dynamically from specified module path.
-    agent_class = _load_agent_class(agent_module_path, agent_class_name)
+    agent_class = _load_agent_class(
+        eval_cfg["agent_module_path"], eval_cfg["agent_class_name"]
+    )
     env, agent, scenario_parameters = evaluate_scenario(
         agent_class,
-        agent_kwargs=agent_kwargs,
-        agent_name=agent_name,
-        scenario_number=scenario_number,
-        render_mode=render_mode,
+        agent_kwargs=eval_cfg["agent_kwargs"],
+        agent_name=eval_cfg["agent_name"],
+        scenario_number=eval_cfg["scenario_number"],
+        render_mode=eval_cfg["render_mode"],
     )
     if eval_cfg["leaderboard_submission"]:
         from BalloonPoppingGymEnv.evaluation.results.utils import pack_for_submission
@@ -183,3 +215,8 @@ if __name__ == "__main__":
         pack_for_submission(
             eval_cfg=eval_cfg, env=env, scenario_parameters=scenario_parameters
         )
+    return env, agent, scenario_parameters
+
+
+if __name__ == "__main__":
+    main()

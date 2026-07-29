@@ -2,13 +2,23 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # develop as well as main. Work reaches the integration branch by merge and
+    # occasionally by direct push, and neither used to run anything here, so a
+    # regression could sit on develop until some later pull request inherited it.
+    branches: [main, develop]
   pull_request:
   workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+
+# Nothing here writes back to the repository. Without a declaration the
+# workflow token carries whatever the repository default grants, which is
+# usually write, and a checkout plus a third-party dependency install is the
+# wrong place to be holding it. Jobs that need more can ask for it locally.
+permissions:
+  contents: read
 
 jobs:
   lint:
@@ -24,19 +34,29 @@ jobs:
           python-version: "3.14"
 
       - name: Install ruff
-        run: python -m pip install ruff
+        run: python -m pip install "ruff==0.15.20"
 
       - name: Lint
-        run: ruff check BalloonPoppingGymEnv/ tests/
+        run: ruff check BalloonPoppingGymEnv/ tests/ doc/examples/
 
       - name: Format check
-        run: ruff format --check BalloonPoppingGymEnv/ tests/
+        run: ruff format --check BalloonPoppingGymEnv/ tests/ doc/examples/
 
   test:
-    name: Tests and coverage
+    name: Tests and coverage (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      # Competitors run this on their own machines, and pyproject.toml claims
+      # >=3.10, so the floor is tested rather than only asserted. ActiveRocketPy
+      # already runs its own CI on 3.10.
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.14"]
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      # Run the opt-in slow regression tests (e.g. the scenario #1 Monte Carlo
+      # golden master) in CI; they are skipped by default for fast local runs.
+      BPC_RUN_SLOW_TESTS: "1"
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -46,9 +66,16 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.14"
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: requirements-dev.txt
+
+      # CI installs with pip, so nothing else would notice uv.lock going stale
+      # against the ActiveRocketPy submodule. This fails when it does.
+      - name: Check the uv lockfile is current
+        run: |
+          python -m pip install "uv==0.11.14"
+          uv lock --check
 
       - name: Install dependencies
         run: |
@@ -62,13 +89,13 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: coverage-xml
+          name: coverage-xml-py${{ matrix.python-version }}
           path: coverage.xml
           if-no-files-found: warn
 
       # Skipped until a CODECOV_TOKEN repository secret is configured.
       - name: Upload coverage to Codecov
-        if: ${{ env.CODECOV_TOKEN != '' }}
+        if: ${{ env.CODECOV_TOKEN != '' && matrix.python-version == '3.14' }}
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}

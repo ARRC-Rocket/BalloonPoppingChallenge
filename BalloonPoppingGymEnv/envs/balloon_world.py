@@ -1,5 +1,7 @@
 import copy
+import logging
 import os
+import shutil
 import tempfile
 
 import gymnasium as gym
@@ -25,6 +27,102 @@ from rocketpy.sensors.accelerometer import Accelerometer
 from rocketpy.sensors.gnss_receiver import GnssReceiver
 from rocketpy.sensors.gyroscope import Gyroscope
 from rocketpy.tools import euler313_to_quaternions
+
+logger = logging.getLogger(__name__)
+
+
+def _remove_monte_carlo_workspace(directory):
+    """Delete a Monte Carlo scratch directory, saying so if it will not go.
+
+    ``ignore_errors=True`` would turn a failed removal back into the silent
+    accumulation this exists to stop, and letting the error out would turn a
+    finished reset into a failure over scratch files nobody wanted. Neither, so
+    it is reported instead.
+    """
+    try:
+        shutil.rmtree(directory)
+    except OSError as error:
+        logger.warning(
+            "Could not remove the Monte Carlo workspace at %s: %s", directory, error
+        )
+
+
+def _monte_carlo_workspace_has_files(directory):
+    """Whether the workspace holds anything worth keeping, without raising.
+
+    This runs inside an ``except`` block. An error raised here would be chained
+    onto the failure being handled rather than replacing it, so the original is
+    still readable, but it would stop the path being logged and stop the empty
+    directory being removed. So it answers "keep it" when it cannot tell.
+    """
+    try:
+        return bool(os.listdir(directory))
+    except OSError as error:
+        logger.warning(
+            "Could not inspect the Monte Carlo workspace at %s: %s", directory, error
+        )
+        return True
+
+
+# The result keys the balloon flights are built from. Counted together rather
+# than trusting one of them to speak for the rest.
+_MONTE_CARLO_RESULT_KEYS = ("x", "y", "z", "vx", "vy", "vz", "lat0", "lon0")
+
+
+def _check_monte_carlo_returned_every_balloon(results, requested):
+    """Refuse a short result set instead of building a world out of it.
+
+    ``simulate()`` does not always raise when it stops early. The pinned
+    RocketPy catches ``KeyboardInterrupt``, appends to its error file, prints
+    "Keyboard interrupt received. Files saved." and returns normally, so a
+    Ctrl-C part way through a hundred balloons comes back as fewer trajectories
+    rather than as a failure. Only ``Exception`` is re-raised there.
+
+    Exactly one returned trajectory is the case worth naming. The release shift
+    indexes with ``arange(num_balloons)`` against one release step per requested
+    balloon, so a ``(1, 6, T)`` array broadcasts to a full ``(100, 6, T)`` one in
+    which every balloon flies the same path, time shifted. Nothing downstream can
+    tell, and the episode scores normally against a world that was never
+    simulated. Every other short count reaches the same expression and raises an
+    IndexError about indexing array shapes, which is loud but says nothing about
+    what actually went wrong.
+    """
+    counts = {
+        key: len(results[key]) if key in results else None
+        for key in _MONTE_CARLO_RESULT_KEYS
+    }
+    if any(count != requested for count in counts.values()):
+        raise RuntimeError(
+            f"the balloon Monte Carlo was asked for {requested} trajectories "
+            f"and returned {counts}, so the balloon flights cannot be built. A "
+            "keyboard interrupt during the run is the usual cause: RocketPy "
+            "catches it, saves its files and returns what it has."
+        )
+
+
+def _seed_sequence_to_int(seed_sequence):
+    """Encode 128 generated state bits of ``seed_sequence`` as a plain int.
+
+    Sensors keep whatever seed they were built with and hand it back from
+    ``to_dict()``, which the submission packer runs through ``RocketPyEncoder``.
+    A ``SeedSequence`` object has no JSON form, so passing one straight to a
+    sensor makes packing a submission fail. An int has one and ``default_rng``
+    accepts it.
+
+    Not a change of representation. ``default_rng(child)`` mixes in the child's
+    ``spawn_key``; ``default_rng(int)`` builds a fresh root sequence from these
+    bits, so the generator draws a different stream from the one the child
+    itself would have produced. That is deliberate: both shipped scenarios run
+    at ``noise_density: 0.0``, so no baseline depends on the old stream, and the
+    three derived values are pinned by a test so a later move is a decision
+    rather than a side effect. Preserving the exact stream needs
+    ``SeedSequence`` serialization upstream (RocketPy-Team/RocketPy#1087).
+
+    The words are combined by value rather than through ``tobytes``, so the
+    result does not depend on the machine's byte order.
+    """
+    words = seed_sequence.generate_state(4, dtype=np.uint32)
+    return sum(int(word) << (32 * position) for position, word in enumerate(words))
 
 
 class BalloonPoppingEnv(gym.Env):
@@ -52,6 +150,10 @@ class BalloonPoppingEnv(gym.Env):
         self._rocket_sensors = np.full(12, np.nan)
         # (posX, posY, posZ, velX, velY, velZ, e0, e1, e2, e3, w1, w2, w3)
         self._rocket_states = np.full(13, np.nan)
+        # Where the next pop sweep starts. Tracked separately from
+        # ``_rocket_states`` because the flight only produces a state on the step
+        # after the launch action, while the sweep has to start at the pad.
+        self._sweep_origin = None
         # save trajectories for logging
         self.trajectories = None
 
@@ -100,8 +202,10 @@ class BalloonPoppingEnv(gym.Env):
                     dtype=np.float64,
                 ),
                 "tvc": spaces.Box(
-                    low=-self.rocket_parameters["control"]["gimbal_range"] * np.ones(2),
-                    high=self.rocket_parameters["control"]["gimbal_range"] * np.ones(2),
+                    low=-self.rocket_parameters["control"]["max_gimbal_angle"]
+                    * np.ones(2),
+                    high=self.rocket_parameters["control"]["max_gimbal_angle"]
+                    * np.ones(2),
                     dtype=np.float64,
                 ),
                 "throttle": spaces.Box(
@@ -127,18 +231,40 @@ class BalloonPoppingEnv(gym.Env):
         self.render_rocket = None
 
     def _get_obs(self):
+        """The agent's view of the world, detached from the world.
+
+        Copies, not the arrays themselves. What is handed back goes straight to
+        ``agent.get_action()``, and a numpy array handed out by reference is a
+        writable alias: whatever the agent does to it happens to the
+        environment's own state.
+
+        That mattered here more than it usually does, because ``step()``
+        computes the reward from ``_balloon_status`` after the agent has
+        returned, and ``pack_for_submission`` records the resulting count as the
+        score. An agent that never launched and only wrote 2 into the status it
+        was handed scored every balloon in the scenario. ``_balloon_states`` is
+        a slice of ``_balloon_flights``, so writing to that rewrote the balloon
+        trajectory the pop sweep compares against as well.
+
+        The cost is one copy of a few kilobytes per step, which is not
+        measurable against a flight step.
+        """
         sim_time = self.current_step * self.simulation_parameters["time_step"]
         return {
             "simulation_time": sim_time,
-            "balloon_status": self._balloon_status,
-            "balloon_states": self._balloon_states,
-            "rocket_sensors": self._rocket_sensors,
+            "balloon_status": self._balloon_status.copy(),
+            "balloon_states": self._balloon_states.copy(),
+            "rocket_sensors": self._rocket_sensors.copy(),
         }
 
     def _get_info(self):
+        """Same rule. ``_rocket_states`` aliases the flight's own solution
+        vector, so handing it out by reference lets a caller write into the
+        integrator's state between steps.
+        """
         return {
-            "rocket_states": self._rocket_states,
-            "popped_count": self._popped_count,
+            "rocket_states": self._rocket_states.copy(),
+            "popped_count": int(self._popped_count),
         }
 
     def reset(self, seed=None, options=None):
@@ -169,6 +295,7 @@ class BalloonPoppingEnv(gym.Env):
         self._balloon_states = self._balloon_flights[:, :, 0]
         self._rocket_sensors = np.full(12, np.nan)
         self._rocket_states = np.full(13, np.nan)
+        self._sweep_origin = None
         self.trajectories = None
 
         self.rocket_launched = False
@@ -188,7 +315,6 @@ class BalloonPoppingEnv(gym.Env):
 
     def step(self, action):
         previous_balloon_positions = self._balloon_states[:, :3].copy()
-        previous_rocket_position = self._rocket_states[:3].copy()
         self.current_step += 1
 
         #  Update the balloon states
@@ -211,10 +337,15 @@ class BalloonPoppingEnv(gym.Env):
                     self.current_step * self.simulation_parameters["time_step"]
                 )
                 self.__init_rocket_simulation()
+                self._sweep_origin = np.asarray(self.initial_solution[1:4], dtype=float)
         else:  # Apply action to step the rocket simulation and get sensor measurements
             self._rocket_flight.rocket.roll_control.roll_torque = action["roll"]
-            self._rocket_flight.rocket.tvc.gimbal_angle_x = action["tvc"][0]
-            self._rocket_flight.rocket.tvc.gimbal_angle_y = action["tvc"][1]
+            self._rocket_flight.rocket.thrust_vector_control.gimbal_angle_x = action[
+                "tvc"
+            ][0]
+            self._rocket_flight.rocket.thrust_vector_control.gimbal_angle_y = action[
+                "tvc"
+            ][1]
             self._rocket_flight.rocket.throttle_control.throttle = action["throttle"]
             self._rocket_flight.step_simulation()
             _sensor = self._rocket_flight.sensors
@@ -224,8 +355,9 @@ class BalloonPoppingEnv(gym.Env):
             self._rocket_states = self._rocket_flight.y_sol[:]
             _rocket_finished = self._rocket_flight._step_state["finished"]
 
-            # detect pops
-            self._detect_pops(previous_balloon_positions, previous_rocket_position)
+            # detect pops over the interval the rocket just flew
+            self._detect_pops(previous_balloon_positions, self._sweep_origin)
+            self._sweep_origin = self._rocket_states[:3].copy()
 
         # Append rocket and balloon states to trajectories for logging
         step_record = {
@@ -233,7 +365,7 @@ class BalloonPoppingEnv(gym.Env):
             "rocket_states": self._rocket_states.copy().tolist(),
             "balloon_states": self._balloon_states.copy().tolist(),
             "balloon_status": self._balloon_status[:, 0].tolist(),
-        }        
+        }
         if self.trajectories is None:
             self.trajectories = [step_record]
         else:
@@ -242,12 +374,24 @@ class BalloonPoppingEnv(gym.Env):
         # An episode is done iff reaches max time or end of trajectory
         _timeout = self.current_step >= self.num_timesteps - 1
         if _timeout:
-            print("Terminated: Reached max time")
-            self._rocket_flight.post_process_simulation()
-            self._rocket_flight.initialize_prints_plots()
+            logger.info("Truncated: Reached max time")
+            # An agent is free never to launch, in which case there is no flight
+            # to post-process and these calls would raise instead of ending the
+            # episode.
+            if self._rocket_flight is not None:
+                self._rocket_flight.post_process_simulation()
+                self._rocket_flight.initialize_prints_plots()
         elif _rocket_finished:
-            print("Terminated: Rocket flight finished")
-        terminated = _timeout or _rocket_finished
+            logger.info("Terminated: Rocket flight finished")
+        # Gymnasium keeps these apart on purpose. terminated means the MDP
+        # reached a terminal state, which here is the flight ending. truncated
+        # means something outside it stopped the episode, which is what running
+        # out of precomputed horizon is. An algorithm bootstraps the value of
+        # the final state when it was truncated and does not when it terminated,
+        # so reporting the clock as termination teaches an agent that running
+        # out of time is absorbing.
+        terminated = _rocket_finished
+        truncated = _timeout
 
         # Calculate reward based on newly popped balloons at this step
         new_count = np.sum(self._balloon_status[:, 0] == 2)
@@ -262,10 +406,15 @@ class BalloonPoppingEnv(gym.Env):
         _remainder = np.remainder(
             self.current_step, 0.1 / self.simulation_parameters["time_step"]
         )  # print every 0.1 sec
-        if _remainder == 0 or terminated:
+        # Both endings, not only termination. This used to read ``terminated``
+        # while that flag covered the clock as well, so an episode ending on the
+        # horizon always drew its last frame. Splitting the two causes quietly
+        # took that away from every truncated episode whose final step does not
+        # land on the 0.1 s cadence, which for scenario 1 is the usual ending.
+        if _remainder == 0 or terminated or truncated:
             self._render_frame()
 
-        return observation, reward, terminated, False, info
+        return observation, reward, terminated, truncated, info
 
     @staticmethod
     def _segment_distance_squared_batch(
@@ -280,7 +429,48 @@ class BalloonPoppingEnv(gym.Env):
         segment_start_b = np.asarray(segment_start_b, dtype=float)
         segment_end_b = np.asarray(segment_end_b, dtype=float)
 
-        epsilon = 1e-12
+        # Two tolerances, because the quantities they guard are not the same
+        # kind of thing. ``a_coeff`` and ``e_coeff`` are squared lengths in m**2,
+        # so a length below a micron counts as no movement at all. The
+        # denominator is a_coeff * e_coeff - b_coeff**2, in m**4, and how big it
+        # is says nothing on its own: it depends on the segment lengths as much
+        # as on the angle between them.
+        #
+        # One absolute value for both made the parallel decision depend on
+        # scale. A 1 mm rocket segment and a 1 mm balloon segment at exactly
+        # ninety degrees give a denominator of exactly 1e-12, so
+        # ``> 1e-12`` called perpendicular segments parallel, took the branch
+        # that pins s to zero, and reported 1.5005 m where the real distance is
+        # 1.4995 m. With a 1.5 m radius that is a pop reported as a miss.
+        #
+        # Measured over a scenario-1 run: 56 of 9155 released-balloon
+        # evaluations landed in that branch, all of them genuinely degenerate,
+        # so no score moved. It is the shape of the test that is wrong rather
+        # than any current result.
+        degenerate_length_squared = 1e-12
+        # Dimensionless: sin(angle)**2 has to clear this before the two
+        # directions count as distinct, whatever the segments are scaled to.
+        #
+        # Derived from double precision rather than chosen. The denominator is
+        # two nearly equal products subtracted, so its own rounding error is of
+        # order eps * a_coeff * e_coeff, and a few multiples of that is the
+        # point below which its sign and magnitude mean nothing. Eight is the
+        # margin.
+        #
+        # Not a value to widen. The branch it selects pins s to zero, which is
+        # the right answer only when the directions really are parallel, since
+        # then every s gives the same distance. For merely close to parallel it
+        # is wrong, and the wider the tolerance the more pairs land there. At
+        # 1e-12 this pair returned 1.5000004 m where the true closest approach
+        # is 1.4999995 m, which against a 1.5 m radius is a pop reported as a
+        # miss:
+        #
+        #     rocket  (0, 0, 0)          -> (1, 0, 0)
+        #     balloon (-1, 1.5000013, 0) -> (1, 1.4999995, 0)
+        #
+        # At 8 * eps that pair goes through the regular solution and is right.
+        parallel_relative_epsilon = 8 * np.finfo(float).eps
+        epsilon = degenerate_length_squared
         direction_a = segment_end_a - segment_start_a
         direction_b = segment_end_b - segment_start_b
         offset = segment_start_a - segment_start_b
@@ -315,7 +505,13 @@ class BalloonPoppingEnv(gym.Env):
                 b_coeff = np.einsum("j,ij->i", direction_a, direction_b)
                 denominator = a_coeff * e_coeff - b_coeff * b_coeff
 
-                non_parallel = regular & (np.abs(denominator) > epsilon)
+                # Relative to a_coeff * e_coeff, which is what the denominator
+                # would be at ninety degrees, so this compares sin(angle)**2
+                # against a dimensionless tolerance and scaling both segments
+                # cannot change the answer.
+                non_parallel = regular & (
+                    np.abs(denominator) > parallel_relative_epsilon * a_coeff * e_coeff
+                )
                 s_param[non_parallel] = np.clip(
                     (
                         b_coeff[non_parallel] * f_coeff[non_parallel]
@@ -432,10 +628,12 @@ class BalloonPoppingEnv(gym.Env):
                     self._balloon_states[:, 2],
                     c="magenta",
                 )
+                # Arrays, not scalars: plot documents xs/ys as array-like, and
+                # the update below has to keep the same types (see #89).
                 self.render_rocket = self.render_canvas.plot(
-                    self._rocket_states[0],
-                    self._rocket_states[1],
-                    self._rocket_states[2],
+                    np.array([self._rocket_states[0]]),
+                    np.array([self._rocket_states[1]]),
+                    np.array([self._rocket_states[2]]),
                     "s",
                     color="blue",
                 )
@@ -465,10 +663,18 @@ class BalloonPoppingEnv(gym.Env):
                 self._balloon_states[:, 2],
             )
             self.render_balloons.set_facecolors(colors)
-            self.render_rocket[0].set_data(
-                [self._rocket_states[0]], [self._rocket_states[1]]
+            # Arrays rather than lists. Line3D.draw reaches for `_verts3d[0].shape`
+            # when a coordinate is invalid for the axis scale, and the rocket
+            # state is all-NaN until the launch action builds the flight, so
+            # every frame before launch takes that branch. With lists it raises
+            # `'list' object has no attribute 'shape'` on Matplotlib 3.11 and
+            # loses the run (#89). Finite coordinates never reach the branch,
+            # which is why lists went unnoticed.
+            self.render_rocket[0].set_data_3d(
+                np.array([self._rocket_states[0]]),
+                np.array([self._rocket_states[1]]),
+                np.array([self._rocket_states[2]]),
             )
-            self.render_rocket[0].set_3d_properties([self._rocket_states[2]])
             self.render_canvas.set_title(
                 f"Time: {self.current_step * self.simulation_parameters['time_step']:.2f} sec\nTotal Reward: {self._popped_count}"
             )
@@ -478,7 +684,7 @@ class BalloonPoppingEnv(gym.Env):
             pass
 
     def close(self):
-        print("closing environment")
+        logger.debug("closing environment")
 
     def __create_environment(self):
         self._rocketpy_env = Environment(
@@ -657,59 +863,108 @@ class BalloonPoppingEnv(gym.Env):
             self.simulation_parameters["max_time"],
             self.simulation_parameters["time_step"],
         )
-        monte_carlo_sim = MonteCarlo(
-            filename=os.path.join(tempfile.gettempdir(), f"balloon_sim_{os.getpid()}"),
-            environment=stochastic_env,
-            rocket=stochastic_balloon,
-            flight=stochastic_flight,
-            export_list=["t_final"],
-            data_collector={
-                "x": lambda flight: flight.x(time_array),
-                "y": lambda flight: flight.y(time_array),
-                "z": lambda flight: flight.z(time_array),
-                "vx": lambda flight: flight.vx(time_array),
-                "vy": lambda flight: flight.vy(time_array),
-                "vz": lambda flight: flight.vz(time_array),
-                "lat0": lambda flight: flight.latitude(0),
-                "lon0": lambda flight: flight.longitude(0),
-            },
-        )
+        # MonteCarlo writes .inputs.txt, .outputs.txt and .errors.txt beside its
+        # filename, and for scenario 1 the outputs file is 169 MB. A successful
+        # reset reads none of them back: the arrays below come from the returned
+        # dict. Written straight into the shared temp directory they were never
+        # removed, so a competitor iterating on an agent left one set behind per
+        # run and filled /tmp within tens of runs, after which runs fail in ways
+        # that do not point back here. Measured: 22 files, 3.7 GB, and one
+        # corrupted run.
+        #
+        # Removed only once the whole conversion below has succeeded, which is
+        # why this is not a TemporaryDirectory. RocketPy keeps the failing
+        # stochastic inputs on purpose: a serial simulation error appends them to
+        # .errors.txt and re-raises, and Ctrl-C prints "Files saved." A context
+        # manager deletes the directory while the exception unwinds, so the
+        # caller is told the files were saved and finds nothing there. The
+        # conversion is inside the same block because it has its own ways to
+        # fail, and an incomplete result is exactly when the inputs that produced
+        # it are worth having.
+        #
+        # mkdtemp creates the directory exclusively, so this also subsumes the
+        # per-process filename that was there to keep two runs apart.
+        monte_carlo_dir = tempfile.mkdtemp(prefix="balloon_sim_")
+        try:
+            monte_carlo_sim = MonteCarlo(
+                filename=os.path.join(monte_carlo_dir, "balloon_sim"),
+                environment=stochastic_env,
+                rocket=stochastic_balloon,
+                flight=stochastic_flight,
+                export_list=["t_final"],
+                data_collector={
+                    "x": lambda flight: flight.x(time_array),
+                    "y": lambda flight: flight.y(time_array),
+                    "z": lambda flight: flight.z(time_array),
+                    "vx": lambda flight: flight.vx(time_array),
+                    "vy": lambda flight: flight.vy(time_array),
+                    "vz": lambda flight: flight.vz(time_array),
+                    "lat0": lambda flight: flight.latitude(0),
+                    "lon0": lambda flight: flight.longitude(0),
+                },
+            )
 
-        monte_carlo_results_ = monte_carlo_sim.simulate(
-            number_of_simulations=self.balloon_parameters["num"],
-            append=False,
-            include_function_data=False,
-            random_seed=self.np_random_seed,
-            parallel=False,
-        )
+            # One read, used for both the request and the check on what came
+            # back, so the two cannot drift apart later.
+            requested_balloons = self.balloon_parameters["num"]
+            monte_carlo_results_ = monte_carlo_sim.simulate(
+                number_of_simulations=requested_balloons,
+                append=False,
+                include_function_data=False,
+                random_seed=self.np_random_seed,
+                parallel=False,
+            )
 
-        # Convert Monte Carlo dict to [balloon][state][timestep].
-        east0, north0, up0 = pm.geodetic2enu(
-            monte_carlo_results_["lat0"],
-            monte_carlo_results_["lon0"],
-            self._rocketpy_env.elevation,
-            self._rocketpy_env.latitude,
-            self._rocketpy_env.longitude,
-            self._rocketpy_env.elevation,
-        )
-        # Broadcast initial ENU offsets to all timesteps for each simulation
-        east0, north0, up0 = (
-            np.array(east0)[:, None],
-            np.array(north0)[:, None],
-            np.array(up0)[:, None],
-        )
+            _check_monte_carlo_returned_every_balloon(
+                monte_carlo_results_, requested_balloons
+            )
 
-        self._balloon_flights = np.stack(
-            [
-                np.array(monte_carlo_results_["x"]) + east0,
-                np.array(monte_carlo_results_["y"]) + north0,
-                np.array(monte_carlo_results_["z"]) + up0,
-                np.array(monte_carlo_results_["vx"]),
-                np.array(monte_carlo_results_["vy"]),
-                np.array(monte_carlo_results_["vz"]),
-            ],
-            axis=1,
-        )
+            # Convert Monte Carlo dict to [balloon][state][timestep].
+            east0, north0, up0 = pm.geodetic2enu(
+                monte_carlo_results_["lat0"],
+                monte_carlo_results_["lon0"],
+                self._rocketpy_env.elevation,
+                self._rocketpy_env.latitude,
+                self._rocketpy_env.longitude,
+                self._rocketpy_env.elevation,
+            )
+            # Broadcast initial ENU offsets to all timesteps for each simulation
+            east0, north0, up0 = (
+                np.array(east0)[:, None],
+                np.array(north0)[:, None],
+                np.array(up0)[:, None],
+            )
+
+            self._balloon_flights = np.stack(
+                [
+                    np.array(monte_carlo_results_["x"]) + east0,
+                    np.array(monte_carlo_results_["y"]) + north0,
+                    np.array(monte_carlo_results_["z"]) + up0,
+                    np.array(monte_carlo_results_["vx"]),
+                    np.array(monte_carlo_results_["vy"]),
+                    np.array(monte_carlo_results_["vz"]),
+                ],
+                axis=1,
+            )
+        except BaseException:
+            # Including KeyboardInterrupt, which is the case RocketPy prints
+            # "Files saved." for. Keeping them costs one directory; removing
+            # them costs whoever has to work out why a run failed.
+            #
+            # Only when there is something to keep. A failure before any file
+            # was written, which is every failure inside the MonteCarlo
+            # constructor, would otherwise leave an empty directory behind on
+            # every attempt: the leak this whole change is about, in a smaller
+            # size.
+            if _monte_carlo_workspace_has_files(monte_carlo_dir):
+                logger.warning(
+                    "Balloon Monte Carlo failed; its inputs and error log are at %s",
+                    monte_carlo_dir,
+                )
+            else:
+                _remove_monte_carlo_workspace(monte_carlo_dir)
+            raise
+        _remove_monte_carlo_workspace(monte_carlo_dir)
 
         # Vectorized shift trajectories by release step
         num_balloons, state_dims, num_timesteps = self._balloon_flights.shape
@@ -889,11 +1144,42 @@ class BalloonPoppingEnv(gym.Env):
 
         # Add sensors from parameters
         sensors_cfg = self.rocket_parameters["sensors"]
+        # Seed each sensor's noise generator deterministically from the scenario
+        # seed, so the sensor-noise realization is reproducible and independent
+        # of the process-global RNG and of how the run is parallelized (the agent
+        # never sees the seed). Distinct sub-streams decorrelate the three
+        # sensors; the domain tag keeps them clear of the balloon Monte Carlo's
+        # own SeedSequence(scenario_seed) tree even once that runs in parallel.
+        sensor_seed_domain = 0x5E2502  # fixed "sensor" tag, distinct from the MC
+        seed = self.np_random_seed
+        if seed is None or seed < 0:
+            # Gymnasium reports -1 when the seed is unknown, which happens when
+            # np_random was assigned directly, and its property initializes
+            # rather than ever handing back None. Both land here because
+            # SeedSequence rejects any negative entropy, not only -1, so
+            # narrowing this to == -1 would turn an unexpected value into a
+            # crash. The entropy comes from the generator we do have instead of
+            # a seed we do not; leaving the sensors unseeded here would make a
+            # run unreproducible without saying so.
+            entropy = [
+                int(word)
+                for word in self.np_random.integers(0, 2**32, size=4, dtype=np.uint32)
+            ]
+        else:
+            entropy = [int(seed)]
+        # Plain ints, not the SeedSequence children themselves: sensors keep
+        # their seed and hand it back through to_dict(), which has to stay
+        # JSON serializable for the submission packer.
+        gyro_seed, accelerometer_seed, gnss_seed = (
+            _seed_sequence_to_int(child)
+            for child in np.random.SeedSequence([*entropy, sensor_seed_domain]).spawn(3)
+        )
         gyro = Gyroscope(
             sampling_rate=sensors_cfg["sampling_rate"],
             noise_density=sensors_cfg["gyro_noise_density"],
             random_walk_density=sensors_cfg["gyro_random_walk_density"],
             constant_bias=sensors_cfg["gyro_constant_bias"],
+            seed=gyro_seed,
         )
         accelerometer = Accelerometer(
             sampling_rate=sensors_cfg["sampling_rate"],
@@ -901,12 +1187,14 @@ class BalloonPoppingEnv(gym.Env):
             random_walk_density=sensors_cfg["accelerometer_random_walk_density"],
             constant_bias=sensors_cfg["accelerometer_constant_bias"],
             consider_gravity=True,
+            seed=accelerometer_seed,
         )
         gnss = GnssReceiver(
             sampling_rate=sensors_cfg["sampling_rate"],
             position_accuracy=sensors_cfg["gnss_position_accuracy"],
             altitude_accuracy=sensors_cfg["gnss_altitude_accuracy"],
             velocity_accuracy=sensors_cfg["gnss_velocity_accuracy"],
+            seed=gnss_seed,
         )
         rocket.add_sensor(gyro, position=sensors_cfg["gyro_position"])
         rocket.add_sensor(accelerometer, position=sensors_cfg["accelerometer_position"])
@@ -926,12 +1214,12 @@ class BalloonPoppingEnv(gym.Env):
                 tvc.gimbal_angle_y,
             )
 
-        rocket.add_tvc(
-            gimbal_range=control_cfg["gimbal_range"],
-            gimbal_rate_limit=control_cfg["gimbal_rate_limit"],
-            sampling_rate=1 / self.simulation_parameters["time_step"],
+        rocket.add_thrust_vector_control(
             controller_function=tvc_controller_function,
-            return_controller=False,
+            sampling_rate=1 / self.simulation_parameters["time_step"],
+            max_gimbal_angle=control_cfg["max_gimbal_angle"],
+            gimbal_rate_limit=control_cfg["gimbal_rate_limit"],
+            gimbal_time_constant=control_cfg["gimbal_time_constant"],
         )
 
         def roll_controller_function(
@@ -950,11 +1238,11 @@ class BalloonPoppingEnv(gym.Env):
             )
 
         rocket.add_roll_control(
+            controller_function=roll_controller_function,
+            sampling_rate=1 / self.simulation_parameters["time_step"],
             max_roll_torque=control_cfg["max_roll_torque"],
             torque_rate_limit=control_cfg["torque_rate_limit"],
-            sampling_rate=1 / self.simulation_parameters["time_step"],
-            controller_function=roll_controller_function,
-            return_controller=False,
+            roll_torque_time_constant=control_cfg["roll_torque_time_constant"],
         )
 
         def throttle_controller_function(
@@ -973,11 +1261,11 @@ class BalloonPoppingEnv(gym.Env):
             )
 
         rocket.add_throttle_control(
+            controller_function=throttle_controller_function,
+            sampling_rate=1 / self.simulation_parameters["time_step"],
             throttle_range=control_cfg["throttle_range"],
             throttle_rate_limit=control_cfg["throttle_rate_limit"],
-            sampling_rate=1 / self.simulation_parameters["time_step"],
-            controller_function=throttle_controller_function,
-            return_controller=False,
+            throttle_time_constant=control_cfg["throttle_time_constant"],
         )
 
         self._rocket_flight = Flight(
