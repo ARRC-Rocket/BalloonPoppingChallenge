@@ -1,6 +1,7 @@
 import hashlib
 import http.client
 import json
+import logging
 import os
 import pickle
 import re
@@ -10,6 +11,8 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from rocketpy._encoders import RocketPyEncoder
+
+logger = logging.getLogger(__name__)
 
 # The evaluate.py integrity check is advisory and must never cost a competitor
 # the submission they just simulated. The socket timeout and the byte cap bound
@@ -264,24 +267,57 @@ def _write_atomically(out_path, write_payload, mode="wb", encoding=None):
     payload carries the team secret, so keeping it owner-only is the better end
     state on a shared machine.
     """
-    handle, temp_path = tempfile.mkstemp(
-        dir=os.path.dirname(out_path) or ".", prefix=".partial_", suffix=".tmp"
-    )
+    handle = None
+    temp_path = None
     try:
-        with os.fdopen(handle, mode, encoding=encoding) as file:
+        handle, temp_path = tempfile.mkstemp(
+            dir=os.path.dirname(out_path) or ".", prefix=".partial_", suffix=".tmp"
+        )
+        # `closefd=False` so this function is the descriptor's only owner. The
+        # alternative, handing ownership to the file object, cannot be written
+        # safely: `os.fdopen` closes the descriptor itself on some failures
+        # (an unknown encoding is one, measured), and then the handle a cleanup
+        # path still holds names whatever has since been given that number.
+        with os.fdopen(handle, mode, encoding=encoding, closefd=False) as file:
             write_payload(file)
             file.flush()
             os.fsync(file.fileno())
+        # Before the rename rather than after: Windows refuses to rename a file
+        # that still has an open handle, and closing here rather than in the
+        # cleanup below keeps the success path from depending on it.
+        os.close(handle)
+        handle = None
         os.replace(temp_path, out_path)
     except BaseException:
         # Including KeyboardInterrupt: a stray .partial_ left behind would be a
         # worse outcome than the truncated file this exists to prevent. A
         # SIGKILL still can, which no handler can cover; what it cannot leave is
         # a file under the finished name.
-        try:
-            os.unlink(temp_path)
-        except OSError:
-            pass
+        if handle is not None:
+            try:
+                os.close(handle)
+            except OSError:
+                pass
+        if temp_path is not None:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
+            except OSError as cleanup_error:
+                # Said rather than swallowed. The original error is what raises,
+                # but a partial file nobody knows about is worse than one that
+                # was named in the log.
+                try:
+                    logger.warning(
+                        "Could not remove the incomplete submission at %s: %s",
+                        temp_path,
+                        cleanup_error,
+                    )
+                except Exception:  # noqa: BLE001 - a diagnostic cannot be the failure
+                    # Handlers and filters are the application's code and can
+                    # raise. Letting one out here would replace the disk full
+                    # the caller needs to see with a logging error.
+                    pass
         raise
 
 
