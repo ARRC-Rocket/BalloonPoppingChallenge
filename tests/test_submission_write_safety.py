@@ -139,30 +139,92 @@ class TestAtomicWrite(unittest.TestCase):
             os.fstat(opened["handle"])
         self.assertEqual(self._leftovers(), [])
 
-    def test_a_handle_the_file_object_took_over_is_not_closed_twice(self):
-        """Once `fdopen` succeeds, closing the file closes the descriptor.
+    def test_a_descriptor_the_wrapper_closed_is_not_closed_again(self):
+        """`os.fdopen` closes the descriptor itself on some failures.
 
-        Closing it again in the error path closes whatever has since been given
-        that number, which on a threaded run is another file entirely. The
-        second close raises EBADF only while the number is still free.
+        An unknown encoding is one: it raises after the descriptor is gone. A
+        cleanup path holding the old number then closes whatever has since been
+        given it. Proved by taking that number back with a real file and
+        checking it is still open afterwards.
         """
-        closed = []
-        real_close = os.close
+        opened = {}
+        real_mkstemp = tempfile.mkstemp
 
-        def watch(handle):
-            closed.append(handle)
+        def remember(*args, **kwargs):
+            handle, path = real_mkstemp(*args, **kwargs)
+            opened["handle"] = handle
+            return handle, path
+
+        victim = {}
+        real_unlink = os.unlink
+
+        def take_the_number_back(path, *args, **kwargs):
+            """Stand in for another thread claiming the freed descriptor."""
+            if ".partial_" in os.fspath(path) and "file" not in victim:
+                victim["file"] = open(os.devnull, "rb")
+            return real_unlink(path, *args, **kwargs)
+
+        with (
+            mock.patch.object(utils.tempfile, "mkstemp", remember),
+            mock.patch.object(os, "unlink", take_the_number_back),
+            self.assertRaises(LookupError),
+        ):
+            utils._write_atomically(
+                self.out_path, lambda _file: None, mode="w", encoding="not-an-encoding"
+            )
+
+        self.addCleanup(victim["file"].close)
+        # Readable, so nothing closed the number out from under it.
+        self.assertEqual(victim["file"].read(), b"")
+        self.assertNotIn(opened["handle"], (None,))
+
+    def test_the_descriptor_is_closed_before_the_rename(self):
+        """Windows refuses to rename a file that still has an open handle."""
+        order = []
+        real_close, real_replace = os.close, os.replace
+
+        def note_close(handle):
+            order.append("close")
             return real_close(handle)
+
+        def note_replace(source, target):
+            order.append("replace")
+            return real_replace(source, target)
+
+        with (
+            mock.patch.object(os, "close", note_close),
+            mock.patch.object(os, "replace", note_replace),
+        ):
+            utils._write_atomically(self.out_path, lambda file: file.write(b"x"))
+
+        self.assertEqual(order, ["close", "replace"])
+
+    def test_a_logger_that_raises_does_not_replace_the_write_error(self):
+        """Filters and handlers are the application's code and can raise."""
+
+        class _Exploding(logging.Filter):
+            def filter(self, record):
+                raise RuntimeError("logging failed")
+
+        exploding = _Exploding()
+        utils.logger.addFilter(exploding)
+        self.addCleanup(utils.logger.removeFilter, exploding)
+
+        real_unlink = os.unlink
+
+        def refuse(path, *args, **kwargs):
+            if ".partial_" in os.fspath(path):
+                raise PermissionError("cleanup denied")
+            return real_unlink(path, *args, **kwargs)
 
         def fail(_file):
             raise OSError("disk full")
 
         with (
-            mock.patch.object(os, "close", watch),
+            mock.patch.object(os, "unlink", refuse),
             self.assertRaisesRegex(OSError, "disk full"),
         ):
             utils._write_atomically(self.out_path, fail)
-
-        self.assertEqual(closed, [], "the file object had already closed it")
 
     def test_a_cleanup_that_fails_is_reported_rather_than_swallowed(self):
         """The original error still raises, but the file left behind is named.

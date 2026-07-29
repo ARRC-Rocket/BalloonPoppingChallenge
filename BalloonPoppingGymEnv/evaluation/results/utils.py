@@ -273,14 +273,20 @@ def _write_atomically(out_path, write_payload, mode="wb", encoding=None):
         handle, temp_path = tempfile.mkstemp(
             dir=os.path.dirname(out_path) or ".", prefix=".partial_", suffix=".tmp"
         )
-        file = os.fdopen(handle, mode, encoding=encoding)
-        # The file object owns the descriptor from here, and closing both would
-        # close whatever else has since been given the same number.
-        handle = None
-        with file:
+        # `closefd=False` so this function is the descriptor's only owner. The
+        # alternative, handing ownership to the file object, cannot be written
+        # safely: `os.fdopen` closes the descriptor itself on some failures
+        # (an unknown encoding is one, measured), and then the handle a cleanup
+        # path still holds names whatever has since been given that number.
+        with os.fdopen(handle, mode, encoding=encoding, closefd=False) as file:
             write_payload(file)
             file.flush()
             os.fsync(file.fileno())
+        # Before the rename rather than after: Windows refuses to rename a file
+        # that still has an open handle, and closing here rather than in the
+        # cleanup below keeps the success path from depending on it.
+        os.close(handle)
+        handle = None
         os.replace(temp_path, out_path)
     except BaseException:
         # Including KeyboardInterrupt: a stray .partial_ left behind would be a
@@ -288,9 +294,6 @@ def _write_atomically(out_path, write_payload, mode="wb", encoding=None):
         # SIGKILL still can, which no handler can cover; what it cannot leave is
         # a file under the finished name.
         if handle is not None:
-            # `mkstemp` hands back a raw descriptor and only `fdopen` gives it an
-            # owner, so a failure in between used to unlink the name and leave
-            # the descriptor open on an anonymous inode.
             try:
                 os.close(handle)
             except OSError:
@@ -304,11 +307,17 @@ def _write_atomically(out_path, write_payload, mode="wb", encoding=None):
                 # Said rather than swallowed. The original error is what raises,
                 # but a partial file nobody knows about is worse than one that
                 # was named in the log.
-                logger.warning(
-                    "Could not remove the incomplete submission at %s: %s",
-                    temp_path,
-                    cleanup_error,
-                )
+                try:
+                    logger.warning(
+                        "Could not remove the incomplete submission at %s: %s",
+                        temp_path,
+                        cleanup_error,
+                    )
+                except Exception:  # noqa: BLE001 - a diagnostic cannot be the failure
+                    # Handlers and filters are the application's code and can
+                    # raise. Letting one out here would replace the disk full
+                    # the caller needs to see with a logging error.
+                    pass
         raise
 
 
