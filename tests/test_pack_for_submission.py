@@ -66,10 +66,17 @@ class TestPackForSubmission(unittest.TestCase):
             "scenario_number": 0,
             "agent_module_path": self.agent_file,
         }
-        self.created = []
+        # Snapshot rather than a list built as files are recognised. The list
+        # only grew on the success path, so a failing assertion in `_pack` left
+        # the file it had just written in the package directory; a mutation run
+        # left eight of them there.
+        self.before = self._submissions()
+
+    def _submissions(self):
+        return set(glob.glob(os.path.join(self.results_dir, "*_submission.*")))
 
     def tearDown(self):
-        for path in self.created:
+        for path in self._submissions() - self.before:
             if os.path.exists(path):
                 os.remove(path)
         if os.path.exists(self.agent_file):
@@ -81,18 +88,17 @@ class TestPackForSubmission(unittest.TestCase):
         with open(local, "rb") as handle:
             local_bytes = handle.read()
 
-        before = set(glob.glob(os.path.join(self.results_dir, "*_submission.json")))
+        before = self._submissions()
         with mock.patch.object(self.utils.urllib.request, "urlopen") as urlopen:
             # match the local checksum so the integrity check stays quiet
             urlopen.return_value.__enter__.return_value.read.return_value = local_bytes
             self.utils.pack_for_submission(self.eval_cfg, self.env, {"scenario": {}})
-        after = set(glob.glob(os.path.join(self.results_dir, "*_submission.json")))
 
-        new = after - before
+        # Any extension, so a run that writes the wrong one fails on the name
+        # rather than on having written nothing, and tearDown still removes it.
+        new = self._submissions() - before
         self.assertEqual(len(new), 1, "expected exactly one submission file")
-        path = new.pop()
-        self.created.append(path)
-        return path
+        return new.pop()
 
     def _load(self):
         with open(self._pack(), encoding="utf-8") as handle:
