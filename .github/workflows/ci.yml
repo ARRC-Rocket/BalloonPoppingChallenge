@@ -57,10 +57,9 @@ jobs:
       # Run the opt-in slow regression tests (e.g. the scenario #1 Monte Carlo
       # golden master) in CI; they are skipped by default for fast local runs.
       BPC_RUN_SLOW_TESTS: "1"
-      # Without this the matrix is decoration. uv resolves its interpreter from
-      # .python-version, which pins 3.14, and it does not care what
-      # setup-python put on PATH. So the leg named 3.10 would build a 3.14
-      # environment, pass, and quietly retire the floor #75 exists to test.
+      # Without this the matrix is decoration: uv takes its interpreter from
+      # .python-version, which pins 3.14, so the leg named 3.10 would build a
+      # 3.14 environment and quietly retire the floor #75 exists to test.
       UV_PYTHON: ${{ matrix.python-version }}
     steps:
       - name: Check out repository
@@ -73,25 +72,17 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # Install what the lockfile pins, so a green run is a statement about a
-      # known set of versions. This used to be `pip install -r
-      # requirements-dev.txt`, which carries no pins at all, next to a
-      # `uv lock --check` that passed and said nothing about what was then
-      # installed: the lockfile pinned matplotlib 3.10.9, numpy 2.4.5 and scipy
-      # 1.17.1 while CI resolved 3.11.1, 2.5.1 and 1.18.0. So local runs and CI
-      # runs were not testing the same software, and a release on PyPI could
-      # turn this red with nothing changed here.
-      #
-      # `--locked` also fails when uv.lock has gone stale against the
-      # ActiveRocketPy submodule, which is what the separate check was for.
+      # Install what the lockfile pins. The old unpinned `pip install` sat next
+      # to a `uv lock --check` that said nothing about it: the lockfile pinned
+      # matplotlib 3.10.9, numpy 2.4.5, scipy 1.17.1 and CI installed 3.11.1,
+      # 2.5.1, 1.18.0. `--locked` also catches a stale lock against the submodule.
       - name: Install the locked dependencies
         run: |
           python -m pip install "uv==0.11.14"
           uv sync --locked --extra dev
 
-      # Say out loud what this leg is actually running, and fail if it is not
-      # the version the leg is named for. #89 cost time precisely because
-      # nothing recorded which versions CI had installed.
+      # Fail if the leg is not running the version it is named for. #89 cost
+      # time because nothing recorded which versions CI had installed.
       - name: Report and check the environment
         run: |
           uv run --no-sync python -VV
@@ -128,13 +119,9 @@ jobs:
   latest-dependencies:
     name: Latest dependencies, Python ${{ matrix.python-version }} (early warning)
     runs-on: ubuntu-latest
-    # The tests above install what the lockfile pins, which is the right thing
-    # for a gate: a green run means a known set of versions. It also means
-    # nothing here would notice a new release breaking the package.
-    #
-    # That is not hypothetical. Matplotlib 3.11 took out the default renderer
-    # for anyone installing without the lockfile (#89), and the only reason CI
-    # saw it was that CI was installing that way too.
+    # The gate installs what the lockfile pins, so nothing there would notice a
+    # new release breaking the package. Matplotlib 3.11 took out the default
+    # renderer (#89) and CI only saw it because CI installed unpinned too.
     #
     # So an unpinned install keeps running, under its own name, and does not
     # block: a release on PyPI should tell us something rather than stop
