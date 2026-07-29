@@ -467,8 +467,7 @@ class TestTheRocketPathHasToBeATrajectory(unittest.TestCase):
         """The bound is measured, so it has to leave an honest run alone.
 
         Half a tolerance is seventeen times the 0.002923 m/s a complete honest
-        run shows on either scenario, and still three orders of magnitude below
-        what editing the path costs.
+        run shows on either scenario.
         """
         flown = self._flown()
         step = 0.01
@@ -480,11 +479,8 @@ class TestTheRocketPathHasToBeATrajectory(unittest.TestCase):
     def test_an_offset_on_every_other_row_is_caught(self):
         """The hole a central difference cannot see.
 
-        ``(p[k+1] - p[k-1]) / (2 dt)`` only ever compares rows of the same
-        parity, so a constant added to every odd row cancels exactly. Measured
-        against the previous implementation on a real complete flight: moving
-        all the odd rows 1000 m east left every finding passing, while the pop
-        check reads adjacent rows and so walked the offset path.
+        ``(p[k+1] - p[k-1]) / (2 dt)`` only compares rows of the same parity, so
+        1000 m added to every odd row cancelled exactly and every finding passed.
         """
         for index, record in enumerate(self._flown()):
             if index % 2:
@@ -513,21 +509,10 @@ class TestTheRocketPathHasToBeATrajectory(unittest.TestCase):
     def _with_impact_tail(
         self, fraction=IMPACT_STEP_FRACTION, frozen=FROZEN_ROWS, jump_metres=0.0
     ):
-        """The rows a real landing leaves behind.
+        """The rows a real landing leaves behind; the 40 step fixture has none.
 
-        The fixture is a 40 step run that never reaches the ground, so it has
-        none of this, and the checks below passed with or without the code that
-        handles it. A complete flight, which is what a competitor actually
-        uploads, ends two ways at once:
-
-        - the last step is *partial*. The integrator stops at the ground partway
-          through it, so the position advances less than the recorded velocity
-          implies while that velocity stays the impact velocity.
-        - the environment then stops advancing the state but keeps recording it,
-          leaving a short run of identical positions.
-
-        Both are reproduced here, because only the first one was missing and it
-        is the one that made the check reject honest submissions.
+        The last step is partial, because the integrator stops at the ground
+        partway through it, and the state then repeats while still being recorded.
         """
         step = float(self.canonical["simulation"]["time_step"])
         last = copy.deepcopy(self.records[-1])
@@ -542,12 +527,8 @@ class TestTheRocketPathHasToBeATrajectory(unittest.TestCase):
     def test_a_flight_that_landed_is_not_an_accusation(self):
         """The case that shipped broken, and the reason for the whole rework.
 
-        Measured against the previous implementation, which differenced the
-        interior with a central difference and allowed 1 m/s: a complete honest
-        scenario-0 run reported 22.66 m/s and scenario 1 reported 25.67 m/s.
-        Both were reported as forged paths. The disagreement was entirely the
-        partial last step, which is one-sided and normal, and every other
-        interval on both scenarios sits under 0.003 m/s.
+        The previous implementation allowed 1 m/s and reported 22.66 m/s on an
+        honest scenario 0 and 25.67 on scenario 1, all of it the partial last step.
         """
         self._with_impact_tail()
 
@@ -565,12 +546,7 @@ class TestTheRocketPathHasToBeATrajectory(unittest.TestCase):
     def test_the_last_step_may_be_short_but_not_long(self):
         """The last interval is excluded from the two-sided check, so it needs
         its own. Landing short is honest; covering more ground than the step
-        before it is the direction an edit moves in.
-
-        Five metres is more than three balloon radii, which is what makes the
-        jump worth making. It is also the interval an attacker can reach by
-        jumping on the step before a legally short frozen tail, which is why
-        excluding this interval outright was not an option.
+        before it is not. Five metres is more than three balloon radii.
         """
         self._with_impact_tail(jump_metres=5.0)
 
@@ -579,17 +555,8 @@ class TestTheRocketPathHasToBeATrajectory(unittest.TestCase):
     def test_the_last_step_is_bounded_by_positions_not_by_a_claimed_speed(self):
         """Sizing that bound from the recorded velocity hands it to the forger.
 
-        ``velocity[-1]`` is the one row no two-sided comparison constrains, since
-        the interior check ends at the interval before. An earlier version of
-        this allowed the last step whatever ``max(|v[-1]|, |v[-2]|) * dt``
-        permitted, so writing a large number into that unchecked row bought a
-        proportionally large jump. Here the same 5 m jump is paired with a
-        10000 m/s claim, which is 100 m of allowance at this time step.
-
-        Falling back on the rest of the velocity column would not have helped:
-        the two-sided check sees velocities only through the mean of two, and
-        adding ``+d, -d, +d, ...`` down the column leaves every one of those
-        means unchanged.
+        ``velocity[-1]`` is the one row no two-sided comparison constrains, so a
+        10000 m/s claim there used to buy 100 m of allowance for this 5 m jump.
         """
         self._with_impact_tail(jump_metres=5.0)
         for record in self.records[-3:]:
@@ -600,11 +567,8 @@ class TestTheRocketPathHasToBeATrajectory(unittest.TestCase):
     def test_a_jump_on_the_last_interior_step_is_caught(self):
         """The seam between the two checks, which is where an off-by-one hides.
 
-        Measured: narrowing the two-sided check by one interval left every other
-        test in this file passing. The gap is self-concealing, because the
-        one-sided check sizes its allowance from the displacement of exactly the
-        interval that went unchecked, so a jump there raises the bar it would
-        have been measured against and both checks wave it through.
+        Narrowing the two-sided check by one interval left every other test here
+        passing: the one-sided bound is sized from the interval that went unchecked.
         """
         self._with_impact_tail()
         self.records[-4]["rocket_states"][0] += 5.0
@@ -615,11 +579,7 @@ class TestTheRocketPathHasToBeATrajectory(unittest.TestCase):
         """The guard below the array was written for this and never saw it.
 
         ``np.asarray(..., dtype=float)`` raises on a ragged list one line before
-        the shape check runs, so a submission whose rows are not all the same
-        length left ``verify()`` with an unhandled ValueError. That is
-        attacker-controlled input reaching an exception in the thing whose job is
-        judging attacker-controlled input, and ``main()`` wraps only the load, so
-        one such file ends the batch rather than failing on its own.
+        the shape check runs, so ``verify()`` used to see an unhandled ValueError.
         """
         for row, bad in enumerate(([1.0, 2.0], "not a row", 7.0)):
             with self.subTest(shape=repr(bad)):
@@ -640,15 +600,10 @@ class TestTheRocketPathHasToBeATrajectory(unittest.TestCase):
         self.assertIn("recorded velocity matches the path", self.failures())
 
     def test_a_frozen_tail_of_an_odd_length_is_trimmed_exactly(self):
-        """Every fixture here had an even tail, so trimming two rows at a time
-        passed all of them.
+        """Every fixture here had an even tail, so trimming two at a time passed.
 
-        Asserted on the count rather than on the verdict, because both trims
-        leave something that still looks like a flight: taking two at a time
-        also eats the impact row, and what remains is a shorter honest path.
-        Under-trimming is the expensive direction, since it leaves a frozen row
-        in the differentiation carrying the impact velocity, which is the
-        139.6 m/s false accusation this check was rewritten to stop.
+        Asserted on the count, since both trims leave something that looks like a
+        flight. Under-trimming leaves the 139.6 m/s impact velocity in the series.
         """
         self._with_impact_tail(frozen=3)
 
@@ -667,8 +622,7 @@ class TestTheRocketPathHasToBeATrajectory(unittest.TestCase):
         """The multiplier, not just the slack beside it.
 
         Widening it to 100 left every other test passing while a jump of a
-        hundred metres went through. A step may be a little longer than the one
-        before it and not several times longer.
+        hundred metres went through.
         """
         previous = float(
             np.linalg.norm(
@@ -683,11 +637,8 @@ class TestTheRocketPathHasToBeATrajectory(unittest.TestCase):
     def test_teleporting_and_then_freezing_is_caught(self):
         """Freeze the tail and the trim throws away the evidence.
 
-        Jump to a balloon, record zero velocity, and repeat that row to the end.
-        The trim then deletes every frozen row, so the jump becomes the last
-        surviving interval, and the previous implementation had already stopped
-        looking: it differenced the interior only, and short paths were reported
-        as passing outright.
+        Jump to a balloon, record zero velocity, repeat that row to the end, and
+        the jump becomes the last surviving interval.
         """
         flown = self._flown()
         frozen = copy.deepcopy(flown[len(flown) // 2])
@@ -710,8 +661,7 @@ class TestTheRocketPathHasToBeATrajectory(unittest.TestCase):
         """Insufficient evidence is not evidence of innocence.
 
         The previous implementation reported "too few flown steps to
-        differentiate" as a passing finding, which is what the freeze above
-        reduces a submission to.
+        differentiate" as a passing finding.
         """
         del self.records[len(self.records) - len(self._flown()) + 2 :]
 
@@ -720,16 +670,8 @@ class TestTheRocketPathHasToBeATrajectory(unittest.TestCase):
     def test_a_nan_in_a_column_nothing_reads_does_not_erase_the_flight(self):
         """The way through the whole of this check.
 
-        The rows were filtered to those entirely finite. The environment writes
-        thirteen NaNs before launch and thirteen finite numbers after, so those
-        are the only two shapes a run produces, but a submission that put a NaN
-        in one body rate, a column nothing here reads, made every row fail that
-        filter. The function then reported "the rocket never launched" as a
-        passing finding, while the positions stayed finite for the reachability
-        check to trust.
-
-        Measured before the fix: this exact submission, with its path dragged
-        sideways by a factor of 37 and its velocities untouched, passed.
+        Filtering to entirely finite rows meant one NaN in a body rate, a column
+        nothing here reads, hid a path dragged sideways by a factor of 37.
         """
         for record in self._flown():
             record["rocket_states"][10] = float("nan")
@@ -745,12 +687,9 @@ class TestTheRocketPathHasToBeATrajectory(unittest.TestCase):
         self.assertIn("rocket state shape", self.failures())
 
     def test_a_pre_launch_row_in_the_middle_of_the_flight_is_refused(self):
-        """A whole row of NaN reads as pre-launch, which is a shape a run does
-        make, so the partial-row check above does not see it.
-
-        The flight has to be contiguous. Dropping the row instead would splice
-        two samples 0.02 s apart into a series this differentiates at 0.01 s,
-        and would let a submission delete whichever rows disagree with it.
+        """A whole row of NaN reads as pre-launch, a shape a run does make, so
+        the partial-row check above does not see it. Dropping the row would
+        splice samples 0.02 s apart into a series differentiated at 0.01 s.
         """
         records = self.records
         flown = [
@@ -764,9 +703,8 @@ class TestTheRocketPathHasToBeATrajectory(unittest.TestCase):
         )
 
         # The gap check's own name, not the shared "rocket path" this asserted
-        # before. A NaN row fails the velocity check too, which emits that name,
-        # so the old assertion held whether or not this check ran at all:
-        # measured, disabling the gap check left it passing.
+        # before: a NaN row fails the velocity check too, so the old assertion
+        # held with the gap check disabled.
         self.assertIn("the flight has no gaps", self.failures())
 
     def test_a_state_that_is_not_thirteen_wide_is_refused(self):
@@ -820,12 +758,8 @@ class TestTheRocketPathHasToBeATrajectory(unittest.TestCase):
 class TestACompleteFlightIsAccepted(unittest.TestCase):
     """One test on the artifact competitors actually upload.
 
-    Everything above edits a 40 step run that never reaches the ground. That
-    fixture is fast because it is missing the end of the flight, and the end of
-    the flight is where this check went wrong: the shipped version rejected
-    every complete honest submission of both scenarios, and no test above could
-    see it. So this one runs scenario 0 to termination, which costs about ten
-    seconds, and asks the two questions the fixture cannot.
+    Everything above edits a 40 step run that never reaches the ground, and that
+    is where this check went wrong. Scenario 0 runs to termination, ten seconds.
     """
 
     @classmethod
@@ -880,15 +814,8 @@ class TestACompleteFlightIsAccepted(unittest.TestCase):
     def test_the_bound_stays_close_to_what_was_measured(self):
         """The other direction, and the one nothing else here holds.
 
-        Every test in this file passes with the bound at the 1 m/s it shipped
-        with, because the honest run is under that too and the forged paths are
-        hundreds of times over it. So a bound that drifts wide is invisible, and
-        a wide bound is exactly how a subtle drag gets through: at 1 m/s an
-        editor may move the path a centimetre per step, which is a balloon
-        radius every 150 steps.
-
-        Two orders of magnitude above the measured disagreement is the most this
-        may be and still mean something.
+        Every test here passes with the bound at the 1 m/s it shipped with, and
+        at 1 m/s a drag of a centimetre per step is a balloon radius every 150.
         """
         self.assertLess(
             VELOCITY_CONSISTENCY_TOLERANCE, 100.0 * self._worst_disagreement()
@@ -919,15 +846,8 @@ class TestACompleteFlightIsAccepted(unittest.TestCase):
     def test_a_ramp_under_the_rate_bound_is_still_caught(self):
         """The bound above is a rate; what is being defended is a distance.
 
-        Holding just under the per-step bound every step for the whole flight
-        buys 2.778 m of lateral drift with the velocity column untouched, which
-        is close to two balloon radii. The per-step rationale, that a metre in
-        one 0.01 s step implies 100 m/s that is not there, is true of an
-        impulsive edit and costs a ramp nothing.
-
-        Measured here at a twentieth of the rate bound, where the per-step check
-        has nothing to say and the running total does. The tail keeps its last
-        offset so the trim still fires and the ramp is the only thing changed.
+        Holding just under the per-step bound all flight buys 2.778 m of lateral
+        drift, near two balloon radii. Measured here at a twentieth of that bound.
         """
         submission = self.submission()
         records = submission["balloon_world_data"]["trajectories"]
@@ -957,9 +877,8 @@ class TestACompleteFlightIsAccepted(unittest.TestCase):
     def test_the_honest_run_does_not_drift(self):
         """The half that stops the above being satisfied by refusing everything.
 
-        Integration error alternates in sign rather than pointing anywhere, so
-        it does not accumulate: measured, the largest running total over a whole
-        flight is 1.04e-04 m on scenario 0 and 8.55e-05 m on scenario 1.
+        Integration error alternates in sign rather than accumulating: the
+        largest running total is 1.04e-04 m on scenario 0, 8.55e-05 m on 1.
         """
         detail = next(
             finding.detail

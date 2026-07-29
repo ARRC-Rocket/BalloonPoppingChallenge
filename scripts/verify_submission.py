@@ -28,19 +28,9 @@ trajectory. Reproducing it means replaying the agent, whose source is sitting in
 the submission, and running a competitor's code server side is arbitrary code
 execution by design. That was decided against in the leaderboard's issue #4.
 
-What it does instead is ask what the path costs to fake. The recorded numbers
-still have to be a trajectory: position and velocity are recorded side by side
-out of the same integration, so they have to agree; the attitude quaternion has
-to be a rotation; the flight has to start on the pad. Dragging the path onto a
-set of balloons breaks the first of those by orders of magnitude, because a
-metre of displacement over one 0.01 s step is 100 m/s of velocity that is not
-recorded anywhere.
-
-So a submission that passes has balloons the simulator would have produced, a
-score consistent with its own record, claimed pops the recorded path could have
-reached, and a path that is at least a coherent flight. It is not proof the run
-happened. Anyone willing to integrate a plausible flight can still produce one,
-because the evaluation runs on their own machine.
+It asks instead what the path costs to fake: position and velocity come out of
+one integration and have to agree, so a metre moved in one 0.01 s step is
+100 m/s that is not recorded. Nothing here bounds acceleration by any physics.
 """
 
 from __future__ import annotations
@@ -566,77 +556,28 @@ def check_internal_consistency(submission):
 
 
 # How far the velocity implied by the recorded positions may sit from the
-# velocity recorded next to them, in m/s.
-#
-# Measured on real runs of both shipped scenarios rather than chosen. Over one
-# step the displacement is compared against the average of the two endpoint
-# velocities, which is exact for constant acceleration, so on an honest run the
-# two agree to integration error: the largest disagreement anywhere is
-# 0.002923 m/s, on both scenario 0 and scenario 1.
-#
-# Fifty millimetres per second is seventeen times that, and still three orders
-# of magnitude below what editing the path costs. Moving a position by a metre
-# over one 0.01 s step implies 100 m/s of velocity that is not there.
+# velocity recorded next to them, in m/s. Measured worst on an honest run:
+# 0.002923 m/s on both scenario 0 and scenario 1, so 0.05 is seventeen times it.
 VELOCITY_CONSISTENCY_TOLERANCE = 0.05
 
-# How far the positions may end up from where the recorded velocities put them,
-# in metres, counted from the start of the flight.
-#
-# The bound above is a rate and the thing being defended is a distance, and over
-# a flight those are not the same statement. Staying at 95% of the rate bound
-# every step for 58.5 s buys 2.778 m of lateral displacement with the velocity
-# column untouched, which is measured, not argued, and is close to two balloon
-# radii. The per-step rationale, that a metre in one 0.01 s step implies 100 m/s
-# that is not there, holds for one impulsive edit and costs a ramp nothing.
-#
-# So the unexplained displacement is also accumulated. On an honest run it does
-# not accumulate, because integration error alternates in sign rather than
-# pointing anywhere: measured, the largest running total over a whole flight is
-# 1.04e-04 m on scenario 0 and 8.55e-05 m on scenario 1. Five centimetres is
-# around 500 times that and 3% of one balloon radius, so what is left is not
-# enough to reach anything.
+# How far the positions may run from where the recorded velocities put them, in
+# metres, accumulated over the flight: 95% of the rate bound for 58.5 s buys
+# 2.778 m. Honest runs total 1.04e-04 m on scenario 0 and 8.55e-05 m on 1.
 CUMULATIVE_DRIFT_TOLERANCE_METRES = 0.05
 
-# The last recorded interval is excluded from that check and given the one-sided
-# check below instead.
-#
-# The flight ends inside a step: the integrator stops at the ground, so the
-# final displacement is shorter than the recorded velocities imply and the
-# two-sided residual reads 45.3 m/s on scenario 0 and 51.3 m/s on scenario 1
-# while every other interval is under 0.003. That is the honest signature of a
-# run that landed, and it is one-sided: the rocket moved *less* than its speed
-# allowed. Dragging the path somewhere is the other direction, so what the final
-# interval still has to satisfy is an upper bound on how far it went.
-#
-# That bound is the *previous* displacement, not the recorded velocity, and the
-# difference matters. Sizing it from velocity reads ``velocity[-1]``, the one row
-# no two-sided comparison constrains, so inflating that one number inflates the
-# allowance with it: at 10000 m/s it buys a 105 m jump. Nor is the rest of the
-# velocity column pinned tightly enough to fall back on, since the two-sided
-# check only ever sees velocities through a mean of two, and an alternating
-# perturbation leaves every one of those means unchanged. Consecutive
-# displacements are position against position, which is the thing being
-# defended, and speed changes by at most a·dt across one 0.01 s step.
-#
-# Measured: the final displacement is 0.673 of the one before it on scenario 0
-# and 0.639 on scenario 1, and no interior ratio exceeds 0.9968.
+# The last interval is one-sided: landing stops it partway, so its two-sided
+# residual is 45.3 m/s on scenario 0, 51.3 on 1, against 0.003 elsewhere. Bound
+# is the previous displacement, not velocity[-1]. Ratios 0.673, 0.639, max 0.9968.
 _FINAL_STEP_DISPLACEMENT_ALLOWANCE = 1.05
 
-# Floor in metres under that ratio, for the first steps off the pad where the
-# rocket is accelerating hard from nearly nothing and consecutive displacements
-# genuinely do multiply. Covers a run that ends there, where the ratio means
-# little and the distances are millimetres. What it concedes is 3% of the 1.5 m
-# balloon radius, on the one interval it applies to, so it cannot reach anything.
+# Floor in metres under that ratio, for the first steps off the pad where
+# consecutive displacements genuinely do multiply. Concedes 3% of the 1.5 m
+# balloon radius, on the one interval it applies to.
 _FINAL_STEP_SLACK_METRES = 0.05
 
-# How many repeated positions may sit at the end of the flight.
-#
-# The environment stops advancing the state when the flight finishes but keeps
-# recording it, so a landed run ends with a short run of identical positions.
-# Measured: exactly two, on both scenarios. The limit matters because those rows
-# are dropped before differentiating, and a rocket parked in a good spot pops
-# every balloon that drifts onto it. Without a limit, freezing the tail buys
-# unbounded unchecked time.
+# How many repeated positions may sit at the end of the flight. A landed run is
+# recorded without being advanced: measured, exactly two rows on both scenarios.
+# Those rows are dropped before differentiating, so the count needs a cap.
 _FROZEN_TAIL_LIMIT_ROWS = 8
 
 # ``rocket_states`` is position, velocity, quaternion, body rates.
@@ -657,38 +598,14 @@ _PAD_TOLERANCE_METRES = 0.05
 def check_the_rocket_path_is_a_trajectory(submission, canonical):
     """The rocket path is the competitor's claim, so ask what it costs to fake.
 
-    Replaying the agent would settle it and is out of scope: the agent's source
-    is in the submission and running a competitor's code server side is
-    arbitrary code execution by design, which the leaderboard's issue #4 decided
-    against.
-
-    Short of that, the recorded numbers still have to be a trajectory rather
-    than a path drawn through the balloons. ``rocket_states`` carries position
-    and velocity side by side, out of the same integration, so they have to
-    agree; the quaternion has to be a rotation; and the flight has to start on
-    the pad. None of that is expensive to satisfy deliberately, and all of it is
-    expensive to satisfy *accidentally* while dragging the path onto a set of
-    balloons: a metre of displacement over one 0.01 s step is 100 m/s of
-    velocity that is not recorded anywhere.
-
-    So this does not establish that the run happened. It raises editing the
-    result from changing numbers to producing a consistent flight.
-
-    The trailing rows are dropped first. When the flight ends the environment
-    stops advancing the state but keeps recording it, so the last rows repeat a
-    position while still carrying the impact velocity, which is a real run
-    rather than a fabricated one. Measured: exactly two such rows, both at the
-    end.
+    Position and velocity come out of one integration, so they have to agree;
+    the quaternion has to be a rotation; the flight has to start on the pad.
     """
     world = submission["balloon_world_data"]
     records = world["trajectories"]
-    # Built inside the guard rather than above it. The shape check below was
-    # written for exactly this and never saw it: numpy raises on a ragged list
-    # one line earlier, so a submission whose rows are not all the same length
-    # left verify() with an unhandled ValueError instead of a finding. That is
-    # attacker-controlled input reaching an exception in something whose whole
-    # job is judging attacker-controlled input, and main() only wraps the load,
-    # so one such file ends the batch.
+    # numpy raises on a ragged list before the shape check below can see it, so
+    # this is built inside the guard. Attacker-controlled input must not reach
+    # an exception in the thing whose job is judging attacker-controlled input.
     try:
         states = np.asarray(
             [record["rocket_states"] for record in records], dtype=float
@@ -708,20 +625,9 @@ def check_the_rocket_path_is_a_trajectory(submission, canonical):
             )
         ]
 
-    # Filtering to the rows that are entirely finite was a way through the whole
-    # of this. The environment writes a row of thirteen NaNs before launch and a
-    # row of thirteen finite numbers after, so those are the only two shapes a
-    # run produces. A submission that put a NaN in one body rate, a column
-    # nothing here reads, made every row fail that filter, and the function
-    # reported "the rocket never launched" as a passing finding while the
-    # positions stayed finite for the reachability check to trust.
-    #
-    # Measured: a path dragged sideways by a factor of 37 with its velocities
-    # untouched passed, because column 10 was NaN.
-    #
-    # So the two shapes are named and anything else is refused. A JSON null
-    # arrives here as NaN, which makes a partly null row a partial row rather
-    # than a pre-launch one, which is what it is.
+    # A run writes either thirteen NaNs, before launch, or thirteen finite
+    # numbers. Anything else is refused rather than filtered away: one NaN in a
+    # body rate hid a path dragged sideways by a factor of 37. A JSON null is NaN.
     before_launch = np.isnan(states).all(axis=1)
     flying = np.isfinite(states).all(axis=1)
     partial = ~(before_launch | flying)
@@ -746,10 +652,9 @@ def check_the_rocket_path_is_a_trajectory(submission, canonical):
     if not flying[first_flown:].all():
         gaps = np.flatnonzero(~flying[first_flown:]) + first_flown
         return [
-            # Named apart from "rocket path" on purpose. The velocity check emits
-            # that name too, and a NaN in the middle of a flight fails both, so a
-            # test asserting the name alone could not tell which one fired and
-            # deleting this check left it passing.
+            # Named apart from "rocket path" on purpose. The velocity check
+            # emits that name too, so a test asserting it alone could not tell
+            # which of the two fired.
             Finding(
                 "the flight has no gaps",
                 False,
@@ -812,30 +717,8 @@ def check_the_rocket_path_is_a_trajectory(submission, canonical):
 def _velocity_matches_the_path(position, velocity, time_step):
     """Does each recorded step move the way the velocity beside it says?
 
-    Over one interval the displacement is compared against the mean of the two
-    endpoint velocities. That is the trapezoid rule: exact under constant
-    acceleration, second order otherwise, and above all a statement about *one
-    interval*, made from the two rows that bound it.
-
-    That last part is the point. This check used to differentiate with a central
-    difference, ``(p[k+1] - p[k-1]) / (2 dt)`` against ``v[k]``, which only ever
-    compares rows of the same parity. Adding a constant to every odd row is
-    therefore exactly invisible to it. Measured on a real flight: shifting all
-    the odd rows 1000 m sideways left this reporting a match, while the pop
-    check, which reads adjacent rows, walked the offset path. Comparing adjacent
-    rows has no such nullspace, needs no interior, and covers both endpoints.
-
-    The final interval is held to a weaker, one-sided rule against the step
-    before it. See ``_FINAL_STEP_DISPLACEMENT_ALLOWANCE``: a flight that lands
-    stops partway through its last step, so moving less than the step before is
-    normal there, and only moving *more* is evidence.
-
-    What this does not establish is that the flight obeyed any physics. A path
-    that hovers, with matching zeroed velocities, is self-consistent and passes,
-    and so does any other invented but consistent flight. Settling that needs the
-    agent replayed, which the docstring above explains is out of scope. The claim
-    here is only the one stated there: editing a result costs producing a
-    consistent flight rather than changing numbers.
+    Displacement against the mean of the interval's two endpoint velocities, so
+    adjacent rows and not same-parity ones. The last interval is one-sided.
     """
     if len(position) < 3:
         # Not "the benefit of the doubt". A run this short is either a launch on
