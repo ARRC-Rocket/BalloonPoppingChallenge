@@ -17,19 +17,35 @@ GATING_JOB = "test"
 EARLY_WARNING_JOB = "latest-dependencies"
 
 # pyproject claims >=3.10, and competitors run this on their own machines.
-SUPPORTED_PYTHON = {"3.10", "3.14"}
+SUPPORTED_PYTHON = ["3.10", "3.14"]
+
+# The steps that make the gate a gate. Named, because "some step installs and
+# some step runs pytest" says nothing about whether either was allowed to run.
+CRITICAL_STEPS = (
+    "Install the locked dependencies",
+    "Report and check the environment",
+    "Run tests with coverage",
+)
 
 
 def _commands(job):
-    """Every shell line the job runs, without comments or echoes. With the
+    """Every shell command the job runs, without comments or echoes. With the
     install and the pytest line replaced by ``echo`` of the same strings, all
-    twelve tests passed over a job that installed nothing and ran nothing."""
+    twelve tests passed over a job that installed nothing and ran nothing.
+
+    Continuations are joined, so a command is one entry however it is wrapped
+    and the order here is the order the shell sees it in."""
     lines = []
     for step in job.get("steps", []):
+        pending = ""
         for line in step.get("run", "").splitlines():
             stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
+            if not pending and (not stripped or stripped.startswith("#")):
                 continue
+            if stripped.endswith("\\"):
+                pending += stripped[:-1].strip() + " "
+                continue
+            stripped, pending = pending + stripped, ""
             if stripped.split()[0] in ("echo", "printf", ":", "true"):
                 continue
             lines.append(stripped)
@@ -38,6 +54,26 @@ def _commands(job):
 
 def _runs(job, fragment):
     return any(fragment in line for line in _commands(job))
+
+
+def _changes_the_environment(command):
+    """Whether the command could install into or re-resolve the environment.
+
+    ``uv pip freeze`` and ``uv run --no-sync`` only read it; a bare ``uv run``
+    re-resolves on the way past, so it counts."""
+    if command.startswith("uv run") and "--no-sync" not in command:
+        return True
+    return any(
+        installer in command
+        for installer in (
+            "pip install",
+            "pip uninstall",
+            "pip sync",
+            "uv add",
+            "uv remove",
+            "uv sync",
+        )
+    )
 
 
 class TestWhatTheWorkflowMustNotGiveAway(unittest.TestCase):
@@ -122,9 +158,14 @@ class TestTheGatingJob(unittest.TestCase):
         self.assertTrue(_runs(self.jobs[GATING_JOB], "uv run --no-sync pytest"))
 
     def test_it_covers_every_supported_python(self):
-        versions = self.jobs[GATING_JOB]["strategy"]["matrix"]["python-version"]
+        """``exclude`` deletes a generated leg while the list here still names
+        both, and a set hides a duplicate, so neither the source list nor a set
+        of it is the thing to assert."""
+        matrix = self.jobs[GATING_JOB]["strategy"]["matrix"]
 
-        self.assertEqual(set(map(str, versions)), SUPPORTED_PYTHON)
+        self.assertEqual(sorted(map(str, matrix["python-version"])), SUPPORTED_PYTHON)
+        self.assertNotIn("exclude", matrix)
+        self.assertNotIn("include", matrix)
 
     def test_it_can_still_block(self):
         """A gate that never fails is not a gate. ``assertNotEqual(value, True)``
@@ -152,6 +193,35 @@ class TestTheGatingJob(unittest.TestCase):
             self.jobs[GATING_JOB].get("if"),
             "the gating job runs unconditionally or it is not a gate",
         )
+
+    def test_nothing_can_switch_off_the_steps_that_make_it_a_gate(self):
+        """The same escape one level down, and out of reach of the job-level
+        check above: ``if: ${{ false }}`` on the pytest step alone left every
+        test here passing over a job that installed and ran nothing. A skipped
+        step does not fail, so `continue-on-error` never comes into it."""
+        named = {
+            step.get("name"): step for step in self.jobs[GATING_JOB].get("steps", [])
+        }
+        for name in CRITICAL_STEPS:
+            with self.subTest(step=name):
+                self.assertIn(name, named, f"steps are {sorted(n for n in named if n)}")
+                self.assertIsNone(named[name].get("if"))
+
+    def test_nothing_re_resolves_the_environment_before_the_tests_run(self):
+        """``uv sync --locked`` somewhere and ``pytest`` somewhere is not the
+        claim being made. Adding ``uv pip install --upgrade numpy scipy
+        matplotlib`` between them passed every test here while the suite ran
+        against whatever PyPI had, which is the whole of #92 back again."""
+        commands = _commands(self.jobs[GATING_JOB])
+        locked = next(
+            index for index, line in enumerate(commands) if "uv sync --locked" in line
+        )
+        tests = next(index for index, line in enumerate(commands) if "pytest" in line)
+
+        self.assertLess(locked, tests, "the tests run before the lockfile is installed")
+        for command in commands[locked + 1 : tests + 1]:
+            with self.subTest(command=command):
+                self.assertFalse(_changes_the_environment(command))
 
     def test_it_runs_the_tests_that_only_run_when_asked(self):
         """The golden masters are behind ``BPC_RUN_SLOW_TESTS``, and deleting
@@ -183,19 +253,16 @@ class TestTheEarlyWarningJob(unittest.TestCase):
         """pip does not resolve the same stack on each. The lockfile itself
         carries numpy 2.2.6 below Python 3.11 and 2.4.5 above it, so covering
         only the newest leaves the floor unwatched."""
-        versions = self.jobs[EARLY_WARNING_JOB]["strategy"]["matrix"]["python-version"]
+        matrix = self.jobs[EARLY_WARNING_JOB]["strategy"]["matrix"]
 
-        self.assertEqual(set(map(str, versions)), SUPPORTED_PYTHON)
+        self.assertEqual(sorted(map(str, matrix["python-version"])), SUPPORTED_PYTHON)
+        self.assertNotIn("exclude", matrix)
 
     def test_it_does_not_block(self):
         """It installs whatever PyPI has, so a release elsewhere would otherwise
         stop unrelated work from merging. The literal boolean, because
         ``${{ false }}`` is a non-empty string to a YAML parser."""
         self.assertIs(self.jobs[EARLY_WARNING_JOB].get("continue-on-error"), True)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestWhatCountsAsSomethingTheJobDoes(unittest.TestCase):
@@ -223,3 +290,7 @@ class TestWhatCountsAsSomethingTheJobDoes(unittest.TestCase):
         ):
             with self.subTest(line=line):
                 self.assertEqual(_commands({"steps": [{"run": line}]}), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
