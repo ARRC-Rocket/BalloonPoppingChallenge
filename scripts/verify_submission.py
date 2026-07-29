@@ -854,13 +854,25 @@ def main(argv=None):
             failed = True
             continue
 
-        info = submission.get("leaderboard_info", {})
+        info = (
+            submission.get("leaderboard_info", {})
+            if isinstance(submission, dict)
+            else {}
+        )
         print(
             f"  team {info.get('team_name')!r}, agent {info.get('agent_name')!r}, "
             f"scenario {info.get('scenario_number')}, claimed score "
             f"{info.get('final_reward')}"
         )
-        findings = verify(submission, args.tolerance)
+        # Every field below is a competitor's to shape. Without this the first
+        # malformed file ends the batch with a traceback and every file after it
+        # goes unchecked.
+        try:
+            findings = verify(submission, args.tolerance)
+        except Exception as exc:  # noqa: BLE001 - report and move to the next file
+            print(f"  [FAIL] could not be checked: {type(exc).__name__}: {exc}")
+            failed = True
+            continue
         for finding in findings:
             print(f"  {finding}")
         if any(not finding.ok for finding in findings):

@@ -634,6 +634,19 @@ class TestTheRocketPathHasToBeATrajectory(unittest.TestCase):
 
         self.assertIn("the last step is not a jump", self.failures())
 
+    def test_a_two_row_teleport_is_refused(self):
+        """The shortest forgery there is: leave the pad, arrive at a balloon.
+        Two rows have no interior, and reporting that as "too few to check" was
+        a fail-open. One interval is still an interval and can be judged."""
+        pad = list(
+            self.records[len(self.records) - len(self._flown())]["rocket_states"]
+        )
+        target = list(pad)
+        target[0] += 400.0
+        self.records[:] = [{"rocket_states": pad}, {"rocket_states": target}]
+
+        self.assertNotEqual(self.failures(), [])
+
     def test_teleporting_and_then_freezing_is_caught(self):
         """Freeze the tail and the trim throws away the evidence.
 
@@ -888,6 +901,50 @@ class TestACompleteFlightIsAccepted(unittest.TestCase):
         drift = float(detail.split()[3])
 
         self.assertLess(drift, 0.01 * CUMULATIVE_DRIFT_TOLERANCE_METRES)
+
+    def test_a_run_that_stopped_at_the_horizon_is_not_an_accusation(self):
+        """The other production ending. A run that reaches the horizon reports
+        truncated and stops with the rocket still moving, so it has none of the
+        repeated rows the trim looks for. Everything else here is a landing."""
+        submission = self.submission()
+        records = submission["balloon_world_data"]["trajectories"]
+        flown = [
+            index
+            for index, record in enumerate(records)
+            if np.isfinite(record["rocket_states"][:3]).all()
+        ]
+        del records[flown[0] + len(flown) // 3 :]
+
+        failed = [
+            f"{f.name}: {f.detail}" for f in self.findings(submission) if not f.ok
+        ]
+
+        self.assertEqual(failed, [])
+
+    def test_a_second_control_history_also_has_room_to_spare(self):
+        """The bound has to hold for any legal flight, not the passive one it
+        was measured on. A commanded roll puts thrust transients and burnout
+        under a different history."""
+        parameters, given = load_scenario_parameters(0)
+        env = BalloonPoppingEnv(render_mode=None, parameters=parameters)
+        agent = AttitudeRateControlAgent(
+            given, rate_targets=[0.5, 0.0, 0.0], launch_time=1
+        )
+        observation, _ = env.reset(seed=parameters["scenario"]["random_seed"])
+        terminated = truncated = False
+        while not (terminated or truncated):
+            observation, _, terminated, truncated, _ = env.step(
+                agent.get_action(observation)
+            )
+        submission = {
+            "balloon_world_data": {"trajectories": copy.deepcopy(env.trajectories)}
+        }
+
+        findings = {f.name: f for f in self.findings(submission)}
+        worst = float(findings["recorded velocity matches the path"].detail.split()[2])
+
+        self.assertTrue(all(f.ok for f in findings.values()))
+        self.assertLess(worst, 0.5 * VELOCITY_CONSISTENCY_TOLERANCE)
 
 
 if __name__ == "__main__":
