@@ -22,6 +22,7 @@ from pathlib import Path
 
 import numpy as np
 
+from tests.bounded_episode import run_episode
 from tests.position_tolerance import assert_positions_match
 
 # ActiveRocketPy (imported as ``rocketpy``) is the heavy optional dependency, so
@@ -101,11 +102,11 @@ def run_scenario_0():
     env = BalloonPoppingEnv(render_mode=None, parameters=scenario_params)
     agent = AttitudeRateControlAgent(given_params, **AGENT_KWARGS)
     observation, _ = env.reset(seed=scenario_params["scenario"]["random_seed"])
-    terminated = False
-    truncated = False
-    while not (terminated or truncated):
-        action = agent.get_action(observation)
-        observation, _, terminated, truncated, _ = env.step(action)
+    # Bounded: a regression that stops the environment ending the episode would
+    # otherwise run this golden master until the CI job's own timeout.
+    _steps, terminated, truncated, _info = run_episode(
+        env, agent.get_action, observation
+    )
     # env.trajectories holds a per-step copy of the true rocket state.
     rocket_states = np.array(
         [step["rocket_states"] for step in env.trajectories], dtype=float
