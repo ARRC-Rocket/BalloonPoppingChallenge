@@ -256,33 +256,18 @@ def _regenerate_balloon_flights(scenario_parameters):
     return (
         np.asarray(env._balloon_flights, dtype=float),
         np.asarray(env._balloon_release_at_step),
-        # What the environment says a balloon's state is before any step runs.
-        # Read rather than assumed: scenario 0 starts every balloon released and
-        # its release schedule never fires, so the schedule alone is not the
-        # rule. See _release_eligibility.
+        # The state before any step runs. Scenario 0 starts every balloon
+        # released and its schedule never fires, so the schedule alone is not
+        # the rule. See _release_eligibility.
         np.asarray(env._balloon_status[:, 0], dtype=int).copy(),
     )
 
 
 def _release_eligibility(release_at_step, initial_status, steps):
-    """``(steps, balloons)`` mask of when each balloon is allowed to be released.
+    """``(steps, balloons)`` mask of when each balloon may be released.
 
-    Takes the regenerated facts rather than the scenario, so the rule can be
-    tested without paying for a Monte Carlo, and so the scenario is rebuilt once
-    per submission rather than once per caller.
-
-    Taken from the environment rather than from the release schedule, because
-    the schedule is not the rule on its own.
-
-    Scenario 0 starts every balloon released. It still builds a schedule, and
-    with the shipped seed balloon 0 gets step 400, while the committed baseline
-    pops it at step 370. Comparing pops against the schedule therefore reports
-    the repository's own scenario 0 run as popping a balloon before it was
-    released. Measured on the shipped baseline: exactly that balloon.
-
-    So a balloon is eligible from the first step when the environment already
-    has it released, and from its scheduled step otherwise. Deriving it this way
-    rather than naming scenario 0 keeps it right for whatever scenario 2 does.
+    From step one where the environment already has it released, from its
+    schedule otherwise: scenario 0 schedules balloon 0 at 400 and pops it at 370.
     """
     # Row k is step k + 1, the same offset the trajectory comparison uses.
     step_numbers = np.arange(1, steps + 1)[:, None]
@@ -483,15 +468,9 @@ def check_claimed_pops_are_reachable(
     # pre-launch rows are all-NaN by construction.
     steps = np.flatnonzero(flyable[:-1] & flyable[1:])
     for step in steps:
-        # From the scenario, not from the submission. Reading the submitted
-        # status here let a file mark a balloon released early, point at a rocket
-        # pass that happened before the real release as its closest approach,
-        # and flip to popped on the official step. Both this and the timing
-        # check below passed, while the environment would not have looked at
-        # that balloon during that interval at all.
-        #
-        # The end of the interval rather than its start: a balloon released on
-        # this step is released before pops are detected on it.
+        # From the scenario, not from the submission: a submitted status can
+        # claim an early release and point at a rocket pass from before it. End
+        # of the interval, since a release lands before pops are detected on it.
         released = eligibility[step + 1, claimed_popped]
         if not released.any():
             continue
@@ -576,11 +555,7 @@ def check_internal_consistency(submission, eligibility=None):
     # The rule that does hold is about when, not about the shape of the
     # sequence: no balloon is popped before the step it is released on. Row k
     # holds step k+1, the same offset the trajectory comparison uses.
-    # Against what the scenario allows, not against the release schedule on its
-    # own. Scenario 0 starts every balloon released and its schedule never
-    # fires, so comparing with the schedule reported the repository's own
-    # scenario 0 run as popping balloon 0 before release: the schedule says step
-    # 400 and the committed baseline pops it at 370.
+    # Against what the scenario allows, not the schedule; see _release_eligibility.
     popped_rows = status == 2
     if eligibility is None or eligibility.shape != status.shape:
         # Not evaluated rather than passed. Reporting "every pop is on or after

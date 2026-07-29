@@ -56,10 +56,8 @@ def _build_submission(steps=40, balloons=1):
     not write a file, reach the network for the integrity check, or depend on
     the container format. The fields below are the ones the checker reads.
 
-    ``balloons`` exists because one balloon gives a release schedule of
-    ``arange(1) * 50``, which is ``[0]``, so every balloon is eligible from the
-    first row and the release rule cannot be observed through this fixture at
-    all. Two gives ``[0, 50]``, which is the smallest genuinely mixed mask.
+    ``balloons`` exists because one gives a schedule of ``[0]``, eligible from
+    the first row, so the release rule cannot be seen. Two gives ``[0, 50]``.
     """
     parameters = yaml.safe_load(SCENARIO_1_PARAMS.read_text(encoding="utf-8"))
     parameters["balloon"]["num"] = balloons
@@ -221,10 +219,8 @@ class TestTheSubmissionChecker(unittest.TestCase):
     def test_the_canonical_world_is_rebuilt_once(self):
         """Rebuilding it runs the balloon Monte Carlo.
 
-        It was being paid for twice per submission: once to work out release
-        eligibility and once to compare the balloon trajectories. Asserted
-        rather than left to the structure, since the next check to need the
-        canonical world is one call away from making it three.
+        It was paid for twice per submission, once for release eligibility and
+        once for the trajectories. The next check to need it makes it three.
         """
         import verify_submission
 
@@ -331,9 +327,8 @@ class TestWhenAPopIsTooEarly(unittest.TestCase):
     def test_a_scenario_that_starts_released_is_never_too_early(self):
         """Scenario 0 releases everything at reset and its schedule never fires.
 
-        Measured: with the shipped seed balloon 0 is scheduled for step 400 and
-        the committed baseline pops it at 370, so comparing against the schedule
-        reported the repository's own run as popping before release.
+        With the shipped seed balloon 0 is scheduled for step 400 and the
+        baseline pops it at 370, which the schedule alone calls too early.
         """
         eligible = np.ones((3, 1), dtype=bool)
 
@@ -351,8 +346,7 @@ class TestWhenAPopIsTooEarly(unittest.TestCase):
         """An unevaluated check must not look like a passed one.
 
         It used to leave ``early`` empty and report "every pop is on or after
-        the balloon's release step", which is an affirmative line about a
-        comparison that never happened.
+        the balloon's release step" about a comparison that never happened.
         """
         failures = self._consistency([[2], [2]], [0], eligibility=None)  # really None
 
@@ -465,10 +459,8 @@ class TestTheIntervalsThePopCheckLooksAt(unittest.TestCase):
     def test_a_status_forged_released_before_the_scenario_allows_is_ignored(self):
         """The release mask comes from the scenario, not from the submission.
 
-        Reading the submitted status let a file claim a balloon was released
-        early, point at a rocket pass from before the real release as its
-        closest approach, and flip to popped on the official step. Both the
-        timing check and this one passed.
+        Reading the submitted status let a file claim an early release, point at
+        a rocket pass from before the real one, and pop on the official step.
         """
         rocket = [
             [0.0, 0.0, self.ELEVATION],
@@ -487,12 +479,8 @@ class TestTheIntervalsThePopCheckLooksAt(unittest.TestCase):
 class TestTheReleaseRuleItself(unittest.TestCase):
     """The rule, straight from the regenerated facts.
 
-    Nothing else in this file reaches it. Scenario 0 starts every balloon
-    released, and the reduced scenario-1 fixture has one balloon and therefore a
-    release step of zero, so both produce an all-True mask; the forged-release
-    test supplies its own. Measured: returning ``ones(...)`` from this function,
-    and moving its comparison off by one, both left every other test here green,
-    which is exactly the bypass this branch exists to close.
+    Nothing else here reaches it, both fixtures give an all-True mask. Returning
+    ``ones(...)`` or moving the comparison off by one left every other test green.
     """
 
     def test_a_grounded_balloon_is_not_eligible_until_its_step(self):
@@ -526,15 +514,8 @@ class TestTheReleaseRuleItself(unittest.TestCase):
 class TestARealScenario0SubmissionPasses(unittest.TestCase):
     """The check this file did not have, and the one that mattered.
 
-    Every other test here builds a submission by hand, from scenario 1 cut to
-    one balloon. None of them ran the shipped scenario 0 end to end, and that is
-    what let the release-eligibility bug ship: scenario 0 starts every balloon
-    released and its schedule never fires, so comparing pops against the
-    schedule reported the repository's own run as popping balloon 0 at step 370
-    when the schedule said 400.
-
-    An honest official submission passing is the cheapest possible statement
-    that the checker is fit to judge one.
+    Every other test builds its submission by hand from scenario 1 cut to one
+    balloon. None ran the shipped scenario 0 end to end, which let the bug ship.
     """
 
     def test_the_shipped_scenario_0_run_is_not_accused_of_anything(self):
@@ -580,18 +561,10 @@ if __name__ == "__main__":
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
 class TestTheReleaseRuleReachesTheVerdict(unittest.TestCase):
-    """The rule was correct and wired to nothing that any test could see.
+    """The rule was correct and wired to nothing any test could see.
 
-    Every check above either drives a consumer directly and hands it a mask, or
-    goes through ``verify()`` with a fixture whose mask is all True: scenario 1
-    cut to one balloon releases it at step 0, and scenario 0 starts every
-    balloon released. So the mask had no observable effect at the call site, and
-    measured, replacing it with ``ones_like`` inside ``verify()`` left all 27
-    tests passing. Stubbing it that way also accepted a forged score end to end.
-
-    Two balloons is the smallest fixture that can tell the difference. The
-    schedule becomes ``[0, 50]``, so balloon 1 spends the first fifty steps on
-    the ground and a claim against it there is refusable.
+    Replacing it with ``ones_like`` in ``verify()`` left all 27 tests green and
+    accepted a forged score. Two balloons, schedule ``[0, 50]``, tells them apart.
     """
 
     RELEASE_STEP = 50
@@ -624,8 +597,7 @@ class TestTheReleaseRuleReachesTheVerdict(unittest.TestCase):
         """Or the two tests below would hold with the rule deleted.
 
         The run is 40 steps and balloon 1 is released at 50, so it is on the
-        ground for the whole submission. That is what makes a claim against it
-        refusable without any reference to where the rocket went.
+        ground throughout and a claim against it is refusable on its own.
         """
         schedule = self.submission["balloon_world_data"]["balloon_release_at_step"]
 
@@ -639,11 +611,8 @@ class TestTheReleaseRuleReachesTheVerdict(unittest.TestCase):
     def test_a_pop_claimed_before_release_is_refused_through_verify(self):
         """The forgery the rule exists to stop, driven through the entry point.
 
-        The submitted status is forged to released and then popped, which is
-        exactly what a competitor controls. Only the scenario says balloon 1 is
-        still on the ground, so only a mask taken from the scenario can refuse
-        this, and that mask has to survive the trip from ``verify()`` to the
-        check that reports it.
+        The status is forged to released and then popped. Only the scenario
+        knows balloon 1 is on the ground, so only its mask can refuse this.
         """
         for record in self.records[1:]:
             record["balloon_status"][1] = 2
@@ -654,14 +623,8 @@ class TestTheReleaseRuleReachesTheVerdict(unittest.TestCase):
     def test_a_status_matrix_of_the_wrong_width_is_reported_not_raised(self):
         """The guard that keeps a bad file from ending the run.
 
-        The mask is built from the scenario and the status matrix comes from the
-        submission, so their widths are a competitor's to disagree with. Without
-        the shape guard the two are combined anyway and numpy raises
-
-            operands could not be broadcast together with shapes (2,3) (2,2)
-
-        which is not caught around the ``verify()`` call in ``main()``, so one
-        malformed file takes down every other file in the same batch.
+        Mask width is the scenario's, status width the submission's, so numpy
+        raises where ``main()`` catches nothing and one bad file kills the batch.
         """
         for record in self.records:
             record["balloon_status"] = list(record["balloon_status"]) + [0]
