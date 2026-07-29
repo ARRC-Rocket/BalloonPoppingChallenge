@@ -35,13 +35,19 @@ jobs:
           python-version: "3.14"
 
       - name: Install ruff
-        run: python -m pip install "ruff==0.15.20"
+        run: python -m pip install "ruff==0.15.20" "PyYAML>=6"
 
       - name: Lint
         run: ruff check BalloonPoppingGymEnv/ tests/ doc/examples/
 
       - name: Format check
         run: ruff format --check BalloonPoppingGymEnv/ tests/ doc/examples/
+
+      # Here as well as in the suite, because the suite is the thing it checks:
+      # delete the `test` job and the only run left to notice is the one that
+      # cannot block. Reads the workflow as data, so it needs no simulator.
+      - name: Check CI tests what it says it tests
+        run: python -m unittest tests.test_ci_installs_what_it_checks -v
 
   test:
     name: Tests and coverage (Python ${{ matrix.python-version }})
