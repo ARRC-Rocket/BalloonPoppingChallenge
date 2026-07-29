@@ -181,6 +181,7 @@ The actions, observations, info, reward in this environment are:
 - actions:
   - `launch`: a binary command to launch the rocket.
   - `launch_inclination_heading`: a 2-element array [inclination, heading] representing the launch inclination (0-90 degrees from horizontal) and heading angles (0-360 degrees from north).
+  - On the step that launches, `tvc`, `throttle` and `roll` are read and not applied. That step builds the flight from the launch attitude; the rocket is still on the rail, where those commands would not change where it goes. The first step after launch is the first one that applies them.
   - `tvc`: a 2-element array [TVC_x, TVC_y] representing the thrust vector control (TVC) gimbal angles (deg). Polarity: positive gimbal angles provide positive torques.
   - `throttle`: a scalar representing the throttle ratio between 0 and 1.
   - `roll`: a scalar representing the roll torque command in N-m.
