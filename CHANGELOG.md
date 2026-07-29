@@ -10,7 +10,12 @@ to the pull request that made the change.
 
 ## [Unreleased]
 
-*Changes on `develop` since v0.0.2. The release PR renames this section.*
+*Changes on `develop` since v0.1.0.*
+
+## [0.1.0] - 2026-07-29
+
+Released as [v0.1.0](https://github.com/ARRC-Rocket/BalloonPoppingChallenge/releases/tag/v0.1.0)
+in #61, folding in the work from #39 through #111.
 
 ### Added
 
@@ -148,6 +153,7 @@ in #33, folding in the work from #5 through #34.
 First public release: the Gymnasium environment, the example agents, scenarios 0
 and 1, and the Colab example (#1, #3, #4).
 
-[Unreleased]: https://github.com/ARRC-Rocket/BalloonPoppingChallenge/compare/v0.0.2...develop
+[Unreleased]: https://github.com/ARRC-Rocket/BalloonPoppingChallenge/compare/v0.1.0...develop
+[0.1.0]: https://github.com/ARRC-Rocket/BalloonPoppingChallenge/compare/v0.0.2...v0.1.0
 [0.0.2]: https://github.com/ARRC-Rocket/BalloonPoppingChallenge/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/ARRC-Rocket/BalloonPoppingChallenge/releases/tag/v0.0.1
