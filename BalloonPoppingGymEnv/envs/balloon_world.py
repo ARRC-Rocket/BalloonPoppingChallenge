@@ -85,9 +85,11 @@ def _usable_action_fields(action):
         try:
             given = np.asarray(action[field])
             # Before the cast, which discards the imaginary part with a warning
-            # rather than refusing it: 1+9j would gimbal to 1.
-            if np.iscomplexobj(given):
-                raise TypeError("a complex command is not a command")
+            # rather than refusing it: 1+9j would gimbal to 1. Object dtype as
+            # well, because it hides what it holds: an object array of
+            # np.complex128 passes `iscomplexobj` and casts to 1 all the same.
+            if np.iscomplexobj(given) or given.dtype == object:
+                raise TypeError("this is not a command the environment can read")
             # Flat, because the size alone let a (1, 2) through to raise at
             # `float(tvc[0])` and a (1, 2) attitude to raise at `attitude[1]`.
             values = np.asarray(given, dtype=float).reshape(-1)

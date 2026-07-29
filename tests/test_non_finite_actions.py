@@ -87,10 +87,28 @@ class TestWhichFieldsAreUnusable(unittest.TestCase):
     def test_a_complex_field_is_not_usable(self):
         """`np.asarray(..., dtype=float)` discards the imaginary part with a
         warning rather than refusing, so a 1+9j gimbal command would arrive at
-        the actuator as 1 and be indistinguishable from one the agent meant."""
-        action = dict(_CLEAN, tvc=np.array([1 + 9j, 0 + 2j]))
+        the actuator as 1 and be indistinguishable from one the agent meant.
 
-        self.assertEqual(check_action(action), ["tvc"])
+        The object cases are the ones a dtype test alone misses. `iscomplexobj`
+        reads the array's dtype, and an object array does not carry its
+        elements' types, so an array of `np.complex128` has dtype object,
+        passes that test, and casts to 1 with only a warning all the same.
+        """
+        for label, value in (
+            ("complex array", np.array([1 + 9j, 0 + 2j])),
+            ("list of numpy complex", [np.complex128(1 + 9j), np.complex128(2j)]),
+            (
+                "object array of numpy complex",
+                np.array([np.complex128(1 + 9j), np.complex128(2j)], dtype=object),
+            ),
+            (
+                "object array of 0-d complex",
+                np.array([np.array(1 + 9j), np.array(2j)], dtype=object),
+            ),
+            ("object array of floats", np.array([1.0, 2.0], dtype=object)),
+        ):
+            with self.subTest(value=label):
+                self.assertEqual(check_action(dict(_CLEAN, tvc=value)), ["tvc"])
 
     def test_an_action_that_is_not_a_mapping_has_no_usable_field(self):
         """The lookup raises on these, and it happens after the step has already
