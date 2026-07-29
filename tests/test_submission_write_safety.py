@@ -12,6 +12,7 @@ Only ``rocketpy`` is guarded: a missing simulation stack is a legitimate skip,
 but a broken import inside this package is a failure and must stay loud.
 """
 
+import logging
 import io
 import json
 import os
@@ -111,6 +112,83 @@ class TestAtomicWrite(unittest.TestCase):
 
     def _leftovers(self):
         return [name for name in os.listdir(self.directory) if name != "submission.pkl"]
+
+    def test_a_failure_before_the_handle_has_an_owner_closes_it(self):
+        """`mkstemp` returns a raw descriptor and only `fdopen` gives it an owner.
+
+        A failure in between used to unlink the name and leave the descriptor
+        open on an anonymous inode, which a long-lived process repeats until it
+        runs out of them.
+        """
+        opened = {}
+        real_mkstemp = tempfile.mkstemp
+
+        def remember(*args, **kwargs):
+            handle, path = real_mkstemp(*args, **kwargs)
+            opened["handle"] = handle
+            return handle, path
+
+        with (
+            mock.patch.object(utils.tempfile, "mkstemp", remember),
+            mock.patch.object(os, "fdopen", side_effect=ValueError("bad mode")),
+            self.assertRaises(ValueError),
+        ):
+            utils._write_atomically(self.out_path, lambda file: None)
+
+        with self.assertRaises(OSError):
+            os.fstat(opened["handle"])
+        self.assertEqual(self._leftovers(), [])
+
+    def test_a_handle_the_file_object_took_over_is_not_closed_twice(self):
+        """Once `fdopen` succeeds, closing the file closes the descriptor.
+
+        Closing it again in the error path closes whatever has since been given
+        that number, which on a threaded run is another file entirely. The
+        second close raises EBADF only while the number is still free.
+        """
+        closed = []
+        real_close = os.close
+
+        def watch(handle):
+            closed.append(handle)
+            return real_close(handle)
+
+        def fail(_file):
+            raise OSError("disk full")
+
+        with (
+            mock.patch.object(os, "close", watch),
+            self.assertRaisesRegex(OSError, "disk full"),
+        ):
+            utils._write_atomically(self.out_path, fail)
+
+        self.assertEqual(closed, [], "the file object had already closed it")
+
+    def test_a_cleanup_that_fails_is_reported_rather_than_swallowed(self):
+        """The original error still raises, but the file left behind is named.
+
+        `except OSError: pass` meant a partial submission could sit in the
+        directory with nothing anywhere saying so.
+        """
+        real_unlink = os.unlink
+
+        def refuse(path, *args, **kwargs):
+            if ".partial_" in os.fspath(path):
+                raise PermissionError("cleanup denied")
+            return real_unlink(path, *args, **kwargs)
+
+        def fail(_file):
+            raise OSError("disk full")
+
+        with (
+            mock.patch.object(os, "unlink", refuse),
+            self.assertLogs(utils.logger, logging.WARNING) as caught,
+            self.assertRaisesRegex(OSError, "disk full"),
+        ):
+            utils._write_atomically(self.out_path, fail)
+
+        self.assertIn(".partial_", "".join(caught.output))
+        self.assertFalse(os.path.exists(self.out_path))
 
     def test_a_successful_write_lands_at_the_final_path(self):
         utils._write_atomically(self.out_path, lambda file: file.write(b"payload"))

@@ -1,6 +1,7 @@
 import hashlib
 import http.client
 import json
+import logging
 import os
 import pickle
 import re
@@ -10,6 +11,8 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from rocketpy._encoders import RocketPyEncoder
+
+logger = logging.getLogger(__name__)
 
 # The evaluate.py integrity check is advisory and must never cost a competitor
 # the submission they just simulated. The socket timeout and the byte cap bound
@@ -264,11 +267,17 @@ def _write_atomically(out_path, write_payload, mode="wb", encoding=None):
     payload carries the team secret, so keeping it owner-only is the better end
     state on a shared machine.
     """
-    handle, temp_path = tempfile.mkstemp(
-        dir=os.path.dirname(out_path) or ".", prefix=".partial_", suffix=".tmp"
-    )
+    handle = None
+    temp_path = None
     try:
-        with os.fdopen(handle, mode, encoding=encoding) as file:
+        handle, temp_path = tempfile.mkstemp(
+            dir=os.path.dirname(out_path) or ".", prefix=".partial_", suffix=".tmp"
+        )
+        file = os.fdopen(handle, mode, encoding=encoding)
+        # The file object owns the descriptor from here, and closing both would
+        # close whatever else has since been given the same number.
+        handle = None
+        with file:
             write_payload(file)
             file.flush()
             os.fsync(file.fileno())
@@ -278,10 +287,28 @@ def _write_atomically(out_path, write_payload, mode="wb", encoding=None):
         # worse outcome than the truncated file this exists to prevent. A
         # SIGKILL still can, which no handler can cover; what it cannot leave is
         # a file under the finished name.
-        try:
-            os.unlink(temp_path)
-        except OSError:
-            pass
+        if handle is not None:
+            # `mkstemp` hands back a raw descriptor and only `fdopen` gives it an
+            # owner, so a failure in between used to unlink the name and leave
+            # the descriptor open on an anonymous inode.
+            try:
+                os.close(handle)
+            except OSError:
+                pass
+        if temp_path is not None:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
+            except OSError as cleanup_error:
+                # Said rather than swallowed. The original error is what raises,
+                # but a partial file nobody knows about is worse than one that
+                # was named in the log.
+                logger.warning(
+                    "Could not remove the incomplete submission at %s: %s",
+                    temp_path,
+                    cleanup_error,
+                )
         raise
 
 
