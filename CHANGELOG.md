@@ -21,10 +21,27 @@ to the pull request that made the change.
   reproduces its sensor noise (#54).
 - Golden-master regression tests for scenarios 0 and 1, comparing the rocket and
   balloon trajectories against stored baselines so an ActiveRocketPy change
-  cannot move a score unnoticed (#47, #49).
+  cannot move a score unnoticed (#47, #49). Scenario 0's baseline also records
+  the step each balloon is popped on and how the episode ends (#100).
+- `scripts/verify_submission.py`, which regenerates a submission's balloons from
+  the shipped scenario and its seed and reports anything that does not match.
+  The balloons are not something an agent commands, so they are reproducible
+  independently of the run (#97).
 - Unit tests for the pop-detection geometry (#48) and for actuator dynamics
-  (#66).
-- CI checks that `uv.lock` is current against the ActiveRocketPy submodule (#62).
+  (#66, #71).
+- `CONTRIBUTING.md` and this changelog, with `make format` matching what CI
+  checks (#76). `CITATION.cff` and `SECURITY.md`, and release notes grouped by
+  kind (#79).
+- The pop rule is written down in the README and pinned by tests, along with the
+  coordinate frame observations are reported in (#81, #87).
+- CI checks that `uv.lock` is current against the ActiveRocketPy submodule (#62)
+  and runs on the Python floor the package claims rather than only asserting it
+  (#75).
+- Tests for the submission path (#77), scenario 1's release states (#83), the
+  3D position error rather than each coordinate alone (#85), and the render
+  behaviour a previous change had deleted (#86). The import guards no longer
+  hide an installed but broken simulation stack (#82), and baselines are written
+  as strict JSON, atomically, and refused when diverged (#84).
 
 ### Changed
 
@@ -43,11 +60,13 @@ to the pull request that made the change.
   the previous behaviour (#39).
 - The observation and the whitelisted `given_parameters` handed to an agent are
   copies. Writing into them used to reach the environment's own state, which was
-  a scoring hole rather than an API detail (#99).
+  a scoring hole rather than an API detail (#99, #103).
 - Diagnostics go through the `logging` module instead of `print` (#51).
 - ActiveRocketPy updated to the RocketPy v1.13 line (#60), with `uv.lock`
   relocked to match (#62).
 - ruff is pinned in CI so formatting results are reproducible (#50).
+- The README's update instructions point at the pinned ActiveRocketPy commit
+  rather than at whatever its branch currently holds (#72).
 
 ### Fixed
 
@@ -67,6 +86,18 @@ to the pull request that made the change.
   than by how long they are. A millimetre-scale pair at ninety degrees was
   called parallel and reported 1.5005 m where the real distance is 1.4995 m,
   which against a 1.5 m balloon radius is a pop reported as a miss (#98).
+- **Scoring:** the first interval after launch is checked for pops. The sweep
+  started from the previous recorded position, which is all-NaN before launch,
+  so the step where the rocket leaves the pad was skipped. It tracks the sweep
+  origin explicitly now (#69).
+- The submission file is written atomically and its name no longer carries the
+  team name into the path. Two runs in the same second used to overwrite each
+  other (#73).
+- `balloon_flights` is no longer packed into a submission. Nothing reads it and
+  `trajectories` already holds the same positions, so submissions are much
+  smaller (#74).
+- The console handler no longer competes with the level the CLI sets, so the
+  score line prints once at the level asked for (#95).
 - The documented coordinate frame was wrong about Z. X and Y are east and north
   of the launch point, but Z is altitude above sea level, not height above the
   pad, in `balloon_states`, the GNSS sensors and the rocket state alike. A
