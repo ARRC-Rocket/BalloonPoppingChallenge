@@ -52,11 +52,21 @@ def _sensor_stream(scenario_params, given_params, seed, n_steps=N_STEPS):
     observation, _ = env.reset(seed=seed)
     readings = []
     terminated = False
+    truncated = False
     steps = 0
-    while not terminated and steps < n_steps:
-        observation, _, terminated, _, _ = env.step(agent.get_action(observation))
+    # Both flags, and the step cap kept as a separate exit. Waiting on
+    # ``terminated`` alone is the loop that reads past the end of the
+    # precomputed balloon trajectories; the cap held it short of that here, so
+    # nothing failed, but the cap is about keeping the test quick and is not
+    # what makes the loop end correctly.
+    while not (terminated or truncated):
+        observation, _, terminated, truncated, _ = env.step(
+            agent.get_action(observation)
+        )
         readings.append(np.asarray(observation["rocket_sensors"], dtype=float))
         steps += 1
+        if steps >= n_steps:
+            break
     return np.array(readings)
 
 
