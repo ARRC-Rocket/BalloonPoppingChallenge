@@ -351,10 +351,7 @@ class TestANearParallelInteriorMinimum(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
 class TestEveryCandidateEarnsItsPlace(unittest.TestCase):
     """Deleting an edge from the five candidates changed no other test.
 
@@ -412,3 +409,7 @@ class TestEveryCandidateEarnsItsPlace(unittest.TestCase):
         self.assertLessEqual(
             worst, 1e-9, f"exceeded a sampled upper bound by {worst:.3e} m"
         )
+
+
+if __name__ == "__main__":
+    unittest.main()
