@@ -286,12 +286,11 @@ class TestTheClampingBranches(unittest.TestCase):
         )
 
     @staticmethod
-    def _branch_of(start_a, end_a, start_b, end_b, epsilon=1e-12):
-        """Name the branch a pair reaches, so a case cannot silently stop reaching it.
+    def _where_the_minimum_lies(start_a, end_a, start_b, end_b, epsilon=1e-12):
+        """Name the region a pair's closest approach falls in.
 
-        This repeats a little of the implementation's arithmetic on purpose. Without
-        it a case is only *believed* to exercise a branch, which is how the batch
-        below came to claim four branches while reaching two.
+        Geometry of the fixture, not the branch production takes. Naming
+        branches is how the batch below claimed four situations and covered two.
         """
         direction_a = np.asarray(end_a, dtype=float) - np.asarray(start_a, dtype=float)
         direction_b = np.asarray(end_b, dtype=float) - np.asarray(start_b, dtype=float)
@@ -305,13 +304,17 @@ class TestTheClampingBranches(unittest.TestCase):
             return "degenerate_b"
 
         b_coeff = float(direction_a @ direction_b)
-        c_coeff = float(direction_a @ offset)
         f_coeff = float(direction_b @ offset)
-        denominator = a_coeff * e_coeff - b_coeff * b_coeff
-        if abs(denominator) <= epsilon:
+        # Exactly parallel, by the directions rather than by a threshold: an
+        # 8 * eps test names pairs parallel that are not.
+        normal = np.cross(direction_a, direction_b)
+        denominator = float(normal @ normal)
+        if denominator == 0.0:
             return "parallel"
 
-        s_unclipped = (b_coeff * f_coeff - c_coeff * e_coeff) / denominator
+        # Same identity production uses, so this describes the geometry rather
+        # than reproducing a subtraction that loses digits near parallel.
+        s_unclipped = float(np.cross(direction_b, offset) @ normal) / denominator
         s_param = np.clip(s_unclipped, 0.0, 1.0)
         t_param = (b_coeff * s_param + f_coeff) / e_coeff
         if t_param < 0.0:
@@ -344,13 +347,13 @@ class TestTheClampingBranches(unittest.TestCase):
             best = min(best, float(np.min(np.einsum("ijk,ijk->ij", deltas, deltas))))
         return best
 
-    def _assert_matches_brute_force(self, start_b, end_b, expected_branch):
+    def _assert_matches_brute_force(self, start_b, end_b, expected_region):
         start_a, end_a = self.SEGMENT_A
 
         self.assertEqual(
-            self._branch_of(start_a, end_a, start_b, end_b),
-            expected_branch,
-            "this case no longer reaches the branch it was chosen for",
+            self._where_the_minimum_lies(start_a, end_a, start_b, end_b),
+            expected_region,
+            "this case no longer has the geometry it was chosen for",
         )
         actual = self._distance_squared(start_a, end_a, [start_b], [end_b])[0]
 
@@ -439,11 +442,11 @@ class TestTheClampingBranches(unittest.TestCase):
             ("s_clamped", *self.S_CLAMPED),
         ]
         # The point of the batch, asserted rather than assumed.
-        for expected_branch, start_b, end_b in cases:
+        for expected_region, start_b, end_b in cases:
             self.assertEqual(
-                self._branch_of(start_a, end_a, start_b, end_b),
-                expected_branch,
-                f"the batch no longer covers {expected_branch} via {start_b}",
+                self._where_the_minimum_lies(start_a, end_a, start_b, end_b),
+                expected_region,
+                f"the batch no longer covers {expected_region} via {start_b}",
             )
 
         actual = self._distance_squared(

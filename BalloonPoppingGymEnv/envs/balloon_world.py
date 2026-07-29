@@ -538,47 +538,10 @@ class BalloonPoppingEnv(gym.Env):
         segment_start_b = np.asarray(segment_start_b, dtype=float)
         segment_end_b = np.asarray(segment_end_b, dtype=float)
 
-        # Two tolerances, because the quantities they guard are not the same
-        # kind of thing. ``a_coeff`` and ``e_coeff`` are squared lengths in m**2,
-        # so a length below a micron counts as no movement at all. The
-        # denominator is a_coeff * e_coeff - b_coeff**2, in m**4, and how big it
-        # is says nothing on its own: it depends on the segment lengths as much
-        # as on the angle between them.
-        #
-        # One absolute value for both made the parallel decision depend on
-        # scale. A 1 mm rocket segment and a 1 mm balloon segment at exactly
-        # ninety degrees give a denominator of exactly 1e-12, so
-        # ``> 1e-12`` called perpendicular segments parallel, took the branch
-        # that pins s to zero, and reported 1.5005 m where the real distance is
-        # 1.4995 m. With a 1.5 m radius that is a pop reported as a miss.
-        #
-        # Measured over a scenario-1 run: 56 of 9155 released-balloon
-        # evaluations landed in that branch, all of them genuinely degenerate,
-        # so no score moved. It is the shape of the test that is wrong rather
-        # than any current result.
+        # Guards squared lengths in m**2 only: below a micron a segment is a
+        # point. The denominator gets no tolerance, since m**4 says as much about
+        # length as angle. Scenario 1: 56 of 9155 evaluations are degenerate.
         degenerate_length_squared = 1e-12
-        # Dimensionless: sin(angle)**2 has to clear this before the two
-        # directions count as distinct, whatever the segments are scaled to.
-        #
-        # Derived from double precision rather than chosen. The denominator is
-        # two nearly equal products subtracted, so its own rounding error is of
-        # order eps * a_coeff * e_coeff, and a few multiples of that is the
-        # point below which its sign and magnitude mean nothing. Eight is the
-        # margin.
-        #
-        # Not a value to widen. The branch it selects pins s to zero, which is
-        # the right answer only when the directions really are parallel, since
-        # then every s gives the same distance. For merely close to parallel it
-        # is wrong, and the wider the tolerance the more pairs land there. At
-        # 1e-12 this pair returned 1.5000004 m where the true closest approach
-        # is 1.4999995 m, which against a 1.5 m radius is a pop reported as a
-        # miss:
-        #
-        #     rocket  (0, 0, 0)          -> (1, 0, 0)
-        #     balloon (-1, 1.5000013, 0) -> (1, 1.4999995, 0)
-        #
-        # At 8 * eps that pair goes through the regular solution and is right.
-        parallel_relative_epsilon = 8 * np.finfo(float).eps
         epsilon = degenerate_length_squared
         direction_a = segment_end_a - segment_start_a
         direction_b = segment_end_b - segment_start_b
@@ -612,44 +575,85 @@ class BalloonPoppingEnv(gym.Env):
             regular = ~degenerate_b
             if np.any(regular):
                 b_coeff = np.einsum("j,ij->i", direction_a, direction_b)
-                denominator = a_coeff * e_coeff - b_coeff * b_coeff
+                # ||u x v||**2 equals a_coeff * e_coeff - b_coeff**2 in real
+                # arithmetic and avoids its cancellation: near parallel, that
+                # subtraction returned 1.637e-11 where the truth is 1.554e-11.
+                normal = np.cross(direction_a, direction_b[regular])
+                denominator_regular = np.einsum("ij,ij->i", normal, normal)
 
-                # Relative to a_coeff * e_coeff, which is what the denominator
-                # would be at ninety degrees, so this compares sin(angle)**2
-                # against a dimensionless tolerance and scaling both segments
-                # cannot change the answer.
-                non_parallel = regular & (
-                    np.abs(denominator) > parallel_relative_epsilon * a_coeff * e_coeff
-                )
-                s_param[non_parallel] = np.clip(
-                    (
-                        b_coeff[non_parallel] * f_coeff[non_parallel]
-                        - c_coeff[non_parallel] * e_coeff[non_parallel]
+                b_r = b_coeff[regular]
+                c_r = c_coeff[regular]
+                e_r = e_coeff[regular]
+                f_r = f_coeff[regular]
+                offset_r = offset[regular]
+                direction_b_r = direction_b[regular]
+
+                def _squared(s_values, t_values):
+                    separation = (
+                        offset_r
+                        + s_values[:, None] * direction_a
+                        - t_values[:, None] * direction_b_r
                     )
-                    / denominator[non_parallel],
-                    0.0,
-                    1.0,
-                )
+                    return np.einsum("ij,ij->i", separation, separation)
 
-                t_param[regular] = (
-                    b_coeff[regular] * s_param[regular] + f_coeff[regular]
-                ) / e_coeff[regular]
+                # The minimum of a convex quadratic over the unit square is at
+                # its stationary point when that lands inside, and otherwise on
+                # an edge. All five candidates are evaluated and the best wins.
+                candidates = []
+                for s_value in (0.0, 1.0):
+                    s_edge = np.full(f_r.shape, s_value)
+                    t_edge = np.clip((b_r * s_value + f_r) / e_r, 0.0, 1.0)
+                    candidates.append((s_edge, t_edge))
+                for t_value in (0.0, 1.0):
+                    t_edge = np.full(f_r.shape, t_value)
+                    s_edge = np.clip((b_r * t_value - c_r) / a_coeff, 0.0, 1.0)
+                    candidates.append((s_edge, t_edge))
 
-                t_too_low = regular & (t_param < 0.0)
-                t_param[t_too_low] = 0.0
-                s_param[t_too_low] = np.clip(
-                    -c_coeff[t_too_low] / a_coeff,
-                    0.0,
-                    1.0,
+                # Zero, not a tolerance. Exactly parallel puts the minimum on an
+                # edge; merely near parallel does not. An 8 * eps cutoff skipped a
+                # pair at 1.637e-15: 1.5000000000000127 m against 1.4999999999999998 m.
+                solvable = denominator_regular > 0.0
+                s_interior, t_interior = (
+                    candidates[0][0].copy(),
+                    candidates[0][1].copy(),
                 )
+                if np.any(solvable):
+                    # (p x q) . (r x s) = (p.r)(q.s) - (p.s)(q.r), so these are
+                    # b*f - c*e and a*f - b*c without the cancelling subtraction,
+                    # which gave 1.4999999999999900 m and 1.5000000000000087 m reversed.
+                    s_interior[solvable] = np.clip(
+                        np.einsum(
+                            "ij,ij->i",
+                            np.cross(direction_b_r[solvable], offset_r[solvable]),
+                            normal[solvable],
+                        )
+                        / denominator_regular[solvable],
+                        0.0,
+                        1.0,
+                    )
+                    t_interior[solvable] = np.clip(
+                        np.einsum(
+                            "ij,ij->i",
+                            np.cross(direction_a, offset_r[solvable]),
+                            normal[solvable],
+                        )
+                        / denominator_regular[solvable],
+                        0.0,
+                        1.0,
+                    )
+                candidates.append((s_interior, t_interior))
 
-                t_too_high = regular & (t_param > 1.0)
-                t_param[t_too_high] = 1.0
-                s_param[t_too_high] = np.clip(
-                    (b_coeff[t_too_high] - c_coeff[t_too_high]) / a_coeff,
-                    0.0,
-                    1.0,
-                )
+                # Reversing either segment maps the candidate set onto itself, so
+                # the score cannot turn on which end was written first: the old
+                # s = 0 pin gave 1.50000003 m for a pair 1.49999999 m apart.
+                distances = np.stack([_squared(s, t) for s, t in candidates])
+                best = np.argmin(distances, axis=0)
+                s_param[regular] = np.stack([s for s, _ in candidates])[
+                    best, np.arange(len(best))
+                ]
+                t_param[regular] = np.stack([t for _, t in candidates])[
+                    best, np.arange(len(best))
+                ]
 
         closest_point_a = segment_start_a + s_param[:, None] * direction_a
         closest_point_b = segment_start_b + t_param[:, None] * direction_b
