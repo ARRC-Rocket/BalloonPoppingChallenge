@@ -289,21 +289,8 @@ class TestTheClampingBranches(unittest.TestCase):
     def _where_the_minimum_lies(start_a, end_a, start_b, end_b, epsilon=1e-12):
         """Name the region a pair's closest approach falls in.
 
-        This used to name the *branch of the implementation* a pair reached, and
-        duplicated its arithmetic to do so. That drifted twice: the threshold
-        here stayed absolute while production moved to a relative one, and then
-        production stopped having a parallel branch at all, since it now
-        evaluates the stationary point and all four edges and takes the smallest.
-        Both times this helper went on confidently naming a branch that was no
-        longer there.
-
-        So it describes the geometry instead: whether either sweep is a point,
-        whether the two directions are parallel, and where the unconstrained
-        minimum of the distance falls relative to the two segments. Those are
-        facts about the fixture, and they stay true however the minimum is
-        computed. What they are for is unchanged: a case is otherwise only
-        *believed* to exercise what it was chosen for, which is how the batch
-        below came to claim four situations while covering two.
+        Geometry of the fixture, not the branch production takes. Naming
+        branches is how the batch below claimed four situations and covered two.
         """
         direction_a = np.asarray(end_a, dtype=float) - np.asarray(start_a, dtype=float)
         direction_b = np.asarray(end_b, dtype=float) - np.asarray(start_b, dtype=float)
@@ -318,10 +305,8 @@ class TestTheClampingBranches(unittest.TestCase):
 
         b_coeff = float(direction_a @ direction_b)
         f_coeff = float(direction_b @ offset)
-        # Exactly parallel, by the directions rather than by a threshold. This
-        # used to copy production's 8 * eps test, which meant it called a pair
-        # parallel that is not, and it went stale the moment production stopped
-        # having such a test at all.
+        # Exactly parallel, by the directions rather than by a threshold: an
+        # 8 * eps test names pairs parallel that are not.
         normal = np.cross(direction_a, direction_b)
         denominator = float(normal @ normal)
         if denominator == 0.0:

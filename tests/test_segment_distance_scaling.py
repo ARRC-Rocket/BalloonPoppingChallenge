@@ -100,13 +100,8 @@ class TestTheParallelTestDoesNotDependOnScale(unittest.TestCase):
     def test_a_nearly_parallel_pair_still_gets_the_real_closest_approach(self):
         """The tolerance is observable, and the first version of this got it wrong.
 
-        The version this was written against skipped the stationary point below
-        a tolerance and pinned s to zero, which is right only when the
-        directions really are parallel: then every s gives the same distance.
-        For merely close to parallel it is wrong, so widening the tolerance
-        moved pairs into an answer to a different question. Nothing is skipped
-        now, and this case is kept because it is the one that showed the
-        absolute form of the test was scale dependent.
+        Nothing is skipped now, the stationary point is always computed. The
+        case is kept for showing an absolute parallel test was scale dependent.
 
         At a chosen 1e-12 this pair came back as 1.5000004 m where the true
         closest approach is 1.4999995 m, which against a 1.5 m radius is a pop
@@ -175,17 +170,8 @@ class TestTheParallelTestDoesNotDependOnScale(unittest.TestCase):
         tolerance to 0.5, which calls anything within forty-five degrees
         parallel, passed every other test in this file.
 
-        Worth being straight about what this pins. It is the ordinary case: a
-        clear angle between the two sweeps, where nothing about the tolerance
-        or the candidate set is delicate, and the answer has to be the same as
-        the brute force oracle's. The delicate cases are next door, in
-        TestANearParallelInteriorMinimum and in the endpoint-order test.
-
-        An earlier version of this docstring said the tolerance's value was not
-        observable anywhere in a wide range. That was measured against an
-        implementation that had a parallel branch, and it is no longer true:
-        the interior counter-example does observe it, which is why the
-        stationary point is now always computed.
+        What this pins is the ordinary case, a clear angle where the answer has
+        to match the oracle. The delicate ones are in TestANearParallelInteriorMinimum.
         """
         angle = np.radians(20.0)
         start_a, end_a = np.array([0.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0])
@@ -231,24 +217,15 @@ class TestTheParallelTestDoesNotDependOnScale(unittest.TestCase):
 class TestANearParallelInteriorMinimum(unittest.TestCase):
     """The case four edges do not contain.
 
-    Enumerating the edges is only complete when the constrained minimum is on
-    the boundary. It is on the boundary when the two directions are exactly
-    parallel, because the separation is then constant along the valley and its
-    smallest value is attained where the valley leaves the square. For a pair
-    that is merely close to parallel the stationary point can lie strictly
-    inside both segments, and then no edge holds it.
-
-    An earlier version skipped the stationary point whenever the relative
-    determinant fell under 8 * eps, and claimed the edges covered that. They do
-    not, and this pair is the proof.
+    The edges hold the minimum only for exactly parallel directions. Merely
+    near parallel, the stationary point can lie strictly inside both segments.
     """
 
     RADIUS = 1.5
 
-    # Deliberately away from the midpoints. A symmetric s = t = 0.5 fixture
-    # catches the skipped stationary point but not the cancellation in the
-    # numerators, because the two products being subtracted end up close to
-    # equal in magnitude rather than close to equal in value.
+    # Away from the midpoints on purpose. At s = t = 0.5 the two products in
+    # the numerators come out equal in magnitude but not in value, so a
+    # symmetric fixture misses the cancellation.
     S_TRUE = 0.35
     T_TRUE = 0.70
 
@@ -287,10 +264,8 @@ class TestANearParallelInteriorMinimum(unittest.TestCase):
     def _skipped_interior_pair(self):
         """The pair the removed cutoff would have refused to solve.
 
-        Kept alongside the asymmetric one because they are different faults.
-        This one is below 8 * eps, so restoring the cutoff skips its stationary
-        point; the asymmetric pair sits above it and would still be solved, so
-        it cannot catch that regression.
+        Below 8 * eps, so restoring the cutoff skips its stationary point. The
+        asymmetric pair sits above it and cannot catch that regression.
         """
         angle = np.sqrt(7 * np.finfo(float).eps)
         just_inside = np.nextafter(self.RADIUS, 0.0)
@@ -347,10 +322,8 @@ class TestANearParallelInteriorMinimum(unittest.TestCase):
     def test_the_interior_minimum_is_not_skipped_in_any_ordering(self):
         """Every way of writing the same two segments down.
 
-        The stationary point being skipped and its numerators cancelling are
-        different faults with the same symptom, and the second one only shows
-        when the orderings are compared: reversing the rocket sweep changes the
-        rounding of ``b * f - c * e`` enough to cross the radius.
+        A skipped stationary point and cancelling numerators share a symptom.
+        Reversing the rocket sweep moves ``b * f - c * e`` across the radius.
         """
         measured = {
             name: float(
@@ -383,16 +356,10 @@ if __name__ == "__main__":
 
 
 class TestEveryCandidateEarnsItsPlace(unittest.TestCase):
-    """Deleting an edge from the five candidates changed no test at all.
+    """Deleting an edge from the five candidates changed no other test.
 
-    Both golden masters included. The clipped stationary point lands on the same
-    answer as the ``s = 1`` edge for every geometry the other fixtures contain,
-    so the edge was carrying weight nowhere anything looked. It is not decorative:
-    on the pair below, dropping it moves the answer from 1.49990 m to 4.05960 m,
-    which is a pop turning into a miss against a 1.5 m radius.
-
-    Checked against the brute force oracle rather than a recorded number, so this
-    says the answer is right rather than that it has not changed.
+    Both golden masters included. Dropping the ``s = 1`` edge moves the pair
+    below from 1.49990 m to 4.05960 m, a pop lost against a 1.5 m radius.
     """
 
     # From an exhaustive search for a geometry where the s = 1 edge is the only
@@ -420,19 +387,10 @@ class TestEveryCandidateEarnsItsPlace(unittest.TestCase):
         self.assertLess(measured, 1.5, "this pair has to be a pop for the test to bite")
 
     def test_no_geometry_in_a_corpus_beats_the_oracle(self):
-        """A fixed corpus, so the two edge families are covered symmetrically.
+        """A fixed corpus, so both edge families are covered symmetrically.
 
-        The t-edge minimiser's sign was pinned by the existing fixtures and the
-        s-edge's was not, which is the asymmetry hand-picked geometries produce.
-
-        Asserted one-sided, which is both tighter and far cheaper than comparing
-        to a tolerance. Sampling the two segments can only ever overestimate
-        their true closest approach, so an exact answer must come out at or below
-        the oracle whatever the sample count. Any candidate that is missing, or
-        minimised with the wrong sign, returns some other stationary value, and
-        the one direction it cannot go is under the truth.
-
-        Seeded, so a failure is reproducible rather than a flake.
+        One-sided on purpose: sampling can only overestimate the closest
+        approach, so anything missing or wrongly signed lands above the oracle.
         """
         generator = np.random.default_rng(20260729)
         worst = 0.0

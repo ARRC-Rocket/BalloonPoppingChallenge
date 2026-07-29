@@ -481,12 +481,9 @@ class BalloonPoppingEnv(gym.Env):
             regular = ~degenerate_b
             if np.any(regular):
                 b_coeff = np.einsum("j,ij->i", direction_a, direction_b)
-                # ||u x v||**2, which equals a_coeff * e_coeff - b_coeff**2
-                # exactly in real arithmetic and behaves far better in floating
-                # point. The subtraction takes two nearly equal products and
-                # loses most of their significant digits when the directions are
-                # close to parallel: on the pair below it returns 1.637e-11
-                # where the true value is 1.554e-11, out by five percent.
+                # ||u x v||**2 equals a_coeff * e_coeff - b_coeff**2 in real
+                # arithmetic and avoids its cancellation: near parallel, that
+                # subtraction returned 1.637e-11 where the truth is 1.554e-11.
                 normal = np.cross(direction_a, direction_b[regular])
                 denominator_regular = np.einsum("ij,ij->i", normal, normal)
 
@@ -505,35 +502,9 @@ class BalloonPoppingEnv(gym.Env):
                     )
                     return np.einsum("ij,ij->i", separation, separation)
 
-                # The minimum of a convex quadratic over the unit square is
-                # either its stationary point, when that lands inside, or on an
-                # edge. Both are evaluated and the better one wins.
-                #
-                # The previous version took the stationary point and, when the
-                # two directions were too close to parallel to solve for it,
-                # pinned s to zero and solved only for t. Pinning s is right for
-                # exactly parallel segments and wrong for merely near parallel
-                # ones, because the separation then varies along s and zero is
-                # not where it is smallest, it is only where the caller happened
-                # to start writing the segment down.
-                #
-                # Measured on the merged version of that code: a rocket sweep
-                # (0,0,0) to (1,0,0) against a balloon sweep (-1, 1.50000007, 0)
-                # to (1, 1.49999999, 0) returned 1.50000003 m, a miss against
-                # the 1.5 m radius, where the real closest approach is the
-                # endpoint distance 1.49999999 m, a pop. Writing the same rocket
-                # sweep down end to start returned the pop. One geometry, two
-                # scores, decided by which end was called the start.
-                #
-                # Enumerating the edges removes that. The candidate set maps
-                # onto itself when either segment is reversed, since that swaps
-                # s = 0 with s = 1, and when the two segments are exchanged,
-                # since that swaps the s edges with the t edges. So the answer
-                # cannot depend on how the caller ordered any of it.
-                #
-                # It also takes the tolerance below off the correctness path. It
-                # decides only whether the stationary point is worth computing;
-                # when it is skipped the edges still hold the true minimum.
+                # The minimum of a convex quadratic over the unit square is at
+                # its stationary point when that lands inside, and otherwise on
+                # an edge. All five candidates are evaluated and the best wins.
                 candidates = []
                 for s_value in (0.0, 1.0):
                     s_edge = np.full(f_r.shape, s_value)
@@ -544,51 +515,18 @@ class BalloonPoppingEnv(gym.Env):
                     s_edge = np.clip((b_r * t_value - c_r) / a_coeff, 0.0, 1.0)
                     candidates.append((s_edge, t_edge))
 
-                # Zero, not a tolerance. The claim above, that the edges hold
-                # the minimum when the stationary point is skipped, is only true
-                # when the two directions are exactly parallel: then the
-                # separation is constant along the valley and its smallest value
-                # is attained where the valley leaves the square. For a pair that
-                # is merely close to parallel the stationary point can lie
-                # strictly inside both segments, and then no edge contains it.
-                #
-                # Measured with an 8 * eps cutoff in place: a rocket sweep
-                # (-5, 0, 0) to (5, 0, 0) against a balloon sweep
-                # (-5, -5t, z) to (5, 5t, z) with t = sqrt(7 * eps) and z just
-                # inside 1.5 m has a relative determinant of 1.637e-15, under
-                # the cutoff, and its closest points are the two midpoints. The
-                # cutoff skipped them and returned 1.5000000000000127 m, a miss,
-                # where the truth is 1.4999999999999998 m, a pop.
-                #
-                # So the tolerance is gone from the correctness path rather than
-                # merely narrowed, which is what the previous attempt claimed
-                # and did not do.
+                # Zero, not a tolerance. Exactly parallel puts the minimum on an
+                # edge; merely near parallel does not. An 8 * eps cutoff skipped a
+                # pair at 1.637e-15: 1.5000000000000127 m against 1.4999999999999998 m.
                 solvable = denominator_regular > 0.0
                 s_interior, t_interior = (
                     candidates[0][0].copy(),
                     candidates[0][1].copy(),
                 )
                 if np.any(solvable):
-                    # Both numerators from the same identity as the
-                    # denominator, and for the same reason. Written
-                    # algebraically they are b*f - c*e and a*f - b*c, and for a
-                    # near-parallel pair those are two nearly equal products
-                    # subtracted, so most of their digits cancel. Fixing only
-                    # the denominator left the answer depending on which end the
-                    # caller called the start:
-                    #
-                    #     u = (20, 0, 0), v = 20*(cos t, sin t, 0),
-                    #     t = sqrt(10 * eps), closest points at s = 0.35,
-                    #     t = 0.70, separation one part in 1e14 inside 1.5 m
-                    #
-                    # returned 1.4999999999999900 as written, a pop, and
-                    # 1.5000000000000087 with the rocket sweep reversed, a miss.
-                    # The true separation is 45 ulp inside the radius, so that
-                    # was a real loss of digits rather than the last bit.
-                    #
-                    # (p x q) . (r x s) = (p.r)(q.s) - (p.s)(q.r), so these
-                    # equal the algebraic forms exactly in real arithmetic and
-                    # reach them without the subtraction.
+                    # (p x q) . (r x s) = (p.r)(q.s) - (p.s)(q.r), so these are
+                    # b*f - c*e and a*f - b*c without the cancelling subtraction,
+                    # which gave 1.4999999999999900 m and 1.5000000000000087 m reversed.
                     s_interior[solvable] = np.clip(
                         np.einsum(
                             "ij,ij->i",
@@ -611,6 +549,9 @@ class BalloonPoppingEnv(gym.Env):
                     )
                 candidates.append((s_interior, t_interior))
 
+                # Reversing either segment maps the candidate set onto itself, so
+                # the score cannot turn on which end was written first: the old
+                # s = 0 pin gave 1.50000003 m for a pair 1.49999999 m apart.
                 distances = np.stack([_squared(s, t) for s, t in candidates])
                 best = np.argmin(distances, axis=0)
                 s_param[regular] = np.stack([s for s, _ in candidates])[
