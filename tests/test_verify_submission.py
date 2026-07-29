@@ -476,6 +476,7 @@ class TestTheIntervalsThePopCheckLooksAt(unittest.TestCase):
         self.assertNotEqual(self._closest(rocket, status, balloons, eligible), [])
 
 
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
 class TestTheReleaseRuleItself(unittest.TestCase):
     """The rule, straight from the regenerated facts.
 
