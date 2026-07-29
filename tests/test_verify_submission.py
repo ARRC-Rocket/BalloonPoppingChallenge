@@ -556,10 +556,6 @@ class TestARealScenario0SubmissionPasses(unittest.TestCase):
         self.assertGreater(env._popped_count, 0, "this run should pop something")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
 class TestTheReleaseRuleReachesTheVerdict(unittest.TestCase):
     """The rule was correct and wired to nothing any test could see.
@@ -624,12 +620,135 @@ class TestTheReleaseRuleReachesTheVerdict(unittest.TestCase):
     def test_a_status_matrix_of_the_wrong_width_is_reported_not_raised(self):
         """The guard that keeps a bad file from ending the run.
 
-        Mask width is the scenario's, status width the submission's, so numpy
-        raises where ``main()`` catches nothing and one bad file kills the batch.
+        Named, not just "something failed": the shape check below and the
+        release rule can both refuse this, and which one did is the difference
+        between a report a competitor can act on and a misleading one.
         """
         for record in self.records:
             record["balloon_status"] = list(record["balloon_status"]) + [0]
 
-        findings = verify(self.submission, DEFAULT_TOLERANCE_METRES)
+        self.assertIn("balloon_status", self.failures())
 
-        self.assertTrue([f for f in findings if not f.ok], "a wrong shape passed")
+    def test_a_scenario_that_disagrees_with_its_own_balloon_count_is_reported(self):
+        """The other way the mask and the status can differ in width, and the
+        only one the shape check cannot see: it takes its count from the
+        scenario file, and this is the scenario file disagreeing with the
+        environment it configures. Unguarded, numpy raises out of ``verify``."""
+        import verify_submission
+
+        real = verify_submission._regenerate_balloon_flights
+
+        def one_balloon_short(parameters):
+            flights, release_at_step, initial_status = real(parameters)
+            return flights[:-1], release_at_step[:-1], initial_status[:-1]
+
+        with patch.object(
+            verify_submission, "_regenerate_balloon_flights", one_balloon_short
+        ):
+            failures = self.failures()
+
+        self.assertIn("balloon status shape", failures)
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestWhatABadShapeCostsBeforeItIsRefused(unittest.TestCase):
+    """Rebuilding the world runs the balloon Monte Carlo, a hundred flights for
+    scenario 1. A file that could be refused for nothing should not pay it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.clean = _build_submission(steps=40, balloons=2)
+
+    def setUp(self):
+        self.submission = copy.deepcopy(self.clean)
+        self.records = self.submission["balloon_world_data"]["trajectories"]
+        official = copy.deepcopy(
+            self.clean["balloon_world_data"]["scenario_parameters"]
+        )
+        patcher = patch(
+            "verify_submission._load_canonical_scenario",
+            lambda number: copy.deepcopy(official),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def refused_without_regenerating(self):
+        """Run ``verify`` with the Monte Carlo booby trapped, and return the
+        failures. Reaching it at all is the failure being tested for."""
+        with patch(
+            "verify_submission._regenerate_balloon_flights",
+            side_effect=AssertionError("regenerated before checking the shape"),
+        ):
+            findings = verify(self.submission, DEFAULT_TOLERANCE_METRES)
+        return [finding.name for finding in findings if not finding.ok]
+
+    def test_an_honest_submission_is_the_one_that_pays_for_it(self):
+        """The half that stops every test here passing over a checker that
+        refuses everything before it gets as far as the physics."""
+        with self.assertRaises(AssertionError):
+            self.refused_without_regenerating()
+
+    def test_a_ragged_status_row_is_refused_first(self):
+        """``np.asarray`` raises on this rather than giving an array, so
+        unchecked it comes out of ``verify`` as a traceback."""
+        self.records[3]["balloon_status"] = [0]
+
+        self.assertIn("balloon_status", self.refused_without_regenerating())
+
+    def test_a_states_array_of_the_wrong_width_is_refused_first(self):
+        for record in self.records:
+            record["balloon_states"] = [row[:5] for row in record["balloon_states"]]
+
+        self.assertIn("balloon_states", self.refused_without_regenerating())
+
+    def test_a_record_missing_a_field_is_refused_first(self):
+        del self.records[2]["rocket_states"]
+
+        self.assertIn("rocket_states", self.refused_without_regenerating())
+
+    def test_a_record_that_is_not_a_mapping_is_refused_first(self):
+        self.records[1] = [0.0, 1.0]
+
+        self.assertIn("record structure", self.refused_without_regenerating())
+
+    def test_the_wrong_number_of_balloons_is_refused_first(self):
+        """The count comes from the canonical scenario, so this needs no
+        Monte Carlo to answer either."""
+        for record in self.records:
+            record["balloon_status"] = list(record["balloon_status"]) + [0]
+
+        self.assertIn("balloon_status", self.refused_without_regenerating())
+
+
+class TestOneBadFileDoesNotStopTheBatch(unittest.TestCase):
+    """``main()`` caught a failed read and not a failed check, and checking is
+    the half that touches the arrays the submission controls."""
+
+    def test_a_verify_that_raises_costs_that_file_only(self):
+        import verify_submission
+
+        submissions = [{"leaderboard_info": {}}, {"leaderboard_info": {}}]
+        seen = []
+
+        def explode_once(submission, tolerance):
+            seen.append(submission)
+            if len(seen) == 1:
+                raise ValueError("ragged")
+            return [verify_submission.Finding("checked", True, "fine")]
+
+        with (
+            patch.object(
+                verify_submission,
+                "load_submission",
+                lambda path: submissions[len(seen)],
+            ),
+            patch.object(verify_submission, "verify", explode_once),
+        ):
+            status = verify_submission.main(["first.pkl", "second.pkl"])
+
+        self.assertEqual(len(seen), 2, "the second file was never checked")
+        self.assertEqual(status, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

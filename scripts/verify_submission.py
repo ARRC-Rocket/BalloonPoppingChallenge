@@ -40,6 +40,7 @@ import argparse
 import json
 import os
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 import numpy as np
@@ -239,6 +240,50 @@ def check_scenario_is_official(submission):
             )
         )
     return findings, canonical
+
+
+# What each per-step record must hold, and how wide. `None` is the balloon
+# count, which comes from the canonical scenario rather than from the file.
+_RECORD_WIDTHS = {
+    "balloon_states": (None, 6),
+    "balloon_status": (None,),
+    "rocket_states": (13,),
+}
+
+
+def check_the_records_are_the_right_shape(submission, canonical):
+    """Cheap shape checks, before the scenario is rebuilt.
+
+    Rebuilding runs the balloon Monte Carlo, a hundred flights for scenario 1.
+    Paying for that and then rejecting the file on a shape it could have been
+    rejected on for nothing is the wrong order for untrusted input, and a ragged
+    record raises out of the checks below rather than being reported by them.
+    """
+    records = submission["balloon_world_data"]["trajectories"]
+    if not all(isinstance(record, Mapping) for record in records):
+        return [Finding("record structure", False, "a step record is not a mapping")]
+
+    balloons = canonical["balloon"]["num"]
+    findings = []
+    for field, width in _RECORD_WIDTHS.items():
+        expected = (len(records),) + tuple(balloons if w is None else w for w in width)
+        missing = [i for i, record in enumerate(records) if field not in record]
+        if missing:
+            findings.append(
+                Finding(field, False, f"{len(missing)} step records have no {field!r}")
+            )
+            continue
+        try:
+            # Ragged rows raise here rather than giving an object array, which
+            # is the report this exists to make instead of a traceback.
+            got = np.asarray([record[field] for record in records], dtype=float).shape
+        except (TypeError, ValueError) as error:
+            findings.append(Finding(field, False, f"not a rectangular array: {error}"))
+            continue
+        findings.append(
+            Finding(field, got == expected, f"expected {expected}, got {got}")
+        )
+    return findings
 
 
 def _regenerate_balloon_flights(scenario_parameters):
@@ -557,7 +602,10 @@ def check_internal_consistency(submission, eligibility=None):
     # holds step k+1, the same offset the trajectory comparison uses.
     # Against what the scenario allows, not the schedule; see _release_eligibility.
     popped_rows = status == 2
-    if eligibility is None or eligibility.shape != status.shape:
+    # Two different failures. Having no scenario to compare against is not the
+    # same as having one and a status matrix that does not line up with it, and
+    # reporting the second as the first sends the reader looking for a scenario.
+    if eligibility is None:
         # Not evaluated rather than passed. Reporting "every pop is on or after
         # release" when nothing was compared puts an affirmative line under a
         # report that has already failed for want of a scenario.
@@ -566,6 +614,15 @@ def check_internal_consistency(submission, eligibility=None):
                 "no balloon is popped before release",
                 False,
                 "not evaluated: no release schedule to compare against",
+            )
+        )
+        return findings
+    if eligibility.shape != status.shape:
+        findings.append(
+            Finding(
+                "balloon status shape",
+                False,
+                f"expected {eligibility.shape}, the submission has {status.shape}",
             )
         )
         return findings
@@ -602,6 +659,14 @@ def verify(submission, tolerance):
         # Nothing to measure eligibility against, so run only what needs no
         # scenario at all.
         return findings + check_internal_consistency(submission)
+
+    # Before the rebuild below, which is the expensive half. A file whose
+    # records are the wrong shape is rejected for nothing rather than after a
+    # hundred flights, and a ragged one is reported rather than raising.
+    shapes = check_the_records_are_the_right_shape(submission, canonical)
+    findings += shapes
+    if not all(finding.ok for finding in shapes):
+        return findings
 
     # Once. Rebuilding it runs the balloon Monte Carlo, which for scenario 1 is
     # a hundred flights, and it was being paid for twice per submission.
@@ -664,7 +729,15 @@ def main(argv=None):
             f"scenario {info.get('scenario_number')}, claimed score "
             f"{info.get('final_reward')}"
         )
-        findings = verify(submission, args.tolerance)
+        try:
+            findings = verify(submission, args.tolerance)
+        except Exception as exc:  # noqa: BLE001 - report and move to the next file
+            # One unreadable file in a directory should cost that file, not the
+            # rest of the batch. Reading is already isolated this way; checking
+            # was not, and it is the half that touches the untrusted arrays.
+            print(f"  [FAIL] could not check it: {exc!r}")
+            failed = True
+            continue
         for finding in findings:
             print(f"  {finding}")
         if any(not finding.ok for finding in findings):
