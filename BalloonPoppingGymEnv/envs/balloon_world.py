@@ -3,6 +3,7 @@ import logging
 import os
 import shutil
 import tempfile
+from collections import Counter
 
 import gymnasium as gym
 import matplotlib.pyplot as plt
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 # `launch_inclination_heading` by position, so a wrong count is not usable
 # either, and an empty array passes a finiteness test on its own.
 ACTION_FIELD_SIZES = {
+    "launch": 1,
     "launch_inclination_heading": 2,
     "tvc": 2,
     "roll": 1,
@@ -41,29 +43,18 @@ ACTION_FIELD_SIZES = {
 }
 
 
-# Which repetition of an unusable action gets a log line. A broken policy stays
+# Which repetition of an unusable field gets a log line. A broken policy stays
 # broken, and one line per step for the rest of the horizon is its own problem.
 _UNUSABLE_ACTION_LOG_STEPS = frozenset({1, 10, 100, 1000})
 
 
-def _is_launch_command(action):
-    """Whether `action["launch"]` asks for a launch, without guessing.
+def _wants_launch(commands):
+    """Whether a readable `launch` asks for one.
 
-    `bool(np.nan)` is True and a two element array raises, so the truthiness of
-    whatever arrives is not a safe question to ask directly.
+    Any nonzero number launches, the way Python reads any other number. NaN is
+    not readable, so it never reaches here and never launches.
     """
-    try:
-        values = np.asarray(action["launch"]).reshape(-1)
-    except (KeyError, TypeError, ValueError):
-        return False
-    if values.size != 1:
-        return False
-    try:
-        value = float(values[0])
-    except (TypeError, ValueError, OverflowError):
-        return False
-    # Finite first: `nan != 0` is True, so a NaN would otherwise launch.
-    return bool(np.isfinite(value)) and value != 0.0
+    return "launch" in commands and float(commands["launch"][0]) != 0.0
 
 
 def check_action(action):
@@ -81,7 +72,7 @@ def check_action(action):
 
 
 def _usable_action_fields(action):
-    """The fields as arrays of the right size, and the names of the rest.
+    """The fields as flat arrays of the right size, and the names of the rest.
 
     Validating a converted copy and then handing the original to the actuators
     would check something other than what is used: a scalar `tvc` converts to a
@@ -91,12 +82,23 @@ def _usable_action_fields(action):
     usable = {}
     unusable = set()
     for field, size in ACTION_FIELD_SIZES.items():
-        if field not in action:
-            unusable.add(field)
-            continue
         try:
-            values = np.atleast_1d(np.asarray(action[field], dtype=float))
-        except (TypeError, ValueError, OverflowError):
+            given = np.asarray(action[field])
+            # Before the cast, which discards the imaginary part with a warning
+            # rather than refusing it: 1+9j would gimbal to 1. Object dtype as
+            # well, because it hides what it holds: an object array of
+            # np.complex128 passes `iscomplexobj` and casts to 1 all the same.
+            if np.iscomplexobj(given) or given.dtype == object:
+                raise TypeError("this is not a command the environment can read")
+            # Flat, because the size alone let a (1, 2) through to raise at
+            # `float(tvc[0])` and a (1, 2) attitude to raise at `attitude[1]`.
+            values = np.asarray(given, dtype=float).reshape(-1)
+        except Exception:  # noqa: BLE001 - see below
+            # Anything unreadable is a field the environment cannot use, which
+            # is this function's whole answer. Narrower than this and the list
+            # has to be guessed: a torch tensor that still carries its graph
+            # raises RuntimeError here, and an action that is not a mapping at
+            # all raises TypeError on the lookup.
             unusable.add(field)
             continue
         if values.size != size or not np.all(np.isfinite(values)):
@@ -223,8 +225,9 @@ class BalloonPoppingEnv(gym.Env):
         self._balloon_states = np.array(np.zeros((self.balloon_parameters["num"], 6)))
         # (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ)
         self._rocket_sensors = np.full(12, np.nan)
-        # Steps whose action the environment could not use, for rate limiting.
-        self._unusable_action_steps = 0
+        # Unusable steps per field, for rate limiting. Per field, because one
+        # counter let a field that broke second go unnamed for the whole run.
+        self._unusable_action_counts = Counter()
         # (posX, posY, posZ, velX, velY, velZ, e0, e1, e2, e3, w1, w2, w3)
         self._rocket_states = np.full(13, np.nan)
         # Where the next pop sweep starts. Tracked separately from
@@ -371,8 +374,9 @@ class BalloonPoppingEnv(gym.Env):
 
         self._balloon_states = self._balloon_flights[:, :, 0]
         self._rocket_sensors = np.full(12, np.nan)
-        # Steps whose action the environment could not use, for rate limiting.
-        self._unusable_action_steps = 0
+        # Unusable steps per field, for rate limiting. Per field, because one
+        # counter let a field that broke second go unnamed for the whole run.
+        self._unusable_action_counts = Counter()
         self._rocket_states = np.full(13, np.nan)
         self._sweep_origin = None
         self.trajectories = None
@@ -408,24 +412,25 @@ class BalloonPoppingEnv(gym.Env):
         # is while training one. A step it cannot command is not a run it should
         # lose, so the command is dropped and the episode carries on.
         commands, unusable = _usable_action_fields(action)
-        if unusable:
-            # Rate limited, since a policy that breaks stays broken and one line
-            # per step for the rest of the horizon is its own denial of service.
-            self._unusable_action_steps += 1
-            if self._unusable_action_steps in _UNUSABLE_ACTION_LOG_STEPS:
+        for field in sorted(unusable):
+            # Rate limited per field, since a policy that breaks stays broken and
+            # one line per step for the rest of the horizon is its own denial of
+            # service. Per field, so the second one to break is still named.
+            self._unusable_action_counts[field] += 1
+            if self._unusable_action_counts[field] in _UNUSABLE_ACTION_LOG_STEPS:
                 logger.warning(
                     "Step %d: ignoring %s, which the environment cannot use "
-                    "(%d such steps so far)",
+                    "(%d such steps for that field)",
                     self.current_step,
-                    ", ".join(sorted(unusable)),
-                    self._unusable_action_steps,
+                    field,
+                    self._unusable_action_counts[field],
                 )
 
         if not self.rocket_launched:
             _rocket_finished = False
             # Refused rather than dropped, because there is no previous attitude
             # to fall back on. The agent can launch on any later step.
-            if _is_launch_command(action) and "launch_inclination_heading" in commands:
+            if _wants_launch(commands) and "launch_inclination_heading" in commands:
                 attitude = commands["launch_inclination_heading"]
                 self.__get_init_rocket_states(attitude[0], attitude[1])
                 self.initial_solution[0] = (
