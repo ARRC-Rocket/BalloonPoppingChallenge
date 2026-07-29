@@ -4,11 +4,24 @@ That array was 71% of a scenario-1 submission and nothing read it. Dropping it
 rests on one claim, so this pins the claim rather than only the removal: the
 balloon data the array holds is already in ``trajectories``, one step across.
 
+What a submission contains is asked of ``build_submission_payload`` directly.
+The version this replaced captured it by mocking ``pickle.dump``, which tied the
+contents to the encoding and would have broken on #58 replacing the encoder with
+JSON. It also mocked ``utils.open``, which is not the write path:
+``pack_for_submission`` goes through ``_write_atomically`` to ``mkstemp``,
+``fsync`` and ``os.replace``, so with ``dump`` doing nothing the write still ran
+and renamed an empty file into place. Every call left a finished-looking zero
+byte submission in the package directory, 130 across the worktrees on one
+machine. That the writer is reached at all is now its own test, with the writer
+mocked at its own boundary.
+
 Only ``rocketpy`` is guarded: a missing simulation stack is a legitimate skip,
 but a broken import inside this package is a failure and must stay loud.
 """
 
+import copy
 import unittest
+from datetime import datetime, timezone
 from importlib.util import find_spec
 from unittest import mock
 
@@ -22,6 +35,26 @@ if _STACK_AVAILABLE:
     from BalloonPoppingGymEnv.evaluation.results import utils
 
 SCENARIO_NUMBER = 0
+STEPS_TO_CHECK = 5
+
+# What the world section holds, exactly. An extra key is as much a change to the
+# format as a missing one, and #57 was about not shipping the array rather than
+# about not shipping that spelling of its name.
+EXPECTED_WORLD_KEYS = frozenset(
+    {
+        "scenario_parameters",
+        "trajectories",
+        "balloon_release_at_step",
+        "rocket_flight",
+    }
+)
+
+EVAL_CFG = {
+    "team_name": "unittest_team",
+    "team_secret": "secret",
+    "agent_name": "agent",
+    "scenario_number": SCENARIO_NUMBER,
+}
 
 
 class _FakeEnv:
@@ -36,53 +69,57 @@ class _FakeEnv:
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
 class TestBalloonFlightsIsNotShipped(unittest.TestCase):
-    def _payload(self):
-        captured = {}
-        eval_cfg = {
-            "team_name": "unittest_team",
-            "team_secret": "secret",
-            "agent_module_path": __file__,
-            "agent_name": "agent",
-            "scenario_number": SCENARIO_NUMBER,
-        }
-
-        with (
-            mock.patch.object(
-                utils.urllib.request, "urlopen", side_effect=OSError("offline")
-            ),
-            mock.patch.object(
-                utils.pickle, "dump", lambda payload, _file: captured.update(payload)
-            ),
-            mock.patch.object(
-                utils, "open", mock.mock_open(read_data=b""), create=True
-            ),
-        ):
-            utils.pack_for_submission(eval_cfg, _FakeEnv(), {"scenario": {}})
-
-        return captured
+    @classmethod
+    def setUpClass(cls):
+        cls.payload = utils.build_submission_payload(
+            dict(EVAL_CFG, agent_module_path=__file__),
+            _FakeEnv(),
+            {"scenario": {}},
+            datetime(2026, 7, 30, tzinfo=timezone.utc),
+        )
 
     def test_the_array_is_absent(self):
-        world = self._payload()["balloon_world_data"]
+        self.assertNotIn("balloon_flights", self.payload["balloon_world_data"])
 
-        self.assertNotIn("balloon_flights", world)
+    def test_the_world_section_holds_exactly_the_remaining_fields(self):
+        """An exact set, not four membership checks.
 
-    def test_the_other_balloon_world_fields_are_unchanged(self):
-        """Scoped to "this change removed one key", not to a consumer contract.
-
-        Of these four, ``trajectories`` is the one the leaderboard actually
-        reads. Naming the test after the consumer would have frozen the other
-        three as requirements and made the next payload trim argue with it.
+        Membership alone accepted a renamed copy of the same array, which is the
+        thing #57 was about, and accepted any of the four being replaced by
+        ``None``.
         """
-        world = self._payload()["balloon_world_data"]
+        self.assertEqual(set(self.payload["balloon_world_data"]), EXPECTED_WORLD_KEYS)
 
-        for key in [
-            "scenario_parameters",
-            "trajectories",
-            "balloon_release_at_step",
-            "rocket_flight",
-        ]:
-            with self.subTest(key=key):
-                self.assertIn(key, world)
+    def test_the_field_the_leaderboard_reads_is_the_real_one(self):
+        """Of the four, ``trajectories`` is what is actually consumed."""
+        self.assertIs(
+            self.payload["balloon_world_data"]["trajectories"], _FakeEnv.trajectories
+        )
+
+    def test_the_agent_source_is_text(self):
+        """Production reads the file as ``str``. The mock this replaced supplied
+        bytes, which pickle accepts and JSON does not, so #58 would have failed
+        on the fixture rather than on anything real."""
+        self.assertIsInstance(self.payload["agent_info"]["agent_module_file"], str)
+
+    def test_packing_writes_through_the_atomic_writer_and_nowhere_else(self):
+        """The failure that prompted the rewrite, kept as a test.
+
+        Asserted on the writer rather than on the directory, because results/ is
+        in .gitignore: the leftover files never appeared in ``git status``, so a
+        clean-worktree check in CI would not have caught this either.
+        """
+        with (
+            mock.patch.object(utils, "_write_atomically") as writer,
+            mock.patch.object(utils, "_check_evaluate_integrity"),
+        ):
+            utils.pack_for_submission(
+                dict(EVAL_CFG, agent_module_path=__file__),
+                _FakeEnv(),
+                {"scenario": {}},
+            )
+
+        self.assertEqual(writer.call_count, 1)
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
@@ -94,41 +131,52 @@ class TestTrajectoriesStillCarryTheBalloonData(unittest.TestCase):
     fails and says that dropping the array is no longer free.
 
     Scenario 0's balloons are static, so its real flight array is identical at
-    every timestep and would hide any offset at all. A ramp is written over it
-    first so each timestep is distinguishable, which is what gives this teeth.
+    every timestep and would hide any offset. A pattern is written over it that
+    is distinct along all three axes, so a swapped balloon, a swapped state
+    component and a shifted timestep each fail separately. The ramp this
+    replaced varied with time alone and passed with the balloon order reversed.
     """
 
     def test_each_record_matches_the_flight_array_one_step_across(self):
         scenario_params, _ = load_scenario_parameters(SCENARIO_NUMBER)
-        env = BalloonPoppingEnv(render_mode=None, parameters=scenario_params)
+        env = BalloonPoppingEnv(
+            render_mode=None, parameters=copy.deepcopy(scenario_params)
+        )
+        self.addCleanup(env.close)
         env.reset(seed=scenario_params["scenario"]["random_seed"])
 
-        flights = np.zeros_like(np.asarray(env._balloon_flights, dtype=float))
-        flights += np.arange(flights.shape[2], dtype=float)
+        shape = np.asarray(env._balloon_flights).shape
+        self.assertGreaterEqual(
+            shape[2],
+            STEPS_TO_CHECK + 1,
+            "the scenario is too short for the offset this checks",
+        )
+        balloon, component, timestep = np.indices(shape, dtype=float)
+        flights = balloon * 1e6 + component * 1e4 + timestep
+
+        # The fixture's own teeth, on the array the assertion below uses rather
+        # than on a separate toy one. Dropping the pattern used to leave a guard
+        # test green while every offset passed.
+        self.assertFalse(np.array_equal(flights[:, :, 1], flights[:, :, 2]))
+        self.assertFalse(np.array_equal(flights[0], flights[-1]))
+        self.assertFalse(np.array_equal(flights[:, 0, :], flights[:, 1, :]))
+
         env._balloon_flights = flights
 
         action = env.action_space.sample()
-        action["launch"] = np.array(0, dtype=action["launch"].dtype)
-        for key in ("tvc", "throttle", "roll"):
+        for key in action:
             action[key] = np.zeros_like(action[key])
 
-        for _ in range(5):
+        for _ in range(STEPS_TO_CHECK):
             env.step(action)
 
-        self.assertEqual(len(env.trajectories), 5)
+        self.assertEqual(len(env.trajectories), STEPS_TO_CHECK)
         for step_index, record in enumerate(env.trajectories):
             with self.subTest(step=step_index):
                 np.testing.assert_array_equal(
                     np.asarray(record["balloon_states"], dtype=float),
                     flights[:, :, step_index + 1],
                 )
-
-    def test_the_ramp_would_expose_a_wrong_offset(self):
-        # Guards the guard: if the ramp were flat the assertion above would hold
-        # for any offset, which is exactly how scenario 0's real array behaves.
-        flights = np.zeros((2, 6, 4)) + np.arange(4, dtype=float)
-
-        self.assertFalse(np.array_equal(flights[:, :, 1], flights[:, :, 2]))
 
 
 if __name__ == "__main__":
