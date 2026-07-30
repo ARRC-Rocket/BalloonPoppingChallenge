@@ -87,6 +87,7 @@ def _build_submission(steps=40, balloons=1):
             "agent_name": "a",
             "scenario_number": 1,
             "final_reward": int(env._popped_count),
+            "random_seed": env.np_random_seed,
         },
         "balloon_world_data": {
             "scenario_parameters": parameters,
@@ -209,11 +210,15 @@ class TestTheSubmissionChecker(unittest.TestCase):
         matters survives the change: a submission still has to hold the balloons
         the seed it names produces.
         """
+        # Both places, so this is a submission claiming a world rather than one
+        # whose two copies of the seed disagree. That is its own finding.
+        self.submission["leaderboard_info"]["random_seed"] = 99
         parameters = self.submission["balloon_world_data"]["scenario_parameters"]
         parameters["scenario"]["random_seed"] = 99
 
         failures = self.failures()
         self.assertNotIn("scenario parameters are the shipped ones", failures)
+        self.assertNotIn("the seed the run used", failures)
         self.assertIn("balloon trajectories", failures)
 
     def test_the_canonical_world_is_rebuilt_once(self):
