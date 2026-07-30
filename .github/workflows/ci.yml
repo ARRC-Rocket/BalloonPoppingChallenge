@@ -38,10 +38,10 @@ jobs:
         run: python -m pip install "ruff==0.15.20" "PyYAML>=6"
 
       - name: Lint
-        run: ruff check BalloonPoppingGymEnv/ tests/ doc/examples/
+        run: ruff check BalloonPoppingGymEnv/ tests/ doc/examples/ scripts/
 
       - name: Format check
-        run: ruff format --check BalloonPoppingGymEnv/ tests/ doc/examples/
+        run: ruff format --check BalloonPoppingGymEnv/ tests/ doc/examples/ scripts/
 
       # Here as well as in the suite, because the suite is the thing it checks:
       # delete the `test` job and the only run left to notice is the one that

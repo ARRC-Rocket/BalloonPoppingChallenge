@@ -82,6 +82,9 @@ def _build_submission(steps=40, balloons=1):
         env.step(action)
 
     return {
+        # What `build_submission_payload` writes, so the fixture is the shape the
+        # checker is pointed at rather than a subset of it.
+        "format_version": 1,
         "leaderboard_info": {
             "team_name": "example",
             "agent_name": "a",
