@@ -186,20 +186,42 @@ def _without_the_seed(parameters):
     return stripped
 
 
-def _seed_the_run_used(submitted):
+def _seed_the_run_used(submission):
     """The seed the balloon field will be rebuilt from, and whether it is one.
 
-    `null` is what a run that drew its own seed recorded before the packer
-    started writing `env.np_random_seed`, and it names no world at all.
+    Taken from `leaderboard_info`, because that is where the packer records the
+    seed the run drew rather than the one it was configured with, and the two
+    differ for every `random_seed: null` run.
+
     `SeedSequence` refuses a negative, and `True` is an `int` by inheritance.
     """
-    scenario = submitted.get("scenario")
-    seed = scenario.get("random_seed") if isinstance(scenario, dict) else None
+    info = submission.get("leaderboard_info")
+    seed = info.get("random_seed") if isinstance(info, Mapping) else None
     if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
         return None, Finding(
             "the seed the run used",
             False,
-            f"random_seed is {seed!r}, so the balloon field cannot be rebuilt",
+            f"leaderboard_info.random_seed is {seed!r}, so the balloon field "
+            "cannot be rebuilt",
+        )
+
+    # The parameters carry the seed that was asked for, which is `null` for a
+    # random run and otherwise has to be the one that was used. Left unchecked
+    # it is a field a submission could say anything in.
+    world = submission.get("balloon_world_data") or {}
+    scenario = (world.get("scenario_parameters") or {}).get("scenario")
+    configured = scenario.get("random_seed") if isinstance(scenario, Mapping) else None
+    if (
+        configured is not None
+        and not isinstance(configured, bool)
+        and isinstance(configured, int)
+        and configured != seed
+    ):
+        return None, Finding(
+            "the seed the run used",
+            False,
+            f"leaderboard_info says {seed} and the scenario parameters say "
+            f"{configured}",
         )
     return seed, Finding("the seed the run used", True, f"random_seed {seed}")
 
@@ -254,7 +276,7 @@ def check_scenario_is_official(submission):
     # The seed is the one parameter the run is allowed to choose, so it is
     # judged as a value the environment can be reset with rather than against
     # the shipped default. Everything else still has to be the file as it ships.
-    seed, seed_finding = _seed_the_run_used(submitted)
+    seed, seed_finding = _seed_the_run_used(submission)
     findings.append(seed_finding)
 
     differences = _parameter_differences(

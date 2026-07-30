@@ -1,4 +1,3 @@
-import copy
 import hashlib
 import http.client
 import json
@@ -355,19 +354,6 @@ def _write_atomically(out_path, write_payload, mode="wb", encoding=None):
         raise
 
 
-def _parameters_with_the_seed_used(scenario_parameters, env):
-    """The scenario as it was run, with the seed the run actually drew.
-
-    A copy, because the caller's dict is theirs and the verifier compares a
-    fresh load of the shipped file against what a finished run carries.
-    """
-    parameters = copy.deepcopy(scenario_parameters)
-    scenario = parameters.get("scenario")
-    if isinstance(scenario, dict):
-        scenario["random_seed"] = env.np_random_seed
-    return parameters
-
-
 def build_submission_payload(eval_cfg, env, scenario_parameters, packed_at):
     """What goes into a submission, without deciding how it is written.
 
@@ -389,21 +375,19 @@ def build_submission_payload(eval_cfg, env, scenario_parameters, packed_at):
             "name": team_name,
             "secret": eval_cfg["team_secret"],
         },
-        # `random_seed: null` is what the scenario file offers for a random run,
-        # and it draws a seed the configured value cannot describe. The verifier
-        # rebuilds the balloon field from a seed, so the one actually used is
-        # what has to travel, not the one that was asked for.
         "leaderboard_info": {
             "team_name": team_name,
             "timestamp_utc": timestamp,
             "agent_name": eval_cfg["agent_name"],
             "scenario_number": eval_cfg["scenario_number"],
             "final_reward": env._popped_count,
+            # The seed the run drew, not the one it was configured with.
+            # `random_seed: null` is what the scenario file offers for a random
+            # run, and the verifier rebuilds the balloon field from a seed.
+            "random_seed": env.np_random_seed,
         },
         "balloon_world_data": {
-            "scenario_parameters": _parameters_with_the_seed_used(
-                scenario_parameters, env
-            ),
+            "scenario_parameters": scenario_parameters,
             "trajectories": env.trajectories,
             "balloon_release_at_step": env._balloon_release_at_step,
             # Round tripped rather than left as text: the encoder can turn the
