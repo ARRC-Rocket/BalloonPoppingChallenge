@@ -201,18 +201,14 @@ def _seed_the_run_used(submission):
             "cannot be rebuilt",
         )
 
-    # The parameters carry the seed that was asked for, which is `null` for a
-    # random run and otherwise has to be the one that was used. Left unchecked
-    # it is a field a submission could say anything in.
+    # The parameters carry the seed that was asked for: `null` for a random run,
+    # and otherwise the one that was used. Compared by value rather than by
+    # type, because `"5"` and `[1, 2]` slipped past an `isinstance(int)` test
+    # into a field nothing else looks at.
     world = submission.get("balloon_world_data") or {}
     scenario = (world.get("scenario_parameters") or {}).get("scenario")
     configured = scenario.get("random_seed") if isinstance(scenario, Mapping) else None
-    if (
-        configured is not None
-        and not isinstance(configured, bool)
-        and isinstance(configured, int)
-        and configured != seed
-    ):
+    if configured is not None and configured != seed:
         return None, Finding(
             "the seed the run used",
             False,
