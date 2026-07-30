@@ -36,6 +36,7 @@ one integration and have to agree, so a metre moved in one 0.01 s step is
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import sys
@@ -173,6 +174,32 @@ def _parameter_differences(submitted, canonical, path=""):
     return []
 
 
+def _without_the_seed(parameters):
+    """A copy with `scenario.random_seed` removed, for the strict comparison."""
+    stripped = copy.deepcopy(parameters)
+    if isinstance(stripped.get("scenario"), dict):
+        stripped["scenario"].pop("random_seed", None)
+    return stripped
+
+
+def _seed_the_run_used(submitted):
+    """The seed the balloon field will be rebuilt from, and whether it is one.
+
+    `null` is what a run that drew its own seed recorded before the packer
+    started writing `env.np_random_seed`, and it names no world at all.
+    `SeedSequence` refuses a negative, and `True` is an `int` by inheritance.
+    """
+    scenario = submitted.get("scenario")
+    seed = scenario.get("random_seed") if isinstance(scenario, dict) else None
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        return None, Finding(
+            "the seed the run used",
+            False,
+            f"random_seed is {seed!r}, so the balloon field cannot be rebuilt",
+        )
+    return seed, Finding("the seed the run used", True, f"random_seed {seed}")
+
+
 def check_scenario_is_official(submission):
     """Establish the oracle before anything is compared against it.
 
@@ -220,7 +247,15 @@ def check_scenario_is_official(submission):
         )
         return findings, None
 
-    differences = _parameter_differences(submitted, canonical)
+    # The seed is the one parameter the run is allowed to choose, so it is
+    # judged as a value the environment can be reset with rather than against
+    # the shipped default. Everything else still has to be the file as it ships.
+    seed, seed_finding = _seed_the_run_used(submitted)
+    findings.append(seed_finding)
+
+    differences = _parameter_differences(
+        _without_the_seed(submitted), _without_the_seed(canonical)
+    )
     findings.append(
         Finding(
             "scenario parameters are the shipped ones",
@@ -238,7 +273,13 @@ def check_scenario_is_official(submission):
                 f"submission has {got!r}, the scenario has {want!r}",
             )
         )
-    return findings, canonical
+    if not seed_finding.ok:
+        # Nothing below can run: every physical check rebuilds the balloon field
+        # from this seed, and there is no seed to rebuild it from.
+        return findings, None
+    oracle = copy.deepcopy(canonical)
+    oracle["scenario"]["random_seed"] = seed
+    return findings, oracle
 
 
 # What each per-step record must hold, and how wide. `None` is the balloon

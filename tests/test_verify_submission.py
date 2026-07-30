@@ -198,27 +198,23 @@ class TestTheSubmissionChecker(unittest.TestCase):
         self.assertNotIn("balloon trajectories", failures)
         self.assertIn("claimed pops are reachable", failures)
 
-    def test_a_changed_seed_is_caught(self):
-        """Caught by the parameter comparison now, which is the tighter answer.
+    def test_a_seed_the_run_did_not_use_is_caught(self):
+        """The seed is an input to the oracle now, so editing it in the file and
+        leaving the balloons alone regenerates a different world and compares the
+        recorded data against that.
 
-        It used to be caught indirectly: regenerating with the edited seed
-        produced balloons that did not match the recorded ones. That only worked
-        because the recording was made with the real seed. A run genuinely
-        carried out under a different seed agreed with itself and passed, which
-        is the hole the shipped scenario closes.
+        It used to be caught by the parameter comparison, which refused any seed
+        but the shipped one. That also refused every honest run on any other
+        seed, which is what an arbitrary-seed round is made of. The property that
+        matters survives the change: a submission still has to hold the balloons
+        the seed it names produces.
         """
         parameters = self.submission["balloon_world_data"]["scenario_parameters"]
         parameters["scenario"]["random_seed"] = 99
 
         failures = self.failures()
-        self.assertIn("scenario parameters are the shipped ones", failures)
-        self.assertIn("parameter scenario.random_seed", failures)
-        # And the balloons still compare clean, which is what says the
-        # regeneration used the shipped scenario rather than this edited copy.
-        # Regenerating from the submission would use seed 99, produce different
-        # balloons from the recorded ones, and fail here too. Without this line
-        # the two sources are indistinguishable to the suite.
-        self.assertNotIn("balloon trajectories", failures)
+        self.assertNotIn("scenario parameters are the shipped ones", failures)
+        self.assertIn("balloon trajectories", failures)
 
     def test_the_canonical_world_is_rebuilt_once(self):
         """Rebuilding it runs the balloon Monte Carlo.

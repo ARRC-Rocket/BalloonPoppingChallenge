@@ -37,6 +37,7 @@ class _FakeEnv:
     """
 
     _popped_count = 7
+    np_random_seed = 0
     trajectories = [{"time": 0.0}]
     _balloon_release_at_step = [0]
     _rocket_flight = None

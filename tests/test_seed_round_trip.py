@@ -1,0 +1,173 @@
+"""A run that drew its own seed has to be reproducible from what it ships.
+
+`random_seed: null` is what the scenario file offers for a random run. The
+environment then draws a seed, and the submission used to record the `null` that
+was asked for rather than the number that was used. `verify_submission.py`
+rebuilds the balloon field by resetting the environment with the seed it finds,
+so that lost the only thing it needed.
+
+Scenario 0 because it skips the Monte Carlo, so the whole file runs in seconds.
+The seed and the release schedule are drawn the same way in both scenarios.
+
+Only ``rocketpy`` is guarded: a missing simulation stack is a legitimate skip,
+but a broken import inside this package is a failure and must stay loud.
+"""
+
+import copy
+import sys
+import unittest
+from importlib.util import find_spec
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+_STACK_AVAILABLE = find_spec("rocketpy") is not None
+
+if _STACK_AVAILABLE:
+    import verify_submission as verifier
+    from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
+    from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
+    from BalloonPoppingGymEnv.evaluation.results.utils import (
+        _parameters_with_the_seed_used,
+    )
+
+SCENARIO_NUMBER = 0
+
+
+def _parameters(random_seed):
+    loaded = load_scenario_parameters(SCENARIO_NUMBER)
+    parameters = copy.deepcopy(loaded[0] if isinstance(loaded, tuple) else loaded)
+    parameters["scenario"]["random_seed"] = random_seed
+    return parameters
+
+
+def _run(random_seed):
+    """A reset environment and the parameters a submission would carry for it."""
+    parameters = _parameters(random_seed)
+    env = BalloonPoppingEnv(render_mode=None, parameters=parameters)
+    env.reset(seed=parameters["scenario"]["random_seed"])
+    return env, _parameters_with_the_seed_used(parameters, env)
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestThePackerRecordsWhatWasUsed(unittest.TestCase):
+    def test_a_null_seed_is_recorded_as_the_number_that_was_drawn(self):
+        env, recorded = _run(None)
+        self.addCleanup(env.close)
+
+        seed = recorded["scenario"]["random_seed"]
+
+        self.assertIsInstance(seed, int)
+        self.assertEqual(seed, env.np_random_seed)
+
+    def test_an_explicit_seed_is_recorded_unchanged(self):
+        """The control. Writing a fresh seed over every run would pass the test
+        above and break every submission that asked for a specific world."""
+        env, recorded = _run(7)
+        self.addCleanup(env.close)
+
+        self.assertEqual(recorded["scenario"]["random_seed"], 7)
+
+    def test_the_caller_s_parameters_are_left_alone(self):
+        parameters = _parameters(None)
+        env = BalloonPoppingEnv(render_mode=None, parameters=parameters)
+        self.addCleanup(env.close)
+        env.reset(seed=None)
+
+        _parameters_with_the_seed_used(parameters, env)
+
+        self.assertIsNone(parameters["scenario"]["random_seed"])
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestTheVerifierCanRebuildIt(unittest.TestCase):
+    def _submission(self, recorded):
+        return {
+            "leaderboard_info": {"scenario_number": SCENARIO_NUMBER},
+            "balloon_world_data": {"scenario_parameters": recorded},
+        }
+
+    def test_a_recorded_seed_rebuilds_the_same_release_schedule(self):
+        """The whole point: the verifier's own regeneration has to land on the
+        world the run recorded, not on the one the shipped file describes."""
+        env, recorded = _run(None)
+        self.addCleanup(env.close)
+        submitted_schedule = list(env._balloon_release_at_step)
+
+        findings, oracle = verifier.check_scenario_is_official(
+            self._submission(recorded)
+        )
+
+        self.assertTrue(
+            all(finding.ok for finding in findings), [str(f) for f in findings]
+        )
+        _flights, schedule, _status = verifier._regenerate_balloon_flights(oracle)
+        self.assertEqual(list(schedule), submitted_schedule)
+
+    def test_a_seed_that_is_not_the_shipped_one_is_still_official(self):
+        """What an arbitrary-seed round needs. Only the seed may differ."""
+        recorded = _parameters(20260801)
+
+        findings, oracle = verifier.check_scenario_is_official(
+            self._submission(recorded)
+        )
+
+        self.assertTrue(
+            all(finding.ok for finding in findings), [str(f) for f in findings]
+        )
+        self.assertEqual(oracle["scenario"]["random_seed"], 20260801)
+
+    def test_any_other_parameter_still_has_to_be_the_shipped_one(self):
+        """The control for the exemption. Loosening the seed must not loosen
+        the comparison it was carved out of."""
+        recorded = _parameters(0)
+        recorded["balloon"]["radius"] = 99.0
+
+        findings, oracle = verifier.check_scenario_is_official(
+            self._submission(recorded)
+        )
+
+        self.assertFalse(all(finding.ok for finding in findings))
+        self.assertTrue(any("radius" in finding.name for finding in findings))
+
+    def test_a_null_seed_is_refused_with_a_reason(self):
+        """A submission from a build that did not record it. Nothing physical
+        can run, so it says so instead of rebuilding the wrong world."""
+        recorded = _parameters(None)
+
+        findings, oracle = verifier.check_scenario_is_official(
+            self._submission(recorded)
+        )
+
+        self.assertIsNone(oracle)
+        self.assertTrue(
+            any(not f.ok and "cannot be rebuilt" in f.detail for f in findings),
+            [str(f) for f in findings],
+        )
+
+    def test_a_boolean_is_not_a_seed(self):
+        """`True` is an `int` by inheritance and would reset to seed 1."""
+        recorded = _parameters(True)
+
+        _findings, oracle = verifier.check_scenario_is_official(
+            self._submission(recorded)
+        )
+
+        self.assertIsNone(oracle)
+
+    def test_a_negative_seed_is_refused_rather_than_raising(self):
+        """`SeedSequence` refuses negative entropy, so this would be a crash
+        inside the regeneration rather than a finding."""
+        recorded = _parameters(-1)
+
+        _findings, oracle = verifier.check_scenario_is_official(
+            self._submission(recorded)
+        )
+
+        self.assertIsNone(oracle)
+
+
+if __name__ == "__main__":
+    unittest.main()
