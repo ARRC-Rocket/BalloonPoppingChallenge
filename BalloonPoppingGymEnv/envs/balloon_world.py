@@ -890,7 +890,10 @@ class BalloonPoppingEnv(gym.Env):
         i = self.balloon_parameters["release_interval"]
         t = self.simulation_parameters["time_step"]
         self._balloon_release_at_step = np.arange(n) * _release_spacing_in_steps(i, t)
-        self._np_random.shuffle(self._balloon_release_at_step)
+        # The property, not the attribute behind it. `Env.reset(seed=None)` leaves
+        # `_np_random` as None and only the property draws a generator, so the
+        # attribute was an AttributeError on the `random_seed: null` the YAML offers.
+        self.np_random.shuffle(self._balloon_release_at_step)
 
     def __generate_balloon_flights(self):
         monte_carlo_environment = copy.deepcopy(self._rocketpy_env)
