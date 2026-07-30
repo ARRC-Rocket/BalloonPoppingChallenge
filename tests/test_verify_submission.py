@@ -541,11 +541,13 @@ class TestARealScenario0SubmissionPasses(unittest.TestCase):
             )
 
         submission = {
+            "format_version": 1,
             "leaderboard_info": {
                 "team_name": "official",
                 "agent_name": "AttitudeRateControlAgent",
                 "scenario_number": 0,
                 "final_reward": int(env._popped_count),
+                "random_seed": env.np_random_seed,
             },
             "balloon_world_data": {
                 "scenario_parameters": parameters,
