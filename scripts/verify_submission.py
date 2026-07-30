@@ -67,9 +67,10 @@ _TRAJECTORY_OFFSET = 1
 # and anything approaching the balloon radius is a different trajectory.
 DEFAULT_TOLERANCE_METRES = 1e-6
 
-# The only submission format this file describes. `build_submission_payload`
-# writes it, and a file that says anything else was made by something else.
-_SUPPORTED_FORMAT_VERSION = 1
+# The submission formats this file describes. 1 is what
+# `build_submission_payload` writes; 0 is the pickle-era payload, whose sections
+# are the same ones, so refusing it would only stop old files being checked.
+_SUPPORTED_FORMAT_VERSIONS = (0, 1)
 
 
 class Finding:
@@ -945,26 +946,22 @@ def _velocity_matches_the_path(position, velocity, time_step):
 def _format_version_findings(submission):
     """The protocol the rest of this file is written against.
 
-    A file with no version, or version 0 renamed to `.json`, reaches every check
-    below as though it were the format they describe. Only 1 exists.
+    A file with no version reaches every check below as though it were one of
+    the formats they describe. 0 and 1 carry the same sections, so both are
+    read; anything else was made by something this does not know about.
     """
     version = submission.get("format_version")
-    if isinstance(version, bool) or not isinstance(version, int):
+    supported = ", ".join(str(v) for v in _SUPPORTED_FORMAT_VERSIONS)
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version not in _SUPPORTED_FORMAT_VERSIONS
+    ):
         return [
             Finding(
                 "submission format version",
                 False,
-                f"format_version is {version!r}, and this checks version "
-                f"{_SUPPORTED_FORMAT_VERSION}",
-            )
-        ]
-    if version != _SUPPORTED_FORMAT_VERSION:
-        return [
-            Finding(
-                "submission format version",
-                False,
-                f"format_version {version} is not {_SUPPORTED_FORMAT_VERSION}, "
-                "which is the only one this checks",
+                f"format_version is {version!r}, and this reads {supported}",
             )
         ]
     return [Finding("submission format version", True, f"format_version {version}")]

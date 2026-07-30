@@ -70,16 +70,30 @@ class TestTheFormatVersionIsChecked(unittest.TestCase):
 
         self.assertTrue(self._refused_by_the_version_check(submission))
 
-    def test_the_previous_format_is_refused(self):
-        """Version 0 is the pickle payload. Renaming it to `.json` does not
-        make it one."""
-        self.assertTrue(
-            self._refused_by_the_version_check(_submission(format_version=0))
-        )
+    def test_the_previous_format_is_still_read(self):
+        """Version 0 is the pickle-era payload and carries the same sections, so
+        refusing it would only stop the submissions already on the leaderboard
+        from being checked. `load_submission` still opens those files."""
+        with mock.patch.object(verifier, "check_scenario_is_official") as official:
+            official.return_value = ([], None)
+            with mock.patch.object(
+                verifier, "check_internal_consistency", return_value=[]
+            ):
+                findings = verifier.verify(
+                    _submission(format_version=0), verifier.DEFAULT_TOLERANCE_METRES
+                )
+
+        self.assertTrue(official.called)
+        self.assertTrue(all(f.ok for f in findings), [str(f) for f in findings])
 
     def test_a_future_version_is_refused(self):
         self.assertTrue(
             self._refused_by_the_version_check(_submission(format_version=2))
+        )
+
+    def test_a_negative_version_is_refused(self):
+        self.assertTrue(
+            self._refused_by_the_version_check(_submission(format_version=-1))
         )
 
     def test_a_boolean_is_not_a_version(self):
@@ -104,7 +118,7 @@ class TestTheFormatVersionIsChecked(unittest.TestCase):
 
     def test_the_version_it_writes_is_the_version_it_accepts(self):
         """These two drifting apart is the whole failure this guards against."""
-        self.assertEqual(verifier._SUPPORTED_FORMAT_VERSION, 1)
+        self.assertIn(1, verifier._SUPPORTED_FORMAT_VERSIONS)
 
 
 @unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
