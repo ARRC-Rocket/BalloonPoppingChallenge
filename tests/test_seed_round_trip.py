@@ -157,6 +157,17 @@ class TestTheVerifierCanRebuildIt(unittest.TestCase):
             any("and the scenario parameters say" in f.detail for f in findings)
         )
 
+    def test_a_value_that_is_not_a_number_is_still_a_disagreement(self):
+        """`"5"` and `[1, 2]` went past an `isinstance(int)` test into a field
+        the strict comparison no longer looks at."""
+        for configured in ("5", 1.0, [1, 2], {"a": 1}):
+            with self.subTest(configured=configured):
+                _findings, oracle = verifier.check_scenario_is_official(
+                    _submission(5, configured)
+                )
+
+                self.assertIsNone(oracle)
+
     def test_a_null_in_the_parameters_is_what_a_random_run_looks_like(self):
         """The control for the check above. It has to allow the case it exists
         for, which is the run that drew its own seed."""
