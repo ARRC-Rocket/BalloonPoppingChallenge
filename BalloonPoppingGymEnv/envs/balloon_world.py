@@ -454,6 +454,10 @@ class BalloonPoppingEnv(gym.Env):
 
         if not self.rocket_launched:
             _rocket_finished = False
+            # `tvc`, `throttle` and `roll` are read on this step and not applied.
+            # The rocket is still on the rail, so they would not change where it
+            # goes; the step after launch is the first that applies them (#80).
+            #
             # Refused rather than dropped, because there is no previous attitude
             # to fall back on. The agent can launch on any later step.
             if _wants_launch(commands) and "launch_inclination_heading" in commands:
