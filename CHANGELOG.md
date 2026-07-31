@@ -41,7 +41,7 @@ suffix and the `format_version` that deployment accepts.
 - An action of the wrong shape, holding a complex value, or of object dtype is
   refused as unusable instead of being silently cast or raising later. The
   environment drops that field and carries on rather than ending the run, and
-  says which field and why (#117, #131).
+  names the field it dropped (#117).
 - A failed write no longer leaves the file descriptor closed twice (#119).
 - The submission checker took release eligibility from the release schedule,
   which failed honest scenario-0 runs where every balloon starts released
