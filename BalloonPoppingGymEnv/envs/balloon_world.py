@@ -72,7 +72,7 @@ def check_action(action):
 
 
 def _usable_action_fields(action):
-    """The fields as flat arrays of the right size, and the names of the rest.
+    """The fields as flat arrays of the right size, and why the rest are not.
 
     Validating a converted copy and then handing the original to the actuators
     would check something other than what is used: a scalar `tvc` converts to a
@@ -80,7 +80,7 @@ def _usable_action_fields(action):
     are what the caller gets.
     """
     usable = {}
-    unusable = set()
+    unusable = {}
     for field, size in ACTION_FIELD_SIZES.items():
         try:
             given = np.asarray(action[field])
@@ -93,16 +93,19 @@ def _usable_action_fields(action):
             # Flat, because the size alone let a (1, 2) through to raise at
             # `float(tvc[0])` and a (1, 2) attitude to raise at `attitude[1]`.
             values = np.asarray(given, dtype=float).reshape(-1)
-        except Exception:  # noqa: BLE001 - see below
-            # Anything unreadable is a field the environment cannot use, which
-            # is this function's whole answer. Narrower than this and the list
-            # has to be guessed: a torch tensor that still carries its graph
-            # raises RuntimeError here, and an action that is not a mapping at
-            # all raises TypeError on the lookup.
-            unusable.add(field)
+        except Exception as error:  # noqa: BLE001 - see below
+            # Broad on purpose: a torch tensor still carrying its graph raises
+            # RuntimeError here, and an action that is not a mapping raises
+            # TypeError on the lookup. Guessing that list is how fields go
+            # missing. The reason is kept because without it a defect in the
+            # four lines above reads exactly like a competitor's bad value.
+            unusable[field] = f"{type(error).__name__}: {error}"
             continue
-        if values.size != size or not np.all(np.isfinite(values)):
-            unusable.add(field)
+        if values.size != size:
+            unusable[field] = f"expected {size} values, got {values.size}"
+            continue
+        if not np.all(np.isfinite(values)):
+            unusable[field] = "not every value is finite"
             continue
         usable[field] = values
     return usable, unusable
@@ -441,10 +444,11 @@ class BalloonPoppingEnv(gym.Env):
             self._unusable_action_counts[field] += 1
             if self._unusable_action_counts[field] in _UNUSABLE_ACTION_LOG_STEPS:
                 logger.warning(
-                    "Step %d: ignoring %s, which the environment cannot use "
+                    "Step %d: ignoring %s, which the environment cannot use: %s "
                     "(%d such steps for that field)",
                     self.current_step,
                     field,
+                    unusable[field],
                     self._unusable_action_counts[field],
                 )
 
