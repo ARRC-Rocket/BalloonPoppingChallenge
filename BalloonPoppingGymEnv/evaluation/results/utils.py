@@ -381,6 +381,10 @@ def build_submission_payload(eval_cfg, env, scenario_parameters, packed_at):
             "agent_name": eval_cfg["agent_name"],
             "scenario_number": eval_cfg["scenario_number"],
             "final_reward": env._popped_count,
+            # The seed the run drew, not the one it was configured with.
+            # `random_seed: null` is what the scenario file offers for a random
+            # run, and the verifier rebuilds the balloon field from a seed.
+            "random_seed": env.np_random_seed,
         },
         "balloon_world_data": {
             "scenario_parameters": scenario_parameters,

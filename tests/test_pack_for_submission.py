@@ -37,6 +37,7 @@ class TestPackForSubmission(unittest.TestCase):
         # with dill under the default allow_pickle=True.
         self.env = SimpleNamespace(
             _popped_count=5,
+            np_random_seed=0,
             trajectories=[
                 {
                     "rocket_states": [1.0, float("nan")],

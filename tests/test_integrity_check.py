@@ -29,6 +29,7 @@ def _fake_env():
     """The smallest object ``pack_for_submission`` accepts."""
     return SimpleNamespace(
         _popped_count=3,
+        np_random_seed=0,
         trajectories=[{"rocket_states": [1.0], "balloon_states": [[0.0] * 6]}],
         _balloon_release_at_step=[0],
         _rocket_flight=None,
