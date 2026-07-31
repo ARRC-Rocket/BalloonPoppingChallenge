@@ -10,7 +10,17 @@ to the pull request that made the change.
 
 ## [Unreleased]
 
-*Changes on `develop` since v0.1.1.*
+### Changed
+
+- An ignored action field says why it was ignored. The log named the field and
+  not the conversion that failed, so a competitor's bad value and a defect in
+  the conversion itself read the same (#131).
+
+### Documentation
+
+- The `tvc`, `throttle` and `roll` fields of the launch action are read and not
+  applied, because the rocket is still on the rail for that step. Written down
+  rather than changed (#126).
 
 ## [0.1.1] - 2026-07-31
 
