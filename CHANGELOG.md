@@ -10,7 +10,60 @@ to the pull request that made the change.
 
 ## [Unreleased]
 
-*Changes on `develop` since v0.1.0.*
+*Changes on `develop` since v0.1.1.*
+
+## [0.1.1] - 2026-07-31
+
+**A submission is JSON now, and a v0.1.0 file is refused.** The leaderboard
+reads `json.load` only, so an agent has to be re-run under this version to
+produce a file it will take. `GET /api/version` on the leaderboard reports the
+suffix and the `format_version` that deployment accepts.
+
+### Changed
+
+- Submissions are written as JSON rather than pickle, with `format_version: 1`.
+  Unpickling a competitor's upload was arbitrary code execution on the
+  leaderboard, and `json.load` cannot be (#122).
+- A submission records the seed the run actually drew, so a run configured with
+  `random_seed: null` can be reproduced from the file it produced. The checker
+  takes the seed as an input to its oracle rather than requiring the shipped
+  value, which is what a round on an arbitrary seed needs (#132).
+- The closest approach between the rocket and a balloon no longer depends on
+  which end of the step is called the start. Measured over 200,000 segment
+  pairs, no pop decision changes at the 1.5 m radius (#107).
+- Balloon release spacing is rounded rather than truncated. Both shipped
+  scenarios divide exactly, so no score moves (#110).
+
+### Fixed
+
+- `random_seed: null`, which the scenario files offer in a comment, raised
+  `AttributeError` on the first reset (#128).
+- An action of the wrong shape, holding a complex value, or of object dtype is
+  refused as unusable instead of being silently cast or raising later. The
+  environment drops that field and carries on rather than ending the run, and
+  names the field it dropped (#117).
+- A failed write no longer leaves the file descriptor closed twice (#119).
+- The submission checker took release eligibility from the release schedule,
+  which failed honest scenario-0 runs where every balloon starts released
+  (#108).
+- The checker now reads `format_version`, refuses an invalid rocket path before
+  paying for the balloon Monte Carlo, and writes strict JSON with
+  `allow_nan=False` at the serializer rather than only in the sanitizer (#133).
+
+### Added
+
+- `check_action(action)` is public, so an agent can ask the same question the
+  environment does before returning (#117).
+- The submission checker, `scripts/verify_submission.py`, and what it costs to
+  fake a rocket path (#106).
+
+### Tooling
+
+- CI installs the versions the lockfile pins rather than checking one thing and
+  testing another (#105), fails a regression that hangs instead of waiting
+  (#120), sees a renamed environment or an unclosed fence in the runner check
+  (#109), and lints `scripts/` (#133). Tests that fail when the thing they are
+  named after breaks (#118).
 
 ## [0.1.0] - 2026-07-29
 
@@ -153,7 +206,8 @@ in #33, folding in the work from #5 through #34.
 First public release: the Gymnasium environment, the example agents, scenarios 0
 and 1, and the Colab example (#1, #3, #4).
 
-[Unreleased]: https://github.com/ARRC-Rocket/BalloonPoppingChallenge/compare/v0.1.0...develop
+[Unreleased]: https://github.com/ARRC-Rocket/BalloonPoppingChallenge/compare/v0.1.1...develop
+[0.1.1]: https://github.com/ARRC-Rocket/BalloonPoppingChallenge/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/ARRC-Rocket/BalloonPoppingChallenge/compare/v0.0.2...v0.1.0
 [0.0.2]: https://github.com/ARRC-Rocket/BalloonPoppingChallenge/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/ARRC-Rocket/BalloonPoppingChallenge/releases/tag/v0.0.1

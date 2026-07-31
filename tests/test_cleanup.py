@@ -161,5 +161,43 @@ class TestNoEmptyFStrings(unittest.TestCase):
         )
 
 
+class TestEveryTestIsReachedByARunOfItsOwnFile(unittest.TestCase):
+    """``unittest.main()`` calls ``sys.exit``, so a class written below it is
+    not defined yet when it runs. pytest imports the module rather than running
+    it as ``__main__``, so it collects the class either way and the two ways of
+    running a file quietly disagree about how many tests there are.
+
+    Appending to a file whose last line is that guard puts the new tests past
+    it, and nothing says so: found three times in this repository by counting,
+    never by anything failing.
+    """
+
+    def test_no_test_is_defined_below_the_unittest_main_guard(self):
+        for path in sorted((REPO_ROOT / "tests").glob("test_*.py")):
+            with self.subTest(path=path.name):
+                body = _parse(path).body
+                guards = [
+                    node.lineno
+                    for node in body
+                    if isinstance(node, ast.If) and "__main__" in ast.dump(node.test)
+                ]
+                if not guards:
+                    continue
+                stranded = [
+                    node.name
+                    for node in body
+                    if isinstance(node, (ast.ClassDef, ast.FunctionDef))
+                    and node.lineno > guards[-1]
+                ]
+
+                self.assertEqual(
+                    stranded,
+                    [],
+                    f"`python {path.relative_to(REPO_ROOT)}` never runs these, "
+                    f"because they are defined below its `unittest.main()` "
+                    f"guard: {stranded}",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

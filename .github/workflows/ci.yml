@@ -24,6 +24,7 @@ jobs:
   lint:
     name: Lint and format
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -34,13 +35,19 @@ jobs:
           python-version: "3.14"
 
       - name: Install ruff
-        run: python -m pip install "ruff==0.15.20"
+        run: python -m pip install "ruff==0.15.20" "PyYAML>=6"
 
       - name: Lint
-        run: ruff check BalloonPoppingGymEnv/ tests/ doc/examples/
+        run: ruff check BalloonPoppingGymEnv/ tests/ doc/examples/ scripts/
 
       - name: Format check
-        run: ruff format --check BalloonPoppingGymEnv/ tests/ doc/examples/
+        run: ruff format --check BalloonPoppingGymEnv/ tests/ doc/examples/ scripts/
+
+      # Here as well as in the suite, because the suite is the thing it checks:
+      # delete the `test` job and the only run left to notice is the one that
+      # cannot block. Reads the workflow as data, so it needs no simulator.
+      - name: Check CI tests what it says it tests
+        run: python -m unittest tests.test_ci_installs_what_it_checks -v
 
   test:
     name: Tests and coverage (Python ${{ matrix.python-version }})
@@ -52,11 +59,22 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.14"]
+    # Measured at about six minutes for the slower leg. The default ceiling is
+    # six hours, and this repository has already seen a non-finite command leave
+    # the solver refusing to return.
+    timeout-minutes: 25
     env:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      # Whether the token exists, not the token. `secrets` cannot be read from a
+      # step's `if`, which is why this is here at all, and putting the value
+      # itself here hands it to pip, pytest and everything they start.
+      HAS_CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN != '' }}
       # Run the opt-in slow regression tests (e.g. the scenario #1 Monte Carlo
       # golden master) in CI; they are skipped by default for fast local runs.
       BPC_RUN_SLOW_TESTS: "1"
+      # Without this the matrix is decoration: uv takes its interpreter from
+      # .python-version, which pins 3.14, so the leg named 3.10 would build a
+      # 3.14 environment and quietly retire the floor #75 exists to test.
+      UV_PYTHON: ${{ matrix.python-version }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -67,23 +85,33 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
-          cache-dependency-path: requirements-dev.txt
 
-      # CI installs with pip, so nothing else would notice uv.lock going stale
-      # against the ActiveRocketPy submodule. This fails when it does.
-      - name: Check the uv lockfile is current
+      # Install what the lockfile pins. The old unpinned `pip install` sat next
+      # to a `uv lock --check` that said nothing about it: the lockfile pinned
+      # matplotlib 3.10.9, numpy 2.4.5, scipy 1.17.1 and CI installed 3.11.1,
+      # 2.5.1, 1.18.0. `--locked` also catches a stale lock against the submodule.
+      - name: Install the locked dependencies
         run: |
           python -m pip install "uv==0.11.14"
-          uv lock --check
+          uv sync --locked --extra dev
 
-      - name: Install dependencies
+      # Fail if the leg is not running the version it is named for. #89 cost
+      # time because nothing recorded which versions CI had installed.
+      - name: Report and check the environment
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          uv run --no-sync python -VV
+          uv run --no-sync python -c "import sys; \
+            got = '.'.join(map(str, sys.version_info[:2])); \
+            want = '${{ matrix.python-version }}'; \
+            assert got == want, f'this leg is running {got}, not {want}'"
+          uv pip freeze
 
+      # --no-sync, so this runs the environment the step above built rather
+      # than letting uv re-resolve on the way past.
       - name: Run tests with coverage
-        run: pytest tests/ --cov=BalloonPoppingGymEnv --cov-report=xml --cov-report=term
+        run: |
+          uv run --no-sync pytest tests/ \
+            --cov=BalloonPoppingGymEnv --cov-report=xml --cov-report=term
 
       - name: Upload coverage artifact
         if: ${{ !cancelled() }}
@@ -91,13 +119,68 @@ jobs:
         with:
           name: coverage-xml-py${{ matrix.python-version }}
           path: coverage.xml
-          if-no-files-found: warn
+          # A run that produced no coverage at all has nothing to say about
+          # coverage, and `warn` lets it upload nothing and still look fine.
+          if-no-files-found: error
 
       # Skipped until a CODECOV_TOKEN repository secret is configured.
       - name: Upload coverage to Codecov
-        if: ${{ env.CODECOV_TOKEN != '' && matrix.python-version == '3.14' }}
+        if: ${{ env.HAS_CODECOV_TOKEN == 'true' && matrix.python-version == '3.14' }}
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.xml
-          fail_ci_if_error: false
+          # Fails once there is a token to fail with. Without one this step does
+          # not run at all, so this cannot turn a missing secret into a red run.
+          fail_ci_if_error: true
+
+  latest-dependencies:
+    name: Latest dependencies, Python ${{ matrix.python-version }} (early warning)
+    runs-on: ubuntu-latest
+    # The gate installs what the lockfile pins, so nothing there would notice a
+    # new release breaking the package. Matplotlib 3.11 took out the default
+    # renderer (#89) and CI only saw it because CI installed unpinned too.
+    #
+    # So an unpinned install keeps running, under its own name, and does not
+    # block: a release on PyPI should tell us something rather than stop
+    # unrelated work from merging. Fast suite only, because it is looking for
+    # import and API breakage rather than trajectory drift.
+    #
+    # Both versions, because the old matrix covered both and pip does not
+    # resolve the same stack on each: the lockfile itself carries numpy 2.2.6
+    # for Python < 3.11 and 2.4.5 above it.
+    #
+    # This is the contributor install, `requirements-dev.txt`, not the one the
+    # README gives a competitor. That one is `requirements.txt`, which installs
+    # ActiveRocketPy as a built wheel rather than editable, so it can fail in
+    # ways this cannot see. Worth covering separately rather than mislabelling
+    # this as covering it.
+    continue-on-error: true
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.14"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install the newest dependencies pip will resolve
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Report what that resolved to
+        run: |
+          python -VV
+          python -m pip list
+
+      - name: Run tests
+        run: pytest tests/ -q

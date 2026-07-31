@@ -47,22 +47,36 @@ def write_baseline(baseline, output_path):
     """
     # dirname is "" for a bare filename, which mkstemp resolves against the
     # working directory, so it needs no special case.
-    handle, temp_path = tempfile.mkstemp(
-        dir=os.path.dirname(output_path), prefix=".partial_", suffix=".json"
-    )
+    handle = None
+    temp_path = None
     try:
-        with os.fdopen(handle, "w", encoding="utf-8") as temp_file:
+        handle, temp_path = tempfile.mkstemp(
+            dir=os.path.dirname(output_path), prefix=".partial_", suffix=".json"
+        )
+        # `closefd=False` so this function is the descriptor's only owner, and
+        # `mkstemp` inside the try so it has one at all. Same shape and the same
+        # reasons as `_write_atomically`: `os.fdopen` closes the descriptor
+        # itself on some failures, so a cleanup path cannot also own it.
+        with os.fdopen(handle, "w", encoding="utf-8", closefd=False) as temp_file:
             json.dump(baseline, temp_file, indent=2, allow_nan=False)
             temp_file.write("\n")
+        os.close(handle)
+        handle = None
         os.chmod(temp_path, _mode_to_apply(output_path))
         os.replace(temp_path, output_path)
     except BaseException:
         # Including KeyboardInterrupt: a stray .partial_ would be a worse outcome
         # than the truncated file this exists to prevent.
-        try:
-            os.unlink(temp_path)
-        except OSError:
-            pass
+        if handle is not None:
+            try:
+                os.close(handle)
+            except OSError:
+                pass
+        if temp_path is not None:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
         raise
 
 

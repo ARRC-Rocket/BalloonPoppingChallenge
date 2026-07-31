@@ -100,11 +100,8 @@ class TestTheParallelTestDoesNotDependOnScale(unittest.TestCase):
     def test_a_nearly_parallel_pair_still_gets_the_real_closest_approach(self):
         """The tolerance is observable, and the first version of this got it wrong.
 
-        The branch selected below the tolerance pins s to zero, which is right
-        only when the directions really are parallel: then every s gives the
-        same distance. For merely close to parallel it is wrong, so widening
-        the tolerance moves pairs into a branch that does not answer their
-        question.
+        Nothing is skipped now, the stationary point is always computed. The
+        case is kept for showing an absolute parallel test was scale dependent.
 
         At a chosen 1e-12 this pair came back as 1.5000004 m where the true
         closest approach is 1.4999995 m, which against a 1.5 m radius is a pop
@@ -173,19 +170,8 @@ class TestTheParallelTestDoesNotDependOnScale(unittest.TestCase):
         tolerance to 0.5, which calls anything within forty-five degrees
         parallel, passed every other test in this file.
 
-        Worth being straight about what this does and does not pin. It does not
-        fail if the tolerance is loosened: measured, 0.5 and 0.05 both pass it.
-        The reason is that the parallel branch is not simply ``s = 0``. When the
-        ``t`` that follows clamps out of range, ``s`` is recomputed from the
-        clamped ``t``, and for most geometries that recovers the right answer.
-        The branch only gives a wrong result when ``s = 0`` produces a ``t``
-        strictly inside the segment, which is what the millimetre case above
-        does and what an angle on its own does not arrange.
-
-        So the tolerance's value is not observable anywhere in a wide range,
-        because a pair near enough to parallel for it to matter is one the
-        parallel branch answers correctly anyway. What is observable, and what
-        the other tests here pin, is relative against absolute.
+        What this pins is the ordinary case, a clear angle where the answer has
+        to match the oracle. The delicate ones are in TestANearParallelInteriorMinimum.
         """
         angle = np.radians(20.0)
         start_a, end_a = np.array([0.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0])
@@ -225,6 +211,204 @@ class TestTheParallelTestDoesNotDependOnScale(unittest.TestCase):
         )
 
         self.assertAlmostEqual(measured, 5.0, places=12)
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestANearParallelInteriorMinimum(unittest.TestCase):
+    """The case four edges do not contain.
+
+    The edges hold the minimum only for exactly parallel directions. Merely
+    near parallel, the stationary point can lie strictly inside both segments.
+    """
+
+    RADIUS = 1.5
+
+    # Away from the midpoints on purpose. At s = t = 0.5 the two products in
+    # the numerators come out equal in magnitude but not in value, so a
+    # symmetric fixture misses the cancellation.
+    S_TRUE = 0.35
+    T_TRUE = 0.70
+
+    def _pair(self):
+        angle = np.sqrt(10 * np.finfo(float).eps)
+        length = 20.0
+        separation = self.RADIUS - 1e-14
+        direction_a = np.array([length, 0.0, 0.0])
+        direction_b = length * np.array([np.cos(angle), np.sin(angle), 0.0])
+        start_a = np.zeros(3)
+        start_b = (
+            self.S_TRUE * direction_a
+            - self.T_TRUE * direction_b
+            - np.array([0.0, 0.0, separation])
+        )
+        return start_a, start_a + direction_a, start_b, start_b + direction_b
+
+    def _orderings(self):
+        start_a, end_a, start_b, end_b = self._pair()
+        return {
+            "as written": (start_a, end_a, start_b, end_b),
+            "rocket reversed": (end_a, start_a, start_b, end_b),
+            "balloon reversed": (start_a, end_a, end_b, start_b),
+            "both reversed": (end_a, start_a, end_b, start_b),
+            "swapped": (start_b, end_b, start_a, end_a),
+        }
+
+    @staticmethod
+    def _relative_determinant(start_a, end_a, start_b, end_b):
+        direction_a, direction_b = end_a - start_a, end_b - start_b
+        a = float(direction_a @ direction_a)
+        e = float(direction_b @ direction_b)
+        b = float(direction_a @ direction_b)
+        return (a * e - b * b) / (a * e)
+
+    def _skipped_interior_pair(self):
+        """The pair the removed cutoff would have refused to solve.
+
+        Below 8 * eps, so restoring the cutoff skips its stationary point. The
+        asymmetric pair sits above it and cannot catch that regression.
+        """
+        angle = np.sqrt(7 * np.finfo(float).eps)
+        just_inside = np.nextafter(self.RADIUS, 0.0)
+        half = 5.0
+        return (
+            np.array([-half, 0.0, 0.0]),
+            np.array([half, 0.0, 0.0]),
+            np.array([-half, -half * angle, just_inside]),
+            np.array([half, half * angle, just_inside]),
+        )
+
+    def test_the_skipped_interior_pair_is_below_the_old_cutoff(self):
+        """Both halves, or the fixture is not the case it is named for."""
+        relative = self._relative_determinant(*self._skipped_interior_pair())
+
+        self.assertGreater(relative, 0.0, "this pair is exactly parallel")
+        self.assertLessEqual(relative, 8 * np.finfo(float).eps)
+
+    def test_the_pair_below_the_old_cutoff_is_still_a_pop(self):
+        start_a, end_a, start_b, end_b = self._skipped_interior_pair()
+
+        measured = float(
+            np.sqrt(
+                BalloonPoppingEnv._segment_distance_squared_batch(
+                    start_a, end_a, np.array([start_b]), np.array([end_b])
+                )[0]
+            )
+        )
+
+        self.assertLessEqual(measured, self.RADIUS)
+
+    def test_the_cancelling_pair_is_near_parallel_but_not_parallel(self):
+        relative = self._relative_determinant(*self._pair())
+
+        self.assertGreater(relative, 0.0, "this pair is exactly parallel")
+        self.assertLess(relative, 1e-13, "this pair is not near parallel enough")
+
+    def test_the_closest_points_are_where_the_fixture_puts_them(self):
+        start_a, end_a, start_b, end_b = self._pair()
+        closest_a = start_a + self.S_TRUE * (end_a - start_a)
+        closest_b = start_b + self.T_TRUE * (end_b - start_b)
+
+        distance = float(np.linalg.norm(closest_a - closest_b))
+
+        self.assertLessEqual(distance, self.RADIUS, "the fixture is not a pop")
+        # Well inside, not one representable float inside, so a verdict that
+        # flips here is a real loss of digits rather than the last bit.
+        self.assertGreater(
+            (self.RADIUS - distance) / np.spacing(self.RADIUS),
+            10.0,
+            "the fixture sits too close to the radius to mean anything",
+        )
+
+    def test_the_interior_minimum_is_not_skipped_in_any_ordering(self):
+        """Every way of writing the same two segments down.
+
+        A skipped stationary point and cancelling numerators share a symptom.
+        Reversing the rocket sweep moves ``b * f - c * e`` across the radius.
+        """
+        measured = {
+            name: float(
+                np.sqrt(
+                    BalloonPoppingEnv._segment_distance_squared_batch(
+                        start_a, end_a, np.array([start_b]), np.array([end_b])
+                    )[0]
+                )
+            )
+            for name, (start_a, end_a, start_b, end_b) in self._orderings().items()
+        }
+
+        for name, distance in measured.items():
+            with self.subTest(ordering=name):
+                self.assertLessEqual(
+                    distance,
+                    self.RADIUS,
+                    f"{name} reports {distance!r} against a {self.RADIUS} m "
+                    "radius, so a pop is scored as a miss",
+                )
+        self.assertLessEqual(
+            max(measured.values()) - min(measured.values()),
+            1e-12,
+            f"the orderings disagree: {measured}",
+        )
+
+
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestEveryCandidateEarnsItsPlace(unittest.TestCase):
+    """Deleting an edge from the five candidates changed no other test.
+
+    Both golden masters included. Dropping the ``s = 1`` edge moves the pair
+    below from 1.49990 m to 4.05960 m, a pop lost against a 1.5 m radius.
+    """
+
+    # From an exhaustive search for a geometry where the s = 1 edge is the only
+    # candidate holding the minimum, at scenario magnitudes.
+    ROCKET = np.array([[0.0, 0.0, 0.0], [2.248642, 7.195445, 26.380041]])
+    BALLOON = np.array(
+        [[-2.732624, 5.051852, 16.682862], [3.586303, 10.1662, 32.856179]]
+    )
+
+    def test_the_s_edge_holds_the_minimum_here(self):
+        truth = _brute_force_distance(*self.ROCKET, *self.BALLOON, samples=20001)
+
+        measured = float(
+            np.sqrt(
+                BalloonPoppingEnv._segment_distance_squared_batch(
+                    self.ROCKET[0],
+                    self.ROCKET[1],
+                    self.BALLOON[0][None, :],
+                    self.BALLOON[1][None, :],
+                )[0]
+            )
+        )
+
+        self.assertAlmostEqual(measured, truth, places=4)
+        self.assertLess(measured, 1.5, "this pair has to be a pop for the test to bite")
+
+    def test_no_geometry_in_a_corpus_beats_the_oracle(self):
+        """A fixed corpus, so both edge families are covered symmetrically.
+
+        One-sided on purpose: sampling can only overestimate the closest
+        approach, so anything missing or wrongly signed lands above the oracle.
+        """
+        generator = np.random.default_rng(20260729)
+        worst = 0.0
+        for _ in range(200):
+            points = generator.uniform(-30.0, 30.0, size=(4, 3))
+            sampled = _brute_force_distance(*points, samples=401)
+            measured = float(
+                np.sqrt(
+                    BalloonPoppingEnv._segment_distance_squared_batch(
+                        points[0],
+                        points[1],
+                        points[2][None, :],
+                        points[3][None, :],
+                    )[0]
+                )
+            )
+            worst = max(worst, measured - sampled)
+
+        self.assertLessEqual(
+            worst, 1e-9, f"exceeded a sampled upper bound by {worst:.3e} m"
+        )
 
 
 if __name__ == "__main__":

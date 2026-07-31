@@ -1,15 +1,19 @@
 import hashlib
 import http.client
 import json
+import logging
+import math
 import os
-import pickle
 import re
 import tempfile
 import urllib.request
 from datetime import datetime, timezone
 from uuid import uuid4
 
+import numpy as np
 from rocketpy._encoders import RocketPyEncoder
+
+logger = logging.getLogger(__name__)
 
 # The evaluate.py integrity check is advisory and must never cost a competitor
 # the submission they just simulated. The socket timeout and the byte cap bound
@@ -218,6 +222,38 @@ def _filename_slug(raw_name, fallback="team"):
     return slug.strip(" ._-") or fallback
 
 
+def _json_safe(value):
+    """``value`` with every non-finite float replaced by ``None``.
+
+    ``json.dump`` writes ``NaN`` and ``Infinity`` for non-finite floats. Python
+    reads those back, so the pipeline works either way, but RFC 8259 has no such
+    tokens and ``jq`` and a browser's ``JSON.parse`` both refuse the file.
+
+    Rocket states before launch are ``NaN``, so this is ordinary data rather than
+    an edge case. ``None`` is what the leaderboard's replay builder already
+    substitutes before anything reaches the viewer, so this moves that step
+    upstream and the viewer sees no change.
+
+    A float array with nothing to fix is returned untouched so the encoder can
+    stream it: converting it here would turn tens of megabytes of ``float64``
+    into individually allocated Python floats for no benefit.
+    """
+    if isinstance(value, (float, np.floating)):
+        return value if math.isfinite(value) else None
+    if isinstance(value, np.ndarray):
+        if value.dtype.kind != "f":
+            return value
+        if np.isfinite(value).all():
+            return value
+        # object dtype, so the None survives tolist()
+        return np.where(np.isfinite(value), value, None).tolist()
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
 def _submission_filename(packed_at, team_name, run_id):
     """Name a submission so two runs cannot land on the same path.
 
@@ -234,7 +270,7 @@ def _submission_filename(packed_at, team_name, run_id):
     ``team``. ``run_id`` is what actually makes the path unique.
     """
     stamp = f"{packed_at:%Y%m%dT%H%M%S}.{packed_at.microsecond // 1000:03d}Z"
-    return f"{stamp}_{_filename_slug(team_name)}_{run_id}_submission.pkl"
+    return f"{stamp}_{_filename_slug(team_name)}_{run_id}_submission.json"
 
 
 def _write_atomically(out_path, write_payload, mode="wb", encoding=None):
@@ -264,31 +300,68 @@ def _write_atomically(out_path, write_payload, mode="wb", encoding=None):
     payload carries the team secret, so keeping it owner-only is the better end
     state on a shared machine.
     """
-    handle, temp_path = tempfile.mkstemp(
-        dir=os.path.dirname(out_path) or ".", prefix=".partial_", suffix=".tmp"
-    )
+    handle = None
+    temp_path = None
     try:
-        with os.fdopen(handle, mode, encoding=encoding) as file:
+        handle, temp_path = tempfile.mkstemp(
+            dir=os.path.dirname(out_path) or ".", prefix=".partial_", suffix=".tmp"
+        )
+        # `closefd=False` so this function is the descriptor's only owner. The
+        # alternative, handing ownership to the file object, cannot be written
+        # safely: `os.fdopen` closes the descriptor itself on some failures
+        # (an unknown encoding is one, measured), and then the handle a cleanup
+        # path still holds names whatever has since been given that number.
+        with os.fdopen(handle, mode, encoding=encoding, closefd=False) as file:
             write_payload(file)
             file.flush()
             os.fsync(file.fileno())
+        # Before the rename rather than after: Windows refuses to rename a file
+        # that still has an open handle, and closing here rather than in the
+        # cleanup below keeps the success path from depending on it.
+        os.close(handle)
+        handle = None
         os.replace(temp_path, out_path)
     except BaseException:
         # Including KeyboardInterrupt: a stray .partial_ left behind would be a
         # worse outcome than the truncated file this exists to prevent. A
         # SIGKILL still can, which no handler can cover; what it cannot leave is
         # a file under the finished name.
-        try:
-            os.unlink(temp_path)
-        except OSError:
-            pass
+        if handle is not None:
+            try:
+                os.close(handle)
+            except OSError:
+                pass
+        if temp_path is not None:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
+            except OSError as cleanup_error:
+                # Said rather than swallowed. The original error is what raises,
+                # but a partial file nobody knows about is worse than one that
+                # was named in the log.
+                try:
+                    logger.warning(
+                        "Could not remove the incomplete submission at %s: %s",
+                        temp_path,
+                        cleanup_error,
+                    )
+                except Exception:  # noqa: BLE001 - a diagnostic cannot be the failure
+                    # Handlers and filters are the application's code and can
+                    # raise. Letting one out here would replace the disk full
+                    # the caller needs to see with a logging error.
+                    pass
         raise
 
 
-def pack_for_submission(eval_cfg, env, scenario_parameters):
+def build_submission_payload(eval_cfg, env, scenario_parameters, packed_at):
+    """What goes into a submission, without deciding how it is written.
 
+    Separate from `pack_for_submission` so the contents can be tested without a
+    serializer: capturing the payload by mocking `pickle.dump` would tie what a
+    submission contains to how it is encoded, and #58 replaces the encoder.
+    """
     team_name = eval_cfg["team_name"]
-    packed_at = datetime.now(timezone.utc)
     timestamp = f"{packed_at:%Y%m%dT%H%M%SZ}"
 
     # Read agent source
@@ -296,9 +369,8 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
     with open(agent_module_path, "r", encoding="utf-8") as f:
         agent_module_file = f.read()
 
-    # Submission payload
-    submission = {
-        "format_version": 0,
+    return {
+        "format_version": 1,
         "team": {
             "name": team_name,
             "secret": eval_cfg["team_secret"],
@@ -309,12 +381,22 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
             "agent_name": eval_cfg["agent_name"],
             "scenario_number": eval_cfg["scenario_number"],
             "final_reward": env._popped_count,
+            # The seed the run drew, not the one it was configured with.
+            # `random_seed: null` is what the scenario file offers for a random
+            # run, and the verifier rebuilds the balloon field from a seed.
+            "random_seed": env.np_random_seed,
         },
         "balloon_world_data": {
             "scenario_parameters": scenario_parameters,
             "trajectories": env.trajectories,
             "balloon_release_at_step": env._balloon_release_at_step,
-            "rocket_flight": json.dumps(env._rocket_flight, cls=RocketPyEncoder),
+            # Round tripped rather than left as text: the encoder can turn the
+            # Flight into JSON, but only as a string, so its own non-finite floats
+            # would slip past `_json_safe`. A few megabytes, so the extra pass is
+            # not worth avoiding.
+            "rocket_flight": json.loads(
+                json.dumps(env._rocket_flight, cls=RocketPyEncoder, allow_pickle=False)
+            ),
             # "balloon_flights": env._balloon_flights,  # deliberately omitted, see issue #57.
         },
         "agent_info": {
@@ -322,6 +404,13 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
             "agent_module_file": agent_module_file,
         },
     }
+
+
+def pack_for_submission(eval_cfg, env, scenario_parameters):
+
+    team_name = eval_cfg["team_name"]
+    packed_at = datetime.now(timezone.utc)
+    submission = build_submission_payload(eval_cfg, env, scenario_parameters, packed_at)
 
     # Save submission. The filename carries milliseconds and a path-safe team
     # name, so two runs in the same second no longer overwrite each other. The
@@ -331,7 +420,27 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
         os.path.dirname(os.path.abspath(__file__)),
         _submission_filename(packed_at, team_name, uuid4().hex),
     )
-    _write_atomically(out_path, lambda file: pickle.dump(submission, file))
+    # JSON, not pickle. The upload endpoint is unauthenticated, so the format must
+    # not be able to execute code on load the way pickle did (the leaderboard side
+    # is Leaderboard#7); `json.load` cannot. `allow_pickle=False` keeps callables
+    # out: with the default the encoder hex encodes a Function's source with dill,
+    # which is inert under `json.load` but is executable material for anything that
+    # later runs `dill.loads` on it.
+    _write_atomically(
+        out_path,
+        # `allow_nan=False` last, as the boundary rather than the only guard.
+        # The default writes bare `NaN`, which is not JSON, so anything a future
+        # field slips past `_json_safe` would leave here as an invalid file.
+        lambda file: json.dump(
+            _json_safe(submission),
+            file,
+            cls=RocketPyEncoder,
+            allow_pickle=False,
+            allow_nan=False,
+        ),
+        mode="w",
+        encoding="utf-8",
+    )
 
     print(f"Submission saved to:\n{out_path}")
 

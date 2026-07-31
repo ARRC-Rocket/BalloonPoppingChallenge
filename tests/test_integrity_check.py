@@ -10,9 +10,9 @@ skip, but a broken import inside this package is a failure and must stay loud.
 """
 
 import glob
+import json
 import http.client
 import os
-import pickle
 import unittest
 import urllib.error
 from importlib.util import find_spec
@@ -29,6 +29,7 @@ def _fake_env():
     """The smallest object ``pack_for_submission`` accepts."""
     return SimpleNamespace(
         _popped_count=3,
+        np_random_seed=0,
         trajectories=[{"rocket_states": [1.0], "balloon_states": [[0.0] * 6]}],
         _balloon_release_at_step=[0],
         _rocket_flight=None,
@@ -148,8 +149,8 @@ class TestIntegrityCheckFailsOpen(_IntegrityHelpers, unittest.TestCase):
     def test_network_failure_still_produces_a_submission(self):
         """Before the fix the URLError propagated and the run was lost."""
         path = self._pack(urllib.error.URLError("name resolution failed"))
-        with open(path, "rb") as handle:
-            self.assertEqual(pickle.load(handle)["team"]["name"], "unittest_team")
+        with open(path, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["team"]["name"], "unittest_team")
 
     def test_timeout_still_produces_a_submission(self):
         self._pack(TimeoutError("timed out"))
@@ -487,8 +488,8 @@ class TestSubmissionIsDurableFirst(_IntegrityHelpers, unittest.TestCase):
             created = set(glob.glob(pattern)) - before
             observation = {"count": len(created)}
             if len(created) == 1:
-                with open(next(iter(created)), "rb") as handle:
-                    observation["payload"] = pickle.load(handle)
+                with open(next(iter(created)), encoding="utf-8") as handle:
+                    observation["payload"] = json.load(handle)
             observations.append(observation)
 
         with mock.patch.object(

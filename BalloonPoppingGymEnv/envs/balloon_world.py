@@ -3,6 +3,7 @@ import logging
 import os
 import shutil
 import tempfile
+from collections import Counter
 
 import gymnasium as gym
 import matplotlib.pyplot as plt
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 # `launch_inclination_heading` by position, so a wrong count is not usable
 # either, and an empty array passes a finiteness test on its own.
 ACTION_FIELD_SIZES = {
+    "launch": 1,
     "launch_inclination_heading": 2,
     "tvc": 2,
     "roll": 1,
@@ -41,29 +43,18 @@ ACTION_FIELD_SIZES = {
 }
 
 
-# Which repetition of an unusable action gets a log line. A broken policy stays
+# Which repetition of an unusable field gets a log line. A broken policy stays
 # broken, and one line per step for the rest of the horizon is its own problem.
 _UNUSABLE_ACTION_LOG_STEPS = frozenset({1, 10, 100, 1000})
 
 
-def _is_launch_command(action):
-    """Whether `action["launch"]` asks for a launch, without guessing.
+def _wants_launch(commands):
+    """Whether a readable `launch` asks for one.
 
-    `bool(np.nan)` is True and a two element array raises, so the truthiness of
-    whatever arrives is not a safe question to ask directly.
+    Any nonzero number launches, the way Python reads any other number. NaN is
+    not readable, so it never reaches here and never launches.
     """
-    try:
-        values = np.asarray(action["launch"]).reshape(-1)
-    except (KeyError, TypeError, ValueError):
-        return False
-    if values.size != 1:
-        return False
-    try:
-        value = float(values[0])
-    except (TypeError, ValueError, OverflowError):
-        return False
-    # Finite first: `nan != 0` is True, so a NaN would otherwise launch.
-    return bool(np.isfinite(value)) and value != 0.0
+    return "launch" in commands and float(commands["launch"][0]) != 0.0
 
 
 def check_action(action):
@@ -81,7 +72,7 @@ def check_action(action):
 
 
 def _usable_action_fields(action):
-    """The fields as arrays of the right size, and the names of the rest.
+    """The fields as flat arrays of the right size, and the names of the rest.
 
     Validating a converted copy and then handing the original to the actuators
     would check something other than what is used: a scalar `tvc` converts to a
@@ -91,12 +82,23 @@ def _usable_action_fields(action):
     usable = {}
     unusable = set()
     for field, size in ACTION_FIELD_SIZES.items():
-        if field not in action:
-            unusable.add(field)
-            continue
         try:
-            values = np.atleast_1d(np.asarray(action[field], dtype=float))
-        except (TypeError, ValueError, OverflowError):
+            given = np.asarray(action[field])
+            # Before the cast, which discards the imaginary part with a warning
+            # rather than refusing it: 1+9j would gimbal to 1. Object dtype as
+            # well, because it hides what it holds: an object array of
+            # np.complex128 passes `iscomplexobj` and casts to 1 all the same.
+            if np.iscomplexobj(given) or given.dtype == object:
+                raise TypeError("this is not a command the environment can read")
+            # Flat, because the size alone let a (1, 2) through to raise at
+            # `float(tvc[0])` and a (1, 2) attitude to raise at `attitude[1]`.
+            values = np.asarray(given, dtype=float).reshape(-1)
+        except Exception:  # noqa: BLE001 - see below
+            # Anything unreadable is a field the environment cannot use, which
+            # is this function's whole answer. Narrower than this and the list
+            # has to be guessed: a torch tensor that still carries its graph
+            # raises RuntimeError here, and an action that is not a mapping at
+            # all raises TypeError on the lookup.
             unusable.add(field)
             continue
         if values.size != size or not np.all(np.isfinite(values)):
@@ -200,6 +202,28 @@ def _seed_sequence_to_int(seed_sequence):
     return sum(int(word) << (32 * position) for position, word in enumerate(words))
 
 
+def _release_spacing_in_steps(release_interval, time_step):
+    """How many simulation steps apart two consecutive balloon releases are.
+
+    Rounded rather than truncated. Both operands are float seconds read out of
+    the scenario YAML, so their quotient is a binary float that can land just
+    under the whole number it means: measured, 0.3 / 0.1 is 2.9999999999999996,
+    0.7 / 0.1 is 6.999999999999999 and 2.3 / 0.1 is 22.999999999999996.
+    Truncating any of those drops a whole step, and since the schedule is
+    ``arange(num) * spacing`` the error grows with the balloon index, so the
+    last of a hundred balloons leaves the ground a full second early.
+
+    Latent for the two shipped scenarios, which is why it survived: 1 / 0.01 and
+    0.5 / 0.01 are both exactly integral, so this returns 100 and 50 either way
+    and no committed baseline moves. It would have surfaced on the first
+    scenario whose interval is not exact.
+
+    A schedule can only land on whole steps, so nearest is the best available
+    answer for an interval that is genuinely not a whole number of them.
+    """
+    return int(round(release_interval / time_step))
+
+
 class BalloonPoppingEnv(gym.Env):
     metadata = {"render_modes": ["vpython", "matplotlib"]}
 
@@ -223,8 +247,9 @@ class BalloonPoppingEnv(gym.Env):
         self._balloon_states = np.array(np.zeros((self.balloon_parameters["num"], 6)))
         # (gyroX, gyroY, gyroZ, accX, accY, accZ, posX, posY, posZ, velX, velY, velZ)
         self._rocket_sensors = np.full(12, np.nan)
-        # Steps whose action the environment could not use, for rate limiting.
-        self._unusable_action_steps = 0
+        # Unusable steps per field, for rate limiting. Per field, because one
+        # counter let a field that broke second go unnamed for the whole run.
+        self._unusable_action_counts = Counter()
         # (posX, posY, posZ, velX, velY, velZ, e0, e1, e2, e3, w1, w2, w3)
         self._rocket_states = np.full(13, np.nan)
         # Where the next pop sweep starts. Tracked separately from
@@ -371,8 +396,9 @@ class BalloonPoppingEnv(gym.Env):
 
         self._balloon_states = self._balloon_flights[:, :, 0]
         self._rocket_sensors = np.full(12, np.nan)
-        # Steps whose action the environment could not use, for rate limiting.
-        self._unusable_action_steps = 0
+        # Unusable steps per field, for rate limiting. Per field, because one
+        # counter let a field that broke second go unnamed for the whole run.
+        self._unusable_action_counts = Counter()
         self._rocket_states = np.full(13, np.nan)
         self._sweep_origin = None
         self.trajectories = None
@@ -408,24 +434,25 @@ class BalloonPoppingEnv(gym.Env):
         # is while training one. A step it cannot command is not a run it should
         # lose, so the command is dropped and the episode carries on.
         commands, unusable = _usable_action_fields(action)
-        if unusable:
-            # Rate limited, since a policy that breaks stays broken and one line
-            # per step for the rest of the horizon is its own denial of service.
-            self._unusable_action_steps += 1
-            if self._unusable_action_steps in _UNUSABLE_ACTION_LOG_STEPS:
+        for field in sorted(unusable):
+            # Rate limited per field, since a policy that breaks stays broken and
+            # one line per step for the rest of the horizon is its own denial of
+            # service. Per field, so the second one to break is still named.
+            self._unusable_action_counts[field] += 1
+            if self._unusable_action_counts[field] in _UNUSABLE_ACTION_LOG_STEPS:
                 logger.warning(
                     "Step %d: ignoring %s, which the environment cannot use "
-                    "(%d such steps so far)",
+                    "(%d such steps for that field)",
                     self.current_step,
-                    ", ".join(sorted(unusable)),
-                    self._unusable_action_steps,
+                    field,
+                    self._unusable_action_counts[field],
                 )
 
         if not self.rocket_launched:
             _rocket_finished = False
             # Refused rather than dropped, because there is no previous attitude
             # to fall back on. The agent can launch on any later step.
-            if _is_launch_command(action) and "launch_inclination_heading" in commands:
+            if _wants_launch(commands) and "launch_inclination_heading" in commands:
                 attitude = commands["launch_inclination_heading"]
                 self.__get_init_rocket_states(attitude[0], attitude[1])
                 self.initial_solution[0] = (
@@ -533,47 +560,10 @@ class BalloonPoppingEnv(gym.Env):
         segment_start_b = np.asarray(segment_start_b, dtype=float)
         segment_end_b = np.asarray(segment_end_b, dtype=float)
 
-        # Two tolerances, because the quantities they guard are not the same
-        # kind of thing. ``a_coeff`` and ``e_coeff`` are squared lengths in m**2,
-        # so a length below a micron counts as no movement at all. The
-        # denominator is a_coeff * e_coeff - b_coeff**2, in m**4, and how big it
-        # is says nothing on its own: it depends on the segment lengths as much
-        # as on the angle between them.
-        #
-        # One absolute value for both made the parallel decision depend on
-        # scale. A 1 mm rocket segment and a 1 mm balloon segment at exactly
-        # ninety degrees give a denominator of exactly 1e-12, so
-        # ``> 1e-12`` called perpendicular segments parallel, took the branch
-        # that pins s to zero, and reported 1.5005 m where the real distance is
-        # 1.4995 m. With a 1.5 m radius that is a pop reported as a miss.
-        #
-        # Measured over a scenario-1 run: 56 of 9155 released-balloon
-        # evaluations landed in that branch, all of them genuinely degenerate,
-        # so no score moved. It is the shape of the test that is wrong rather
-        # than any current result.
+        # Guards squared lengths in m**2 only: below a micron a segment is a
+        # point. The denominator gets no tolerance, since m**4 says as much about
+        # length as angle. Scenario 1: 56 of 9155 evaluations are degenerate.
         degenerate_length_squared = 1e-12
-        # Dimensionless: sin(angle)**2 has to clear this before the two
-        # directions count as distinct, whatever the segments are scaled to.
-        #
-        # Derived from double precision rather than chosen. The denominator is
-        # two nearly equal products subtracted, so its own rounding error is of
-        # order eps * a_coeff * e_coeff, and a few multiples of that is the
-        # point below which its sign and magnitude mean nothing. Eight is the
-        # margin.
-        #
-        # Not a value to widen. The branch it selects pins s to zero, which is
-        # the right answer only when the directions really are parallel, since
-        # then every s gives the same distance. For merely close to parallel it
-        # is wrong, and the wider the tolerance the more pairs land there. At
-        # 1e-12 this pair returned 1.5000004 m where the true closest approach
-        # is 1.4999995 m, which against a 1.5 m radius is a pop reported as a
-        # miss:
-        #
-        #     rocket  (0, 0, 0)          -> (1, 0, 0)
-        #     balloon (-1, 1.5000013, 0) -> (1, 1.4999995, 0)
-        #
-        # At 8 * eps that pair goes through the regular solution and is right.
-        parallel_relative_epsilon = 8 * np.finfo(float).eps
         epsilon = degenerate_length_squared
         direction_a = segment_end_a - segment_start_a
         direction_b = segment_end_b - segment_start_b
@@ -607,44 +597,85 @@ class BalloonPoppingEnv(gym.Env):
             regular = ~degenerate_b
             if np.any(regular):
                 b_coeff = np.einsum("j,ij->i", direction_a, direction_b)
-                denominator = a_coeff * e_coeff - b_coeff * b_coeff
+                # ||u x v||**2 equals a_coeff * e_coeff - b_coeff**2 in real
+                # arithmetic and avoids its cancellation: near parallel, that
+                # subtraction returned 1.637e-11 where the truth is 1.554e-11.
+                normal = np.cross(direction_a, direction_b[regular])
+                denominator_regular = np.einsum("ij,ij->i", normal, normal)
 
-                # Relative to a_coeff * e_coeff, which is what the denominator
-                # would be at ninety degrees, so this compares sin(angle)**2
-                # against a dimensionless tolerance and scaling both segments
-                # cannot change the answer.
-                non_parallel = regular & (
-                    np.abs(denominator) > parallel_relative_epsilon * a_coeff * e_coeff
-                )
-                s_param[non_parallel] = np.clip(
-                    (
-                        b_coeff[non_parallel] * f_coeff[non_parallel]
-                        - c_coeff[non_parallel] * e_coeff[non_parallel]
+                b_r = b_coeff[regular]
+                c_r = c_coeff[regular]
+                e_r = e_coeff[regular]
+                f_r = f_coeff[regular]
+                offset_r = offset[regular]
+                direction_b_r = direction_b[regular]
+
+                def _squared(s_values, t_values):
+                    separation = (
+                        offset_r
+                        + s_values[:, None] * direction_a
+                        - t_values[:, None] * direction_b_r
                     )
-                    / denominator[non_parallel],
-                    0.0,
-                    1.0,
-                )
+                    return np.einsum("ij,ij->i", separation, separation)
 
-                t_param[regular] = (
-                    b_coeff[regular] * s_param[regular] + f_coeff[regular]
-                ) / e_coeff[regular]
+                # The minimum of a convex quadratic over the unit square is at
+                # its stationary point when that lands inside, and otherwise on
+                # an edge. All five candidates are evaluated and the best wins.
+                candidates = []
+                for s_value in (0.0, 1.0):
+                    s_edge = np.full(f_r.shape, s_value)
+                    t_edge = np.clip((b_r * s_value + f_r) / e_r, 0.0, 1.0)
+                    candidates.append((s_edge, t_edge))
+                for t_value in (0.0, 1.0):
+                    t_edge = np.full(f_r.shape, t_value)
+                    s_edge = np.clip((b_r * t_value - c_r) / a_coeff, 0.0, 1.0)
+                    candidates.append((s_edge, t_edge))
 
-                t_too_low = regular & (t_param < 0.0)
-                t_param[t_too_low] = 0.0
-                s_param[t_too_low] = np.clip(
-                    -c_coeff[t_too_low] / a_coeff,
-                    0.0,
-                    1.0,
+                # Zero, not a tolerance. Exactly parallel puts the minimum on an
+                # edge; merely near parallel does not. An 8 * eps cutoff skipped a
+                # pair at 1.637e-15: 1.5000000000000127 m against 1.4999999999999998 m.
+                solvable = denominator_regular > 0.0
+                s_interior, t_interior = (
+                    candidates[0][0].copy(),
+                    candidates[0][1].copy(),
                 )
+                if np.any(solvable):
+                    # (p x q) . (r x s) = (p.r)(q.s) - (p.s)(q.r), so these are
+                    # b*f - c*e and a*f - b*c without the cancelling subtraction,
+                    # which gave 1.4999999999999900 m and 1.5000000000000087 m reversed.
+                    s_interior[solvable] = np.clip(
+                        np.einsum(
+                            "ij,ij->i",
+                            np.cross(direction_b_r[solvable], offset_r[solvable]),
+                            normal[solvable],
+                        )
+                        / denominator_regular[solvable],
+                        0.0,
+                        1.0,
+                    )
+                    t_interior[solvable] = np.clip(
+                        np.einsum(
+                            "ij,ij->i",
+                            np.cross(direction_a, offset_r[solvable]),
+                            normal[solvable],
+                        )
+                        / denominator_regular[solvable],
+                        0.0,
+                        1.0,
+                    )
+                candidates.append((s_interior, t_interior))
 
-                t_too_high = regular & (t_param > 1.0)
-                t_param[t_too_high] = 1.0
-                s_param[t_too_high] = np.clip(
-                    (b_coeff[t_too_high] - c_coeff[t_too_high]) / a_coeff,
-                    0.0,
-                    1.0,
-                )
+                # Reversing either segment maps the candidate set onto itself, so
+                # the score cannot turn on which end was written first: the old
+                # s = 0 pin gave 1.50000003 m for a pair 1.49999999 m apart.
+                distances = np.stack([_squared(s, t) for s, t in candidates])
+                best = np.argmin(distances, axis=0)
+                s_param[regular] = np.stack([s for s, _ in candidates])[
+                    best, np.arange(len(best))
+                ]
+                t_param[regular] = np.stack([t for _, t in candidates])[
+                    best, np.arange(len(best))
+                ]
 
         closest_point_a = segment_start_a + s_param[:, None] * direction_a
         closest_point_b = segment_start_b + t_param[:, None] * direction_b
@@ -858,8 +889,11 @@ class BalloonPoppingEnv(gym.Env):
         n = self.balloon_parameters["num"]
         i = self.balloon_parameters["release_interval"]
         t = self.simulation_parameters["time_step"]
-        self._balloon_release_at_step = np.arange(n) * int(i / t)
-        self._np_random.shuffle(self._balloon_release_at_step)
+        self._balloon_release_at_step = np.arange(n) * _release_spacing_in_steps(i, t)
+        # The property, not the attribute behind it. `Env.reset(seed=None)` leaves
+        # `_np_random` as None and only the property draws a generator, so the
+        # attribute was an AttributeError on the `random_seed: null` the YAML offers.
+        self.np_random.shuffle(self._balloon_release_at_step)
 
     def __generate_balloon_flights(self):
         monte_carlo_environment = copy.deepcopy(self._rocketpy_env)

@@ -22,7 +22,13 @@ from pathlib import Path
 
 import numpy as np
 
-from tests.position_tolerance import assert_positions_match
+from tests.bounded_episode import run_episode
+from tests.position_tolerance import (
+    assert_launch_step_matches,
+    assert_positions_match,
+    displace_flight_in_time,
+    launch_step,
+)
 
 # ActiveRocketPy (imported as ``rocketpy``) is the heavy optional dependency, so
 # skip the whole test when it is genuinely not installed. The BalloonPoppingGymEnv
@@ -57,6 +63,10 @@ DOWNSAMPLE_STRIDE = 50
 STEP_COUNT_ABS_TOL = 2
 # Downsampling turns those few steps into at most one row of difference.
 ROW_COUNT_ABS_TOL = 1
+# How far the flight is moved in the test that proves the launch step is read.
+# Ten steps is 0.1 s: five times STEP_COUNT_ABS_TOL, so not jitter, and a sixth
+# of the 60 steps the trajectory comparison accepts on its own.
+DISPLACEMENT_PROBE_STEPS = 10
 # Scenario #0 has 10 static balloons and the fixed agent is expected to pop them
 # all; pin that semantic count so regenerating the baseline cannot quietly bless
 # a regression that pops fewer.
@@ -70,6 +80,10 @@ class RunResult:
 
     ``positions`` is the per-step rocket centre-of-mass position
     ``(num_steps, 3)``, NaN rows before launch included.
+
+    ``record_step`` is the simulation step each row was written at, so a row can
+    be dated. Without it the trajectory comparison is purely launch-relative and
+    the flight could have happened at any time; see ``launch_step``.
 
     ``pop_step`` is, for each balloon, the step at which it first reads as
     popped. Ten numbers, and the reason they are here: the final count alone
@@ -85,6 +99,7 @@ class RunResult:
     """
 
     positions: np.ndarray
+    record_step: np.ndarray
     popped: int
     pop_step: np.ndarray
     status_history: np.ndarray
@@ -101,11 +116,11 @@ def run_scenario_0():
     env = BalloonPoppingEnv(render_mode=None, parameters=scenario_params)
     agent = AttitudeRateControlAgent(given_params, **AGENT_KWARGS)
     observation, _ = env.reset(seed=scenario_params["scenario"]["random_seed"])
-    terminated = False
-    truncated = False
-    while not (terminated or truncated):
-        action = agent.get_action(observation)
-        observation, _, terminated, truncated, _ = env.step(action)
+    # Bounded: a regression that stops the environment ending the episode would
+    # otherwise run this golden master until the CI job's own timeout.
+    _steps, terminated, truncated, _info = run_episode(
+        env, agent.get_action, observation
+    )
     # env.trajectories holds a per-step copy of the true rocket state.
     rocket_states = np.array(
         [step["rocket_states"] for step in env.trajectories], dtype=float
@@ -131,6 +146,7 @@ def run_scenario_0():
     pop_step[has_popped] = record_step[popped_now.argmax(axis=0)[has_popped]]
     return RunResult(
         positions=rocket_states[:, :3],
+        record_step=record_step,
         popped=int(env._popped_count),
         pop_step=pop_step,
         status_history=status_history,
@@ -183,6 +199,9 @@ class TestScenario0Regression(unittest.TestCase):
         cls.popped = cls.run_result.popped
         cls.num_steps = cls.run_result.positions.shape[0]
         cls.positions = post_launch_positions(cls.run_result.positions)
+        cls.launch_step = launch_step(
+            cls.run_result.positions, cls.run_result.record_step
+        )
 
     def test_popped_count_matches_baseline(self):
         # Pin the semantic count, not just the (regenerable) baseline, so a
@@ -297,6 +316,62 @@ class TestScenario0Regression(unittest.TestCase):
             "rocket",
             ROW_COUNT_ABS_TOL,
         )
+
+    # The lag between the step whose clock first reaches launch_time and the
+    # first row carrying a finite state. Measured as 2 on both scenarios, and
+    # structural: the action is read on one step, the state arrives on the next.
+    LAUNCH_PIPELINE_LAG = 2
+
+    def test_the_launch_step_is_the_one_the_agent_was_asked_for(self):
+        """So regenerating cannot bless a flight that launches late: moving the
+        agent's launch_time from 1 s to 3 s and regenerating writes launch_step
+        302 with every test passing. Derived from the agent's own configuration."""
+        parameters, _given = load_scenario_parameters(0)
+        implied = AGENT_KWARGS["launch_time"] / parameters["simulation"]["time_step"]
+
+        self.assertLessEqual(
+            abs(self.baseline["launch_step"] - implied),
+            STEP_COUNT_ABS_TOL + self.LAUNCH_PIPELINE_LAG,
+            f"the baseline launches at step {self.baseline['launch_step']}, but a "
+            f"launch_time of {AGENT_KWARGS['launch_time']} s implies about "
+            f"{implied:.0f}",
+        )
+
+    def test_the_flight_happens_when_the_baseline_says_it_does(self):
+        """*When*, which the trajectory comparison throws away.
+        ``post_launch_positions`` slices from the first finite row, so the same
+        shape of flight passes wherever in the episode it sits."""
+        assert_launch_step_matches(
+            self, self.launch_step, self.baseline["launch_step"], STEP_COUNT_ABS_TOL
+        )
+
+    def test_a_flight_displaced_in_time_is_rejected(self):
+        """The anchor above, pinned by the case that gets past everything else:
+        the whole flight moved later by k steps, episode length preserved, passed
+        all seven tests for every k up to 60, and 61 failed on the row count."""
+        displaced = displace_flight_in_time(
+            self.run_result.positions, DISPLACEMENT_PROBE_STEPS
+        )
+
+        # Asserted to pass, so the rejection below can only be the launch step.
+        assert_positions_match(
+            self,
+            post_launch_positions(displaced),
+            np.array(self.baseline["rocket_position_downsampled"], dtype=float),
+            "rocket",
+            ROW_COUNT_ABS_TOL,
+        )
+
+        # Matched on the message, not just the type: ``launch_step`` raises
+        # AssertionError for its own input guards too. Dropping the tail trim in
+        # ``displace_flight_in_time`` left this passing on "6012 entries, 6022".
+        with self.assertRaisesRegex(AssertionError, "launched at step"):
+            assert_launch_step_matches(
+                self,
+                launch_step(displaced, self.run_result.record_step),
+                self.baseline["launch_step"],
+                STEP_COUNT_ABS_TOL,
+            )
 
 
 if __name__ == "__main__":
