@@ -428,8 +428,15 @@ def pack_for_submission(eval_cfg, env, scenario_parameters):
     # later runs `dill.loads` on it.
     _write_atomically(
         out_path,
+        # `allow_nan=False` last, as the boundary rather than the only guard.
+        # The default writes bare `NaN`, which is not JSON, so anything a future
+        # field slips past `_json_safe` would leave here as an invalid file.
         lambda file: json.dump(
-            _json_safe(submission), file, cls=RocketPyEncoder, allow_pickle=False
+            _json_safe(submission),
+            file,
+            cls=RocketPyEncoder,
+            allow_pickle=False,
+            allow_nan=False,
         ),
         mode="w",
         encoding="utf-8",

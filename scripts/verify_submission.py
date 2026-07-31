@@ -67,6 +67,11 @@ _TRAJECTORY_OFFSET = 1
 # and anything approaching the balloon radius is a different trajectory.
 DEFAULT_TOLERANCE_METRES = 1e-6
 
+# The submission formats this file describes. 1 is what
+# `build_submission_payload` writes; 0 is the pickle-era payload, whose sections
+# are the same ones, so refusing it would only stop old files being checked.
+_SUPPORTED_FORMAT_VERSIONS = (0, 1)
+
 
 class Finding:
     """One thing that was checked, and what it showed."""
@@ -384,7 +389,10 @@ def _release_eligibility(release_at_step, initial_status, steps):
 def check_balloon_trajectories(
     submission, tolerance, trusted_positions, flights, release_at_step
 ):
-    """The main check: every recorded balloon state came out of the simulator.
+    """The main check: every recorded balloon position came out of the simulator.
+
+    Positions, not the whole six-wide state. The velocities come out of the same
+    integration and add nothing a position difference would not already show.
 
     ``canonical`` is the scenario as shipped, never the copy in the submission.
     Regenerating from the submitted parameters would let the file supply its own
@@ -931,21 +939,53 @@ def _velocity_matches_the_path(position, velocity, time_step):
     return findings
 
 
+def _format_version_findings(submission):
+    """The protocol the rest of this file is written against.
+
+    A file with no version reaches every check below as though it were one of
+    the formats they describe. 0 and 1 carry the same sections, so both are
+    read; anything else was made by something this does not know about.
+    """
+    version = submission.get("format_version")
+    supported = ", ".join(str(v) for v in _SUPPORTED_FORMAT_VERSIONS)
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version not in _SUPPORTED_FORMAT_VERSIONS
+    ):
+        return [
+            Finding(
+                "submission format version",
+                False,
+                f"format_version is {version!r}, and this reads {supported}",
+            )
+        ]
+    return [Finding("submission format version", True, f"format_version {version}")]
+
+
 def verify(submission, tolerance):
+    if not isinstance(submission, Mapping):
+        return [Finding("structure", False, "the submission is not an object")]
+    prefix = _format_version_findings(submission)
+    if not all(finding.ok for finding in prefix):
+        return prefix
     for key in ("balloon_world_data", "leaderboard_info"):
         if key not in submission:
-            return [Finding("structure", False, f"submission has no {key!r}")]
+            return prefix + [Finding("structure", False, f"submission has no {key!r}")]
     world = submission["balloon_world_data"]
     for key in ("trajectories", "scenario_parameters", "balloon_release_at_step"):
         if key not in world:
-            return [Finding("structure", False, f"balloon_world_data has no {key!r}")]
+            return prefix + [
+                Finding("structure", False, f"balloon_world_data has no {key!r}")
+            ]
     if not world["trajectories"]:
-        return [Finding("structure", False, "the submission records no steps")]
+        return prefix + [Finding("structure", False, "the submission records no steps")]
 
     # First, because everything below is measured against it. A submission that
     # names a scenario this repository does not ship, or whose parameters are
     # not the shipped ones, is reported here rather than checked against itself.
-    findings, canonical = check_scenario_is_official(submission)
+    scenario_findings, canonical = check_scenario_is_official(submission)
+    findings = prefix + scenario_findings
     if canonical is None:
         # Nothing to measure eligibility against, so run only what needs no
         # scenario at all.
@@ -961,8 +1001,13 @@ def verify(submission, tolerance):
 
     # Before the balloons, because it needs nothing from them and it is what
     # says the rocket path is worth comparing anything against. Also before
-    # the rebuild below, so a path that is not a trajectory costs nothing.
-    findings += check_the_rocket_path_is_a_trajectory(submission, canonical)
+    # the rebuild below, so a path that is not a trajectory costs nothing. The
+    # comment said that before the return existed, and the rebuild ran anyway:
+    # a malformed file paid for a hundred flights it was never going to survive.
+    rocket_path = check_the_rocket_path_is_a_trajectory(submission, canonical)
+    findings += rocket_path
+    if not all(finding.ok for finding in rocket_path):
+        return findings
 
     # Once. Rebuilding it runs the balloon Monte Carlo, which for scenario 1 is
     # a hundred flights, and it was being paid for twice per submission.
