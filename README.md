@@ -286,8 +286,8 @@ To generate the required .json file for submission, please follow these steps:
 2. Edit [eval_cfg.yaml](./BalloonPoppingGymEnv/evaluation/configs/example_eval_cfg.yaml)
 
     ```yaml
-    team_name: example
-    team_secret: 3b4b84252bc53eb1f4d8ea008a9243040088e71a1f1fd7a9ccfe203f9c9cb164
+    team_name: your-team-name
+    team_secret: paste-the-secret-the-organizers-emailed-you
     leaderboard_submission: true
     ```
 
