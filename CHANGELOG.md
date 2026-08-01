@@ -10,6 +10,12 @@ to the pull request that made the change.
 
 ## [Unreleased]
 
+### Security
+
+- The example configuration and the README carried a working team secret. They
+  carry a placeholder now, so the file says what to paste rather than shipping
+  something that already works (#137).
+
 ### Changed
 
 - An ignored action field says why it was ignored. The log named the field and
