@@ -5,16 +5,16 @@
 
 本 demo 的三個檔案：
 
-- Agent：[`ten_balloon_agent.py`](../../../BalloonPoppingGymEnv/agents/ten_balloon_agent.py)
-- Config：[`workshop_ten_balloon.yaml`](../../../BalloonPoppingGymEnv/evaluation/configs/workshop_ten_balloon.yaml)
+- Agent：[`1_s0_ten_balloon_agent.py`](../../../BalloonPoppingGymEnv/agents/1_s0_ten_balloon_agent.py)
+- Config：[`1_s0_ten_balloon.yaml`](../../../BalloonPoppingGymEnv/evaluation/configs/1_s0_ten_balloon.yaml)
 - 教材：本 README
 
 先比較兩個 Agent，會比從頭閱讀更容易看懂：
 
 ```shell
 git diff --no-index \
-  BalloonPoppingGymEnv/agents/workshop_agent.py \
-  BalloonPoppingGymEnv/agents/ten_balloon_agent.py
+  BalloonPoppingGymEnv/agents/0_s0_vertical_baseline_agent.py \
+  BalloonPoppingGymEnv/agents/1_s0_ten_balloon_agent.py
 ```
 
 ## 0. 物理：控制的其實是推力方向
@@ -82,7 +82,7 @@ state、gyro feedback。確認發射方向與油門仍和 Demo 1 相同。
 
 ```shell
 uv run --no-sync python BalloonPoppingGymEnv/evaluation/evaluate.py \
-  BalloonPoppingGymEnv/evaluation/configs/workshop_ten_balloon.yaml
+  BalloonPoppingGymEnv/evaluation/configs/1_s0_ten_balloon.yaml
 ```
 
 結尾應看到：

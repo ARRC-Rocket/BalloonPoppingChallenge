@@ -1,9 +1,21 @@
+import importlib.util
 import unittest
+from pathlib import Path
 
 import numpy as np
 
-from BalloonPoppingGymEnv.agents.scenario_1_one_balloon_agent import OneBalloonAgent
 from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
+
+AGENT_PATH = (
+    Path(__file__).parents[1]
+    / "BalloonPoppingGymEnv"
+    / "agents"
+    / "2_s1_one_balloon_agent.py"
+)
+AGENT_SPEC = importlib.util.spec_from_file_location("workshop_s1_agent", AGENT_PATH)
+AGENT_MODULE = importlib.util.module_from_spec(AGENT_SPEC)
+AGENT_SPEC.loader.exec_module(AGENT_MODULE)
+OneBalloonAgent = AGENT_MODULE.OneBalloonAgent
 
 
 class TestOneBalloonAgent(unittest.TestCase):

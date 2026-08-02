@@ -1,6 +1,6 @@
 scenario_number: 0
 render_mode: null
-agent_module_path: "./BalloonPoppingGymEnv/agents/ten_balloon_agent.py"
+agent_module_path: "./BalloonPoppingGymEnv/agents/1_s0_ten_balloon_agent.py"
 agent_class_name: "TenBalloonRateControlAgent"
 agent_name: "Workshop Ten Balloon Rate Control"
 agent_kwargs:

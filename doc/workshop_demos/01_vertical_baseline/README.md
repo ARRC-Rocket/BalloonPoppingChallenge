@@ -5,8 +5,8 @@ action、由 evaluator 計分」的完整流程。固定 seed 的預期結果是
 
 本 demo 的三個檔案：
 
-- Agent：[`workshop_agent.py`](../../../BalloonPoppingGymEnv/agents/workshop_agent.py)
-- Config：[`workshop_vertical_baseline.yaml`](../../../BalloonPoppingGymEnv/evaluation/configs/workshop_vertical_baseline.yaml)
+- Agent：[`0_s0_vertical_baseline_agent.py`](../../../BalloonPoppingGymEnv/agents/0_s0_vertical_baseline_agent.py)
+- Config：[`0_s0_vertical_baseline.yaml`](../../../BalloonPoppingGymEnv/evaluation/configs/0_s0_vertical_baseline.yaml)
 - 教材：本 README
 
 ## 0. 物理：為什麼火箭會向上飛？
@@ -70,7 +70,7 @@ Python。
 
 ```shell
 uv run --no-sync python BalloonPoppingGymEnv/evaluation/evaluate.py \
-  BalloonPoppingGymEnv/evaluation/configs/workshop_vertical_baseline.yaml
+  BalloonPoppingGymEnv/evaluation/configs/0_s0_vertical_baseline.yaml
 ```
 
 結尾應看到：

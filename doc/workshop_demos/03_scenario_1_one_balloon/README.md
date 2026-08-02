@@ -6,8 +6,8 @@
 
 本 demo 的三個主要檔案：
 
-- Agent：[`scenario_1_one_balloon_agent.py`](../../../BalloonPoppingGymEnv/agents/scenario_1_one_balloon_agent.py)
-- Config：[`workshop_scenario_1_one_balloon.yaml`](../../../BalloonPoppingGymEnv/evaluation/configs/workshop_scenario_1_one_balloon.yaml)
+- Agent：[`2_s1_one_balloon_agent.py`](../../../BalloonPoppingGymEnv/agents/2_s1_one_balloon_agent.py)
+- Config：[`2_s1_one_balloon.yaml`](../../../BalloonPoppingGymEnv/evaluation/configs/2_s1_one_balloon.yaml)
 - 教材：本 README
 
 這不是把 6-balloon 競賽 Agent 換一個數字。原競賽 Agent 約 1,158 行，包含多目標
@@ -91,8 +91,8 @@ GNSS position/velocity ───────────────────
 
 ```shell
 git diff --no-index \
-  BalloonPoppingGymEnv/evaluation/configs/workshop_ten_balloon.yaml \
-  BalloonPoppingGymEnv/evaluation/configs/workshop_scenario_1_one_balloon.yaml
+  BalloonPoppingGymEnv/evaluation/configs/1_s0_ten_balloon.yaml \
+  BalloonPoppingGymEnv/evaluation/configs/2_s1_one_balloon.yaml
 ```
 
 最重要的差異是 `scenario_number: 1`、Agent class 與延後的 launch time。先讓學員
@@ -135,7 +135,7 @@ feedback。這段的學習目標是理解資料如何流動，不要求現場從
 
 ```shell
 uv run --no-sync python BalloonPoppingGymEnv/evaluation/evaluate.py \
-  BalloonPoppingGymEnv/evaluation/configs/workshop_scenario_1_one_balloon.yaml
+  BalloonPoppingGymEnv/evaluation/configs/2_s1_one_balloon.yaml
 ```
 
 第一次執行 Scenario 1 會先建立 100 條氣球 Monte Carlo 軌跡，輸出較多且耗時較長。

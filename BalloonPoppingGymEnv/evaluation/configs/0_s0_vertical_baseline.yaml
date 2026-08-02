@@ -1,6 +1,6 @@
 scenario_number: 0
 render_mode: "matplotlib"
-agent_module_path: "./BalloonPoppingGymEnv/agents/workshop_agent.py"
+agent_module_path: "./BalloonPoppingGymEnv/agents/0_s0_vertical_baseline_agent.py"
 agent_class_name: "VerticalBaselineAgent"
 agent_name: "Workshop Vertical Baseline"
 agent_kwargs:
