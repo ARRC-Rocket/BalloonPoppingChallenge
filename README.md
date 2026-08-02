@@ -258,23 +258,70 @@ Keywords: GNC, autonomous rocket, optimization, path-finding.
 
 ### Competition Details
 
-- Sign up for the competition: `[TASTI 2026 Registration]()`
+- Sign up for the competition: Check [Official TASA Website](https://www.tasa.org.tw/en-US/events/detail/273c7841-ce66-400a-a501-1bf0f7fdc17e), and [TASTI 2026 Registration Form](https://docs.google.com/forms/d/e/1FAIpQLSegCqnI4t-R_6Nxtbkf-XJ-V3L5-_DlyDxmSU_FY2Qa1lvLXQ/viewform)
 - Competition timeline:
-  - **Apr dd, 2026**: Competition announcement, open applications, beta release of rules and software
-  - **May - Aug, 2026**: Release software updates, update rules, hold monthly meetings, online leader boards
-  - **Aug dd, 2026**: Release final software and rules, close applications
-  - **Sep dd, 2026**: Online elimination rounds
-  - **Oct dd, 2026**: Announce finalists
-  - **Nov dd, 2026 @ TASTI**: Finalist presentations and live demos (<2 hours total)
 
-### Competition Rules
+    |Event|Time|
+    |---|---|
+    |5th Monthly Technical Workshop|Aug. 29 (Sat.) GMT+8 19:00-21:00|
+    |Registration Deadline|Aug. 31 (Mon.) GMT+8 23:55|
+    |Leaderboard submission deadline|Sep. 26 (Sat.)  GMT+8 00:05|
+    |Online Qualification Round|Oct. 10 (Sat.) (Time TBD)|
+    |On-site Final @ TASTI|Nov. (8/9/10/11) (Date&Time TBD)|
 
-- The participant will develop agents in [/agents folder](./BalloonPoppingGymEnv/agents/) to control a rocket.
-- The agent will be initialized with the given parameters of each scenario.
-- At each time step, the agent should only take the observations provided by the environment to output control commands (e.g., launch, roll, throttle and TVC commands). The agent should not have access to any other information about the environment or the simulator.
-- Other than the agent, all other components of the simulator are fixed and provided by the organizer. Participants are not allowed to modify any other part of the codebase for the evaluation.
-- Questions about the rules and software can be asked in the [GitHub Issues](https://github.com/ARRC-Rocket/BalloonPoppingChallenge/issues). The organizer will hold regular meetings to answer questions and provide updates.
-- Code suggestions, contributions, and bug reports to the codebase are highly welcomed. Please submit a pull request or open an issue for discussion.
+### Competition Rules (subject to change)
+
+- **Score**:
+  - For all rounds, score is defined by the number of balloons popped. If two teams have the same number of balloons popped, the team with less time at the last balloon popped is the winner.
+
+- **Leaderboard Round**:
+  - Top ten teams with highest score on leaderboard will enter qualification round.
+  - Time: Now to Sep. 26th
+  - Parameters: Scenario `#1` on releases after [v0.1.1](https://github.com/ARRC-Rocket/BalloonPoppingChallenge/releases/tag/v0.1.1)
+  - Random seed: any random seed
+
+- **Qualification Round**:
+  - Top ten teams will compete in qualification round for the chance to enter final event at TASTI.
+  - Each team has 2 online live evaluations. Score is determined by the sum of both evaluations.
+  - Time: Online meeting on Oct. 10th
+  - Parameters: Scenario `#4` (might have sensor noise, actuator dynamics, and gust). Will be released on Sep. 26th.
+  - Random seed: Seeds will be generated for each team before their live demo.
+
+- **Final Round**:
+  - Top 3-5 teams will compete in final event in person at TASTI.
+  - Time: Nov. 8-11th (TBD)
+  - Parameters: Scenario `#4` (might have sensor noise, actuator dynamics, and gust). Will be released on Oct. 17th.
+  - Random seed: Seeds will be generated for each team before their live demo.
+  
+- **Leaderboard Round Details**:
+  - Leaderboard deadline is Sep. 26th GMT+8 00:05, where the top 10 teams will enter qualification round.
+  - Parameters are the scenario `#1` released in v0.1.1. Participants can start submitting their scores to leaderboard
+  - Any random seed can be used.
+    - Be careful: overfitting your agent on one random seed can help you enter qualification round. However, this will be a bad strategy in qualification and final rounds.
+
+- **Qualification Round Details**:
+  - Top 3-5 teams in qualification round will enter final event
+  - Parameters for qualification round will be released on Sep. 26th.
+    - Parameters might include sensor noise, actuator dynamics, and gust (Scenario `#4`).
+    - Participants have two weeks to train the agent for qualification round parameters.
+  - An online live event will be held on Oct. 10th. Each team will have two live evaluations.
+  - Random seeds will be drawn by organizer right before each evaluation.
+    - Each team and each evaluation will use a different seed.
+    - No chance to tune your agent for random seed.
+  - Score is the sum of both evaluations.
+    - If two teams have the same number of balloons popped, the minimal time of final balloon popped wins.
+
+- **Final Round Details**:
+  - Details will be communicated with the finalists after qualification event.
+
+- **Development Details**:
+  - **Honor code**: if you’re doing something clever to the code base to improve agent performance, you might be cheating. When in doubt, ask organizer for clarification. -- **Cheaters will be disqualified**
+  - The participant will develop agents in /agents folder to control a rocket.
+  - The agent will be initialized with the given parameter of each scenario and user kwarg defined in cfg.ymal.
+  - At each time step, the agent should only take the observations provided by the environment to output control commands (e.g., launch, roll, throttle and TVC commands). The agent should not have access to any other information about the environment or the simulator.
+  - Other than the agent, all other components of the simulator are fixed and provided by the organizer. Participants are not allowed to modify any other part of the codebase for the evaluation.
+  - Participants of qualification and final rounds shall share the source code of agents with the organizer for examination. Source code includes codes to train the agent.
+    - (The property and rights of the software belongs to participants)
 
 ### Competition Leaderboard
 
@@ -304,32 +351,15 @@ Exact scenario for elimination rounds and final rounds will be announced later. 
 
 |# | Name | 🚀 Actuator Response | 🚀 Sensor Noise | 🌬️ Wind | 🎈 Number | 🎈 Release Interval (sec) | 🎈 Initial Position | 🎈 Position Observation | 🎈 Velocity Observation |
 |---|---|---|---|---|---|---|---|---|---|
-|#0         |Hello World       |Ideal       |No             |None                  |10     |N/A    |z_i = elevation + 10 + 40i (i = 0..n-1), i.e. altitude above sea level| Static at initial position           | no velocity                        |
-|#1         |Random Balloon    |Ideal       |No             |Yes                   |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
-|#2 (TBD)   |Noisy Sensor      |Ideal       |Yes            |Yes                   |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
-|#3 (TBD)   |Clumsy Actuator   |LPF, random |Yes            |Yes                   |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
-|#4 (TBD)   |Bad Weather       |LPF, random |Yes            |Yes, random magnitude |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
-|#5 (TBD)   |Sensor Drop off   |LPF, random |Yes & drop-off |Yes, random magnitude |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
-|#6 (TBD)   |Find the Balloon  |LPF, random |Yes & drop-off |Yes, random magnitude |100    |Random |Random at ground            |Partial observation at current step   |Partial observation at current step |
-|#7 (TBD)   |Balloon Recovery
+|`#0`         |Hello World       |Ideal       |No             |None                  |10     |N/A    |z_i = elevation + 10 + 40i (i = 0..n-1), i.e. altitude above sea level| Static at initial position           | no velocity                        |
+|`#1`        |Random Balloon    |Ideal       |No             |Yes                   |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
+|`#2` (TBD)   |Noisy Sensor      |Ideal       |Yes            |Yes                   |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
+|`#3` (TBD)   |Clumsy Actuator   |LPF, random |Yes            |Yes                   |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
+|`#4` (TBD)   |Bad Weather       |LPF, random |Yes            |Yes, random magnitude |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
+|`#5` (TBD)   |Sensor Drop off   |LPF, random |Yes & drop-off |Yes, random magnitude |100    |Random |Random at ground            |Full observation at current step      |Full observation at current step    |
+|`#6` (TBD)   |Find the Balloon  |LPF, random |Yes & drop-off |Yes, random magnitude |100    |Random |Random at ground            |Partial observation at current step   |Partial observation at current step |
+|`#7` (TBD)   |Balloon Recovery
 
 ### Release Notes
 
-- **v0.0.1**: Initial release of the codebase and rules.
-- **v0.0.2**:
-  - Fix/maintain:
-    - Fix json file read encoding issue Fix evaluate's encode problem #5
-    - Make vpython an optional, lazily-imported render dependency (Make vpython an optional, lazily-imported render dependency #15)
-    - Clean up dead code, redundant calls, and unused imports (Clean up dead code, redundant calls, and unused imports #7)
-    - Move Monte Carlo output out of the package directory (Move Monte Carlo output out of the package directory #22)
-    - Add GitHub Actions CI workflow (#23)
-  - Update:
-    - Update to return reward from each step only. Total count of popped balloon is returned in info. Reward returned every step is the cumulative pop count, not the per-step delta #10 (ENH: Return reward of each step #12)
-    - Skip Monte Carlo balloon simulation for scenario 0 (Skip Monte Carlo balloon simulation for scenario 0 #18)
-    - Render every balloon in the vpython renderer (#27)
-  - New:
-    - Add uv as the recommended environment setup path (Add uv as the recommended environment setup path #20)
-    - Add standardized issue templates (Add standardized issue templates #25)
-    - ENH: Add architecture for post sim graphics (#28)
-    - ENH: Add leaderboard submission functions (#31)
-    - Add gust to balloon_world environment (#32)
+see [CHANGELOG.md](./CHANGELOG.md) or [Release Notes](https://github.com/ARRC-Rocket/BalloonPoppingChallenge/releases)
