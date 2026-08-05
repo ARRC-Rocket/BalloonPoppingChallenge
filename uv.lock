@@ -459,6 +459,10 @@ dev = [
     { name = "pytest-cov" },
     { name = "ruff" },
 ]
+notebook = [
+    { name = "ipykernel" },
+    { name = "jupyterlab" },
+]
 vpython = [
     { name = "vpython" },
 ]
@@ -467,6 +471,8 @@ vpython = [
 requires-dist = [
     { name = "activerocketpy", extras = ["all"], editable = "ActiveRocketPy" },
     { name = "gymnasium", specifier = ">=1.2.3" },
+    { name = "ipykernel", marker = "extra == 'notebook'", specifier = ">=6.0" },
+    { name = "jupyterlab", marker = "extra == 'notebook'", specifier = ">=4.0" },
     { name = "packaging", marker = "extra == 'dev'", specifier = ">=23.0" },
     { name = "pymap3d", specifier = ">=3.2.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
@@ -476,7 +482,7 @@ requires-dist = [
     { name = "setuptools", specifier = "<82.0.0" },
     { name = "vpython", marker = "extra == 'vpython'", specifier = ">=7.6.5" },
 ]
-provides-extras = ["dev", "vpython"]
+provides-extras = ["dev", "vpython", "notebook"]
 
 [[package]]
 name = "beautifulsoup4"
