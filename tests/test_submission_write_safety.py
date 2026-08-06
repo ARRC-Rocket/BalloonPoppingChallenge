@@ -37,6 +37,10 @@ class _FakeEnv:
     """
 
     _popped_count = 7
+
+    _episode_ending = "terminated"
+
+    current_step = 123
     np_random_seed = 0
     trajectories = [{"time": 0.0}]
     _balloon_release_at_step = [0]

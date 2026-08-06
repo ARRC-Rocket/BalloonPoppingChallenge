@@ -37,6 +37,8 @@ class TestPackForSubmission(unittest.TestCase):
         # with dill under the default allow_pickle=True.
         self.env = SimpleNamespace(
             _popped_count=5,
+            _episode_ending="terminated",
+            current_step=123,
             np_random_seed=0,
             trajectories=[
                 {

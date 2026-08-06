@@ -267,6 +267,7 @@ class BalloonPoppingEnv(gym.Env):
         self.current_step = 0
         self.num_timesteps = 0
         self._popped_count = 0
+        self._episode_ending = None
         self._balloon_release_at_step = None
 
         self._rocketpy_env = None
@@ -410,6 +411,7 @@ class BalloonPoppingEnv(gym.Env):
         self.current_step = 0
         self.num_timesteps = self._balloon_flights.shape[2]
         self._popped_count = 0
+        self._episode_ending = None
 
         observation = self._get_obs()
         info = self._get_info()
@@ -531,6 +533,13 @@ class BalloonPoppingEnv(gym.Env):
         # out of time is absorbing.
         terminated = _rocket_finished
         truncated = _timeout
+        # Which of the two is the scoring question in #104 and not settled here.
+        # This only records that the episode reached an ending at all, so a run
+        # that stopped part way through cannot be packed as a finished one.
+        if terminated:
+            self._episode_ending = "terminated"
+        elif truncated:
+            self._episode_ending = "truncated"
 
         # Calculate reward based on newly popped balloons at this step
         new_count = np.sum(self._balloon_status[:, 0] == 2)

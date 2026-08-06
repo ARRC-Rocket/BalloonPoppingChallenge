@@ -381,6 +381,11 @@ def build_submission_payload(eval_cfg, env, scenario_parameters, packed_at):
             "agent_name": eval_cfg["agent_name"],
             "scenario_number": eval_cfg["scenario_number"],
             "final_reward": env._popped_count,
+            # How the episode ended, and after how many steps. Without these a
+            # run stopped part way through produced a submission that looked
+            # exactly like a finished one, scored on whatever it had reached.
+            "episode_ending": env._episode_ending,
+            "steps_run": int(env.current_step),
             # The seed the run drew, not the one it was configured with.
             # `random_seed: null` is what the scenario file offers for a random
             # run, and the verifier rebuilds the balloon field from a seed.
@@ -407,6 +412,13 @@ def build_submission_payload(eval_cfg, env, scenario_parameters, packed_at):
 
 
 def pack_for_submission(eval_cfg, env, scenario_parameters):
+    if getattr(env, "_episode_ending", None) is None:
+        raise RuntimeError(
+            f"the episode never reached an ending, so there is no result to "
+            f"submit: it stopped after {getattr(env, 'current_step', 0)} steps "
+            f"with the rocket still flying. Run the evaluation to completion "
+            f"before packing."
+        )
 
     team_name = eval_cfg["team_name"]
     packed_at = datetime.now(timezone.utc)
