@@ -10,6 +10,13 @@ to the pull request that made the change.
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/render_replay.py` turns a submission into a self-contained replay
+  page that opens in any browser, so a run can be watched away from the machine
+  that produced it. The page carries neither the team secret nor the agent
+  source (#43).
+
 ### Security
 
 - The example configuration and the README carried a working team secret. They
