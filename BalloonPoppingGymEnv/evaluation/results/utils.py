@@ -381,24 +381,14 @@ def build_submission_payload(eval_cfg, env, scenario_parameters, packed_at):
             "agent_name": eval_cfg["agent_name"],
             "scenario_number": eval_cfg["scenario_number"],
             "final_reward": env._popped_count,
-            # How the episode ended, and after how many steps. Without these a
-            # run stopped part way through produced a submission that looked
-            # exactly like a finished one, scored on whatever it had reached.
             "episode_ending": env._episode_ending,
             "steps_run": int(env.current_step),
-            # The seed the run drew, not the one it was configured with.
-            # `random_seed: null` is what the scenario file offers for a random
-            # run, and the verifier rebuilds the balloon field from a seed.
             "random_seed": env.np_random_seed,
         },
         "balloon_world_data": {
             "scenario_parameters": scenario_parameters,
             "trajectories": env.trajectories,
             "balloon_release_at_step": env._balloon_release_at_step,
-            # Round tripped rather than left as text: the encoder can turn the
-            # Flight into JSON, but only as a string, so its own non-finite floats
-            # would slip past `_json_safe`. A few megabytes, so the extra pass is
-            # not worth avoiding.
             "rocket_flight": json.loads(
                 json.dumps(env._rocket_flight, cls=RocketPyEncoder, allow_pickle=False)
             ),

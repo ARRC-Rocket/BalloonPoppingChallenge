@@ -516,26 +516,14 @@ class BalloonPoppingEnv(gym.Env):
         _timeout = self.current_step >= self.num_timesteps - 1
         if _timeout:
             logger.info("Truncated: Reached max time")
-            # An agent is free never to launch, in which case there is no flight
-            # to post-process and these calls would raise instead of ending the
-            # episode.
-            if self._rocket_flight is not None:
+            if self._rocket_flight is not None:  # Agent might never launch
                 self._rocket_flight.post_process_simulation()
                 self._rocket_flight.initialize_prints_plots()
         elif _rocket_finished:
             logger.info("Terminated: Rocket flight finished")
-        # Gymnasium keeps these apart on purpose. terminated means the MDP
-        # reached a terminal state, which here is the flight ending. truncated
-        # means something outside it stopped the episode, which is what running
-        # out of precomputed horizon is. An algorithm bootstraps the value of
-        # the final state when it was truncated and does not when it terminated,
-        # so reporting the clock as termination teaches an agent that running
-        # out of time is absorbing.
+
         terminated = _rocket_finished
         truncated = _timeout
-        # Which of the two is the scoring question in #104 and not settled here.
-        # This only records that the episode reached an ending at all, so a run
-        # that stopped part way through cannot be packed as a finished one.
         if terminated:
             self._episode_ending = "terminated"
         elif truncated:
@@ -554,11 +542,7 @@ class BalloonPoppingEnv(gym.Env):
         _remainder = np.remainder(
             self.current_step, 0.1 / self.simulation_parameters["time_step"]
         )  # print every 0.1 sec
-        # Both endings, not only termination. This used to read ``terminated``
-        # while that flag covered the clock as well, so an episode ending on the
-        # horizon always drew its last frame. Splitting the two causes quietly
-        # took that away from every truncated episode whose final step does not
-        # land on the 0.1 s cadence, which for scenario 1 is the usual ending.
+
         if _remainder == 0 or terminated or truncated:
             self._render_frame()
 
