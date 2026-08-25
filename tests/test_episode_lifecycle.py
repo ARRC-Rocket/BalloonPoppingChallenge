@@ -97,7 +97,7 @@ class TestWhatATruncatedEpisodeReports(unittest.TestCase):
 
         self.assertTrue(truncated)
         messages = [record.getMessage() for record in captured.records]
-        self.assertIn("Truncated: Reached max time", messages)
+        self.assertIn("Truncated: Reached max simulation time", messages)
         self.assertNotIn("Terminated: Reached max time", messages)
 
     def test_the_last_frame_of_a_truncated_episode_is_drawn(self):
