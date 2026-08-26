@@ -262,5 +262,66 @@ class TestSweepOriginAdvances(unittest.TestCase):
         np.testing.assert_allclose(swept_from[0], first_endpoint)
 
 
+@unittest.skipUnless(_STACK_AVAILABLE, "simulation stack not installed")
+class TestTheWallClockLimit(unittest.TestCase):
+    """The limit is on how long an episode takes to run, not to simulate.
+
+    It rules out algorithms that cannot keep up in real time, so it ends the
+    episode the way the horizon does rather than the way a finished flight does.
+    """
+
+    def _parameters(self, wall_limit):
+        parameters, _ = load_scenario_parameters(SCENARIO_NUMBER)
+        if wall_limit is None:
+            parameters["simulation"].pop("max_wall_time", None)
+        else:
+            parameters["simulation"]["max_wall_time"] = wall_limit
+        return parameters
+
+    def _idle_episode(self, parameters):
+        env = BalloonPoppingEnv(render_mode=None, parameters=parameters)
+        env.reset(seed=parameters["scenario"]["random_seed"])
+        action = _idle_action(env)
+        return env, lambda: run_episode(env, lambda _o: action)
+
+    def test_an_episode_over_the_limit_is_truncated(self):
+        """A limit far shorter than the run has to end it, and did not.
+
+        ``reset`` started the clock on ``time.time`` while ``step`` read
+        ``time.monotonic``, so the difference was about -1.8e9 on every step and
+        no episode could reach any limit.
+        """
+        env, run = self._idle_episode(self._parameters(0.05))
+
+        steps, terminated, truncated, _info = run()
+
+        self.assertTrue(truncated)
+        self.assertFalse(terminated, "the flight did not end; the clock did")
+        self.assertLess(steps, env.num_timesteps - 1, "it ran to the horizon instead")
+
+    def test_the_truncation_says_which_clock_ended_it(self):
+        """One line separates the two truncations for whoever reads the log."""
+        _env, run = self._idle_episode(self._parameters(0.05))
+
+        with self.assertLogs("BalloonPoppingGymEnv", level="INFO") as captured:
+            run()
+
+        messages = [record.getMessage() for record in captured.records]
+        self.assertTrue(
+            any(m.startswith("Truncated: Reached max wall time") for m in messages),
+            messages,
+        )
+        self.assertNotIn("Truncated: Reached max simulation time", messages)
+
+    def test_a_scenario_without_the_key_keeps_running(self):
+        """The control. A scenario file written before this is not limited."""
+        env, run = self._idle_episode(self._parameters(None))
+
+        steps, _terminated, truncated, _info = run()
+
+        self.assertTrue(truncated)
+        self.assertEqual(steps, env.num_timesteps - 1)
+
+
 if __name__ == "__main__":
     unittest.main()
