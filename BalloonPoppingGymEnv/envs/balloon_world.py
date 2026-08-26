@@ -421,8 +421,7 @@ class BalloonPoppingEnv(gym.Env):
         self.render_rocket = None
         self._render_frame()
 
-        self._start_wall_time = time.time()
-        logger.info("BalloonPoppingEnv reset at wall time %.1f", self._start_wall_time)
+        self._start_wall_time = time.monotonic()
 
         return observation, info
 
@@ -526,15 +525,14 @@ class BalloonPoppingEnv(gym.Env):
                 logger.info("Truncated: Reached max simulation time")
             elif _max_wall_time:
                 logger.info(
-                    r"Truncated: Reached max wall time at %.1f", time.monotonic()
+                    "Truncated: Reached max wall time after %.1f sec",
+                    time.monotonic() - self._start_wall_time,
                 )
             if self._rocket_flight is not None:  # Agent might never launch
                 self._rocket_flight.post_process_simulation()
                 self._rocket_flight.initialize_prints_plots()
         elif _rocket_finished:
-            logger.info(
-                "Terminated: Rocket flight finished at wall time %.1f", time.monotonic()
-            )
+            logger.info("Terminated: Rocket flight finished")
 
         terminated = _rocket_finished
         truncated = _timeout or _max_wall_time
