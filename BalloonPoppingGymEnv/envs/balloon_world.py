@@ -3,6 +3,7 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 from collections import Counter
 
 import gymnasium as gym
@@ -268,6 +269,7 @@ class BalloonPoppingEnv(gym.Env):
         self.num_timesteps = 0
         self._popped_count = 0
         self._balloon_release_at_step = None
+        self._start_wall_time = None
 
         self._rocketpy_env = None
 
@@ -419,6 +421,8 @@ class BalloonPoppingEnv(gym.Env):
         self.render_rocket = None
         self._render_frame()
 
+        self._start_wall_time = time.monotonic()
+
         return observation, info
 
     def step(self, action):
@@ -510,27 +514,28 @@ class BalloonPoppingEnv(gym.Env):
         else:
             self.trajectories.append(step_record)
 
-        # An episode is done iff reaches max time or end of trajectory
+        # An episode is done iff reaches max time, max wall time, or end of trajectory
+        _max_wall_time = (
+            time.monotonic() - self._start_wall_time
+            >= self.simulation_parameters.get("max_wall_time", float("inf"))
+        )
         _timeout = self.current_step >= self.num_timesteps - 1
-        if _timeout:
-            logger.info("Truncated: Reached max time")
-            # An agent is free never to launch, in which case there is no flight
-            # to post-process and these calls would raise instead of ending the
-            # episode.
-            if self._rocket_flight is not None:
+        if _timeout or _max_wall_time:
+            if _timeout:
+                logger.info("Truncated: Reached max simulation time")
+            elif _max_wall_time:
+                logger.info(
+                    "Truncated: Reached max wall time after %.1f sec",
+                    time.monotonic() - self._start_wall_time,
+                )
+            if self._rocket_flight is not None:  # Agent might never launch
                 self._rocket_flight.post_process_simulation()
                 self._rocket_flight.initialize_prints_plots()
         elif _rocket_finished:
             logger.info("Terminated: Rocket flight finished")
-        # Gymnasium keeps these apart on purpose. terminated means the MDP
-        # reached a terminal state, which here is the flight ending. truncated
-        # means something outside it stopped the episode, which is what running
-        # out of precomputed horizon is. An algorithm bootstraps the value of
-        # the final state when it was truncated and does not when it terminated,
-        # so reporting the clock as termination teaches an agent that running
-        # out of time is absorbing.
+
         terminated = _rocket_finished
-        truncated = _timeout
+        truncated = _timeout or _max_wall_time
 
         # Calculate reward based on newly popped balloons at this step
         new_count = np.sum(self._balloon_status[:, 0] == 2)
@@ -545,11 +550,6 @@ class BalloonPoppingEnv(gym.Env):
         _remainder = np.remainder(
             self.current_step, 0.1 / self.simulation_parameters["time_step"]
         )  # print every 0.1 sec
-        # Both endings, not only termination. This used to read ``terminated``
-        # while that flag covered the clock as well, so an episode ending on the
-        # horizon always drew its last frame. Splitting the two causes quietly
-        # took that away from every truncated episode whose final step does not
-        # land on the 0.1 s cadence, which for scenario 1 is the usual ending.
         if _remainder == 0 or terminated or truncated:
             self._render_frame()
 

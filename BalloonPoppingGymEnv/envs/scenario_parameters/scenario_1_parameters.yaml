@@ -20,6 +20,7 @@ environment:
 simulation:
   time_step: 0.01 # (sec) time step for Gym environment, ActiveRocketPy controller, and balloon simulation
   max_time: 150 # (sec) maximum simulation time of the scenario
+  max_wall_time: 600 # (sec) maximum wall time an episode should complete
 
 # Balloon model and uncertainty parameters
 balloon:
