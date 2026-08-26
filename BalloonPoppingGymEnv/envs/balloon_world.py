@@ -517,22 +517,24 @@ class BalloonPoppingEnv(gym.Env):
 
         # An episode is done iff reaches max time, max wall time, or end of trajectory
         _max_wall_time = (
-            time.time() - self._start_wall_time
-            >= self.simulation_parameters["max_wall_time"]
+            time.monotonic() - self._start_wall_time
+            >= self.simulation_parameters.get("max_wall_time", float("inf"))
         )
         _timeout = self.current_step >= self.num_timesteps - 1
         if _timeout or _max_wall_time:
             if _timeout:
-                logger.info(r"Truncated: Reached max simulation time")
+                logger.info("Truncated: Reached max simulation time")
             elif _max_wall_time:
                 logger.info(
-                    r"Truncated: Reached max wall time at %.1f sec", time.time()
+                    r"Truncated: Reached max wall time at %.1f", time.monotonic()
                 )
             if self._rocket_flight is not None:  # Agent might never launch
                 self._rocket_flight.post_process_simulation()
                 self._rocket_flight.initialize_prints_plots()
         elif _rocket_finished:
-            logger.info("Terminated: Rocket flight finished")
+            logger.info(
+                "Terminated: Rocket flight finished at wall time %.1f", time.monotonic()
+            )
 
         terminated = _rocket_finished
         truncated = _timeout or _max_wall_time
