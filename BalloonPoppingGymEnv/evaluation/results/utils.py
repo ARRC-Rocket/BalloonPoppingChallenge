@@ -381,19 +381,14 @@ def build_submission_payload(eval_cfg, env, scenario_parameters, packed_at):
             "agent_name": eval_cfg["agent_name"],
             "scenario_number": eval_cfg["scenario_number"],
             "final_reward": env._popped_count,
-            # The seed the run drew, not the one it was configured with.
-            # `random_seed: null` is what the scenario file offers for a random
-            # run, and the verifier rebuilds the balloon field from a seed.
+            "episode_ending": env._episode_ending,
+            "steps_run": int(env.current_step),
             "random_seed": env.np_random_seed,
         },
         "balloon_world_data": {
             "scenario_parameters": scenario_parameters,
             "trajectories": env.trajectories,
             "balloon_release_at_step": env._balloon_release_at_step,
-            # Round tripped rather than left as text: the encoder can turn the
-            # Flight into JSON, but only as a string, so its own non-finite floats
-            # would slip past `_json_safe`. A few megabytes, so the extra pass is
-            # not worth avoiding.
             "rocket_flight": json.loads(
                 json.dumps(env._rocket_flight, cls=RocketPyEncoder, allow_pickle=False)
             ),
@@ -407,6 +402,13 @@ def build_submission_payload(eval_cfg, env, scenario_parameters, packed_at):
 
 
 def pack_for_submission(eval_cfg, env, scenario_parameters):
+    if getattr(env, "_episode_ending", None) is None:
+        raise RuntimeError(
+            f"the episode never reached an ending, so there is no result to "
+            f"submit: it stopped after {getattr(env, 'current_step', 0)} steps "
+            f"with the rocket still flying. Run the evaluation to completion "
+            f"before packing."
+        )
 
     team_name = eval_cfg["team_name"]
     packed_at = datetime.now(timezone.utc)

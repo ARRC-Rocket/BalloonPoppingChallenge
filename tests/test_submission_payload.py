@@ -61,6 +61,10 @@ class _FakeEnv:
     """The attributes ``pack_for_submission`` reads, and nothing else."""
 
     _popped_count = 3
+
+    _episode_ending = "terminated"
+
+    current_step = 123
     np_random_seed = 0
     trajectories = [{"balloon_states": [[0.0] * 6]}]
     _balloon_release_at_step = [0]

@@ -268,6 +268,7 @@ class BalloonPoppingEnv(gym.Env):
         self.current_step = 0
         self.num_timesteps = 0
         self._popped_count = 0
+        self._episode_ending = None
         self._balloon_release_at_step = None
         self._start_wall_time = None
 
@@ -412,6 +413,7 @@ class BalloonPoppingEnv(gym.Env):
         self.current_step = 0
         self.num_timesteps = self._balloon_flights.shape[2]
         self._popped_count = 0
+        self._episode_ending = None
 
         observation = self._get_obs()
         info = self._get_info()
@@ -536,6 +538,10 @@ class BalloonPoppingEnv(gym.Env):
 
         terminated = _rocket_finished
         truncated = _timeout or _max_wall_time
+        if terminated:
+            self._episode_ending = "terminated"
+        elif truncated:
+            self._episode_ending = "truncated"
 
         # Calculate reward based on newly popped balloons at this step
         new_count = np.sum(self._balloon_status[:, 0] == 2)

@@ -184,6 +184,8 @@ class TestTheWriterRefusesNonFiniteValues(unittest.TestCase):
     def _pack(self, tmp, sanitize):
         env = SimpleNamespace(
             _popped_count=1,
+            _episode_ending="terminated",
+            current_step=123,
             np_random_seed=0,
             trajectories=[{"rocket_states": [float("nan")]}],
             _balloon_release_at_step=[0],
