@@ -3,6 +3,7 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 from collections import Counter
 
 import gymnasium as gym
@@ -269,6 +270,7 @@ class BalloonPoppingEnv(gym.Env):
         self._popped_count = 0
         self._episode_ending = None
         self._balloon_release_at_step = None
+        self._start_wall_time = None
 
         self._rocketpy_env = None
 
@@ -421,6 +423,8 @@ class BalloonPoppingEnv(gym.Env):
         self.render_rocket = None
         self._render_frame()
 
+        self._start_wall_time = time.monotonic()
+
         return observation, info
 
     def step(self, action):
@@ -512,10 +516,20 @@ class BalloonPoppingEnv(gym.Env):
         else:
             self.trajectories.append(step_record)
 
-        # An episode is done iff reaches max time or end of trajectory
+        # An episode is done iff reaches max time, max wall time, or end of trajectory
+        _max_wall_time = (
+            time.monotonic() - self._start_wall_time
+            >= self.simulation_parameters.get("max_wall_time", float("inf"))
+        )
         _timeout = self.current_step >= self.num_timesteps - 1
-        if _timeout:
-            logger.info("Truncated: Reached max time")
+        if _timeout or _max_wall_time:
+            if _timeout:
+                logger.info("Truncated: Reached max simulation time")
+            elif _max_wall_time:
+                logger.info(
+                    "Truncated: Reached max wall time after %.1f sec",
+                    time.monotonic() - self._start_wall_time,
+                )
             if self._rocket_flight is not None:  # Agent might never launch
                 self._rocket_flight.post_process_simulation()
                 self._rocket_flight.initialize_prints_plots()
@@ -523,7 +537,7 @@ class BalloonPoppingEnv(gym.Env):
             logger.info("Terminated: Rocket flight finished")
 
         terminated = _rocket_finished
-        truncated = _timeout
+        truncated = _timeout or _max_wall_time
         if terminated:
             self._episode_ending = "terminated"
         elif truncated:
@@ -542,7 +556,6 @@ class BalloonPoppingEnv(gym.Env):
         _remainder = np.remainder(
             self.current_step, 0.1 / self.simulation_parameters["time_step"]
         )  # print every 0.1 sec
-
         if _remainder == 0 or terminated or truncated:
             self._render_frame()
 
