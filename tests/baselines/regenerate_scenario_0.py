@@ -12,10 +12,8 @@ so it must be regenerated whenever the rocket physics is intentionally updated.
 from pathlib import Path
 
 from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
-
 from tests.baselines.baseline_io import write_baseline
 from tests.position_tolerance import launch_step
-
 from tests.test_scenario0_regression import (
     AGENT_KWARGS,
     DOWNSAMPLE_STRIDE,

@@ -15,8 +15,8 @@ iteration to keep this guard small and its tolerances simple.
 """
 
 import json
-from dataclasses import dataclass
 import unittest
+from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
 

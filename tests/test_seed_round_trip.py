@@ -32,6 +32,7 @@ _STACK_AVAILABLE = find_spec("rocketpy") is not None
 
 if _STACK_AVAILABLE:
     import verify_submission as verifier
+
     from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
     from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
     from BalloonPoppingGymEnv.evaluation.results.utils import build_submission_payload

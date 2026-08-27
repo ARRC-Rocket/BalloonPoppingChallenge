@@ -36,21 +36,21 @@ _STACK_AVAILABLE = find_spec("rocketpy") is not None
 
 if _STACK_AVAILABLE:
     import yaml
+    from verify_submission import (
+        CUMULATIVE_DRIFT_TOLERANCE_METRES,
+        DEFAULT_TOLERANCE_METRES,
+        VELOCITY_CONSISTENCY_TOLERANCE,
+        _load_canonical_scenario,
+        _release_eligibility,
+        check_claimed_pops_are_reachable,
+        check_internal_consistency,
+        check_the_rocket_path_is_a_trajectory,
+        verify,
+    )
 
     from BalloonPoppingGymEnv.agents.example_agents import AttitudeRateControlAgent
     from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
     from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
-    from verify_submission import (
-        DEFAULT_TOLERANCE_METRES,
-        CUMULATIVE_DRIFT_TOLERANCE_METRES,
-        VELOCITY_CONSISTENCY_TOLERANCE,
-        _release_eligibility,
-        check_the_rocket_path_is_a_trajectory,
-        _load_canonical_scenario,
-        check_claimed_pops_are_reachable,
-        check_internal_consistency,
-        verify,
-    )
 
 
 def _build_submission(steps=40, balloons=1):

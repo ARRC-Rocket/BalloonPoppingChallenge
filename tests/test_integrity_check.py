@@ -10,8 +10,8 @@ skip, but a broken import inside this package is a failure and must stay loud.
 """
 
 import glob
-import json
 import http.client
+import json
 import os
 import unittest
 import urllib.error

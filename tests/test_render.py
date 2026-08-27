@@ -16,12 +16,12 @@ package itself is mocked, so it does not need to be installed.
 
 import importlib.util
 import sys
-
-import numpy as np
-from dataclasses import dataclass
 import unittest
+from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCENARIO_0_PARAMS = (

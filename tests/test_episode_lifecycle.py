@@ -13,11 +13,11 @@ skip, but a broken import inside this package is a failure and must stay loud.
 """
 
 import unittest
-
-from tests.bounded_episode import run_episode
 from importlib.util import find_spec
 
 import numpy as np
+
+from tests.bounded_episode import run_episode
 
 _STACK_AVAILABLE = find_spec("rocketpy") is not None
 
