@@ -20,8 +20,9 @@ Then set up the environment with **uv** (recommended) or with **pip**.
 
 ### Shell and path conventions
 
-The commands below use `/` in repository paths. This works in PowerShell,
-Command Prompt, macOS, and Linux; you do not need to rewrite paths with `\`.
+The commands below prefer `/` for repository paths so they can be copied across
+PowerShell, macOS, and Linux. For Windows Command Prompt (cmd.exe) and for
+virtual-environment activation scripts, keep the `\` form shown below.
 Run all commands from the repository root unless noted otherwise.
 
 ### Option A: uv (recommended)
