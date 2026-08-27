@@ -18,6 +18,13 @@ git submodule update --init --recursive --checkout
 
 Then set up the environment with **uv** (recommended) or with **pip**.
 
+### Shell and path conventions
+
+The commands below prefer `/` for repository paths so they can be copied across
+PowerShell, macOS, and Linux. For Windows Command Prompt (cmd.exe) and for
+virtual-environment activation scripts, keep the `\` form shown below.
+Run all commands from the repository root unless noted otherwise.
+
 ### Option A: uv (recommended)
 
 [uv](https://docs.astral.sh/uv/) installs the pinned Python version, creates the virtual environment, and installs the locked dependencies in one step.
@@ -47,23 +54,57 @@ uv --version
 **3. Set up the environment** from the repository root:
 
 ```shell
-uv sync
+uv sync --locked
 ```
 
-Prefix any command with `uv run` to run it inside the environment, e.g. `uv run python -m unittest discover tests`.
+Prefix any command with `uv run` to run it inside the environment, e.g. `uv run python -m unittest discover tests`. This avoids shell-specific virtual-environment activation.
 
-> **`uv` not found?** First open a new terminal: a fresh shell is needed after installing. If it is still not found, uv's install directory is not on your `PATH`. Either add it to `PATH`, or install uv with `pip install uv==0.11.14` and use `python -m uv` in place of `uv` (for example `python -m uv sync`); `python -m uv ...` is equivalent to `uv ...` and does not depend on `PATH`.
+> **`uv` not found?** First open a new terminal: a fresh shell is needed after installing. If it is still not found, uv's install directory is not on your `PATH`. Either add it to `PATH`, or install uv with `pip install uv==0.11.14` and use `python -m uv` in place of `uv` (for example `python -m uv sync --locked`); `python -m uv ...` is equivalent to `uv ...` and does not depend on `PATH`.
 
 ### Option B: pip
 
 ```shell
 python -m venv .venv
-.venv\Scripts\activate      # On Windows
-# source .venv/bin/activate # On Unix or macOS
+```
+
+Activate the environment for your shell:
+
+Windows PowerShell:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+Windows Command Prompt (cmd.exe):
+
+```bat
+.\.venv\Scripts\activate.bat
+```
+
+macOS or Linux:
+
+```shell
+source .venv/bin/activate
+```
+
+Then install the dependencies:
+
+```shell
 python -m pip install -r requirements.txt
 ```
 
-> The `vpython` renderer (`render_mode="vpython"`) is optional and is not installed by either option above; the default `matplotlib` renderer works without it. To enable it, install the `vpython` extra: `uv sync --extra vpython` (uv) or `python -m pip install -e ".[vpython]"` (pip).
+If PowerShell blocks the activation script, allow it only for the current
+terminal session and run the activation command again:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
+
+When using Option B, run the examples below as `python ...` after activating
+`.venv`; when using Option A, keep the `uv run python ...` form.
+
+> The `vpython` renderer (`render_mode="vpython"`) is optional and is not installed by either option above; the default `matplotlib` renderer works without it. To enable it, install the `vpython` extra: `uv sync --locked --extra vpython` (uv) or `python -m pip install -e ".[vpython]"` (pip).
 
 ## Update from the repository
 
@@ -72,8 +113,11 @@ cd BalloonPoppingChallenge
 git switch main
 git pull --ff-only origin main
 git submodule update --init --recursive --checkout
-uv sync --locked   # pip users: python -m pip install -r requirements.txt
+uv sync --locked
 ```
+
+If you installed with pip, activate `.venv` and run
+`python -m pip install -r requirements.txt` instead of `uv sync --locked`.
 
 > `git pull origin main` on its own merges main into whatever branch you happen to be on, so the branch is named and `--ff-only` refuses anything that is not a straight fast-forward rather than making a merge commit out of an update.
 >
@@ -94,7 +138,7 @@ uv sync --locked   # pip users: python -m pip install -r requirements.txt
 
         ```shell
         cd BalloonPoppingChallenge
-        python .\BalloonPoppingGymEnv\evaluation\evaluate.py .\BalloonPoppingGymEnv\evaluation\configs\example_eval_cfg.yaml
+        uv run python BalloonPoppingGymEnv/evaluation/evaluate.py BalloonPoppingGymEnv/evaluation/configs/example_eval_cfg.yaml
         ```
 
     - You should see a rocket popping static balloons in the sky:
@@ -105,7 +149,7 @@ uv sync --locked   # pip users: python -m pip install -r requirements.txt
 
         ```shell
         cd BalloonPoppingChallenge
-        python .\doc\examples\run_env_agent.py
+        uv run python doc/examples/run_env_agent.py
         ```
 
     - This will run the specified scenario with the example agent and print the final reward. You can modify the agent, scenario parameters, and other settings in the script for development and debugging purposes.
@@ -115,7 +159,7 @@ uv sync --locked   # pip users: python -m pip install -r requirements.txt
 
         ```shell
         cd BalloonPoppingChallenge
-        python .\doc\examples\test_navigation_agent.py
+        uv run python doc/examples/test_navigation_agent.py
         ```
 
     - This will run the specified scenario with the example navigation agent. The comparison between the estimated and ground truth attitude and velocity is plotted.
@@ -129,8 +173,11 @@ uv sync --locked   # pip users: python -m pip install -r requirements.txt
 Run the cleanup invariant tests (uses only the Python standard library and PyYAML):
 
 ```shell
-python -m unittest discover tests
+uv run python -m unittest discover tests
 ```
+
+If you installed with pip instead of uv, activate `.venv` first and run
+`python -m unittest discover tests`.
 
 ## Modelling Details
 
@@ -294,10 +341,14 @@ To generate the required .json file for submission, please follow these steps:
 3. Run
 
     ```bash
-    python .\BalloonPoppingGymEnv\evaluation\evaluate.py .\BalloonPoppingGymEnv\evaluation\configs\{eval_cfg}.yaml
+    uv run python BalloonPoppingGymEnv/evaluation/evaluate.py BalloonPoppingGymEnv/evaluation/configs/example_eval_cfg.yaml
     ```
 
-4. Upload your .json file generated in [/results](BalloonPoppingGymEnv\evaluation\results) folder to the [leaderboard](https://balloonpoppingchallenge.arrcrocket.org/). The file is plain JSON, and it holds your `team_secret` in the clear, so treat it as a credential.
+Replace `example_eval_cfg.yaml` with your configuration filename. If you
+installed with pip instead of uv, activate `.venv` first and use `python` in
+place of `uv run python`.
+
+4. Upload your .json file generated in [/results](BalloonPoppingGymEnv/evaluation/results) folder to the [leaderboard](https://balloonpoppingchallenge.arrcrocket.org/). The file is plain JSON, and it holds your `team_secret` in the clear, so treat it as a credential.
 
 ### Competition Scenarios
 
