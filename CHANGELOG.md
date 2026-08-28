@@ -8,19 +8,47 @@ action and observation spaces, the submission format, scoring, the supported
 Python versions, and the tooling needed to work on the repository. Entries link
 to the pull request that made the change.
 
-## [Unreleased]
+## [not released] - yyyy-mm-dd
+
+### Documentation
+
+### Fixed
 
 ### Changed
+
+## [0.2.0] - 2026-08-29
+
+### Changed
+
+- **[BREAKING] ActiveRocketPy is updated to fix the TVC and accelerometer bugs, and the
+  scenario 0 and 1 baselines are regenerated to match the corrected physics**
+  (#157). <https://github.com/ARRC-Rocket/ActiveRocketPy/pull/28> <https://github.com/ARRC-Rocket/ActiveRocketPy/pull/29>
+
+  - The trajectory of rocket flights will change because of the updates on TVC physics.
+  - Navigation accelerometer sensor model requires updates.
+
+- Add wall time limit to truncate an algorithm that takes too much computational resource (#154)
+
+- The submission format is bumped to version 2 (#160).
+
+### Fixed
 
 - An ignored action field says why it was ignored. The log named the field and
   not the conversion that failed, so a competitor's bad value and a defect in
   the conversion itself read the same (#131).
+  
+- Refuse to pack a submission from a run that never finished (#142)
 
 ### Documentation
 
 - The `tvc`, `throttle` and `roll` fields of the launch action are read and not
   applied, because the rocket is still on the rail for that step. Written down
   rather than changed (#126).
+
+- The README setup commands are now written for cross-platform usage instead of
+  a single shell environment (#138).
+
+- Fix inclination indication in readme fig (#153)
 
 ## [0.1.1] - 2026-07-31
 
@@ -216,7 +244,6 @@ in #33, folding in the work from #5 through #34.
 First public release: the Gymnasium environment, the example agents, scenarios 0
 and 1, and the Colab example (#1, #3, #4).
 
-[Unreleased]: https://github.com/ARRC-Rocket/BalloonPoppingChallenge/compare/v0.1.1...develop
 [0.1.1]: https://github.com/ARRC-Rocket/BalloonPoppingChallenge/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/ARRC-Rocket/BalloonPoppingChallenge/compare/v0.0.2...v0.1.0
 [0.0.2]: https://github.com/ARRC-Rocket/BalloonPoppingChallenge/compare/v0.0.1...v0.0.2
