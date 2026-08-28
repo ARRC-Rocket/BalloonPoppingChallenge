@@ -201,7 +201,7 @@ class NavigationAgent(BaseAgent):
             q_vec = np.array(self.states[7:10])  # [e1, e2, e3]
             t = 2.0 * np.cross(q_vec, accel)
             accel_lframe = (
-                accel + self.states[6] * t + np.cross(q_vec, t) - self.gravity
+                accel + self.states[6] * t + np.cross(q_vec, t) + self.gravity
             )
             accel_increment = (
                 (accel_lframe + self.accel_prev) * (1 / self.sensor_frequency) / 2
