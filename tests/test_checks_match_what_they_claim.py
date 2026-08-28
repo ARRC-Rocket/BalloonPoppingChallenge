@@ -31,7 +31,7 @@ if _STACK_AVAILABLE:
 
 def _submission(**overrides):
     submission = {
-        "format_version": 1,
+        "format_version": 2,
         "leaderboard_info": {"scenario_number": 0},
         "balloon_world_data": {
             "scenario_parameters": {"scenario": {"number": 0, "random_seed": 0}},
@@ -89,7 +89,7 @@ class TestTheFormatVersionIsChecked(unittest.TestCase):
 
     def test_a_future_version_is_refused(self):
         self.assertTrue(
-            self._refused_by_the_version_check(_submission(format_version=2))
+            self._refused_by_the_version_check(_submission(format_version=3))
         )
 
     def test_a_negative_version_is_refused(self):

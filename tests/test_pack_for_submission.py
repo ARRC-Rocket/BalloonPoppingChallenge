@@ -120,7 +120,7 @@ class TestPackForSubmission(unittest.TestCase):
 
     def test_required_fields_and_format_version(self):
         data = self._load()
-        self.assertEqual(data["format_version"], 1)
+        self.assertEqual(data["format_version"], 2)
         self.assertEqual(data["team"]["name"], "unittest_team")
         self.assertEqual(data["leaderboard_info"]["team_name"], "unittest_team")
         self.assertEqual(data["leaderboard_info"]["final_reward"], 5)

@@ -67,10 +67,11 @@ _TRAJECTORY_OFFSET = 1
 # and anything approaching the balloon radius is a different trajectory.
 DEFAULT_TOLERANCE_METRES = 1e-6
 
-# The submission formats this file describes. 1 is what
-# `build_submission_payload` writes; 0 is the pickle-era payload, whose sections
-# are the same ones, so refusing it would only stop old files being checked.
-_SUPPORTED_FORMAT_VERSIONS = (0, 1)
+# The submission formats this file describes.
+# 2 Fixes the ActiveRocketPy bug and packs episode_ending and steps_run
+# 1 is what `build_submission_payload` writes;
+# 0 is the pickle-era payload, whose sections are the same ones, so refusing it would only stop old files being checked.
+_SUPPORTED_FORMAT_VERSIONS = (0, 1, 2)
 
 
 class Finding:

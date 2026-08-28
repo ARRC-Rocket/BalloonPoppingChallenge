@@ -370,7 +370,7 @@ def build_submission_payload(eval_cfg, env, scenario_parameters, packed_at):
         agent_module_file = f.read()
 
     return {
-        "format_version": 1,
+        "format_version": 2,
         "team": {
             "name": team_name,
             "secret": eval_cfg["team_secret"],
