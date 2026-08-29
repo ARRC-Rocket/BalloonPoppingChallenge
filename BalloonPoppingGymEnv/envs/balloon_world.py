@@ -3,6 +3,7 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 from collections import Counter
 
 import gymnasium as gym
@@ -72,7 +73,7 @@ def check_action(action):
 
 
 def _usable_action_fields(action):
-    """The fields as flat arrays of the right size, and the names of the rest.
+    """The fields as flat arrays of the right size, and why the rest are not.
 
     Validating a converted copy and then handing the original to the actuators
     would check something other than what is used: a scalar `tvc` converts to a
@@ -80,7 +81,7 @@ def _usable_action_fields(action):
     are what the caller gets.
     """
     usable = {}
-    unusable = set()
+    unusable = {}
     for field, size in ACTION_FIELD_SIZES.items():
         try:
             given = np.asarray(action[field])
@@ -93,16 +94,19 @@ def _usable_action_fields(action):
             # Flat, because the size alone let a (1, 2) through to raise at
             # `float(tvc[0])` and a (1, 2) attitude to raise at `attitude[1]`.
             values = np.asarray(given, dtype=float).reshape(-1)
-        except Exception:  # noqa: BLE001 - see below
-            # Anything unreadable is a field the environment cannot use, which
-            # is this function's whole answer. Narrower than this and the list
-            # has to be guessed: a torch tensor that still carries its graph
-            # raises RuntimeError here, and an action that is not a mapping at
-            # all raises TypeError on the lookup.
-            unusable.add(field)
+        except Exception as error:  # noqa: BLE001 - see below
+            # Broad on purpose: a torch tensor still carrying its graph raises
+            # RuntimeError here, and an action that is not a mapping raises
+            # TypeError on the lookup. Guessing that list is how fields go
+            # missing. The reason is kept because without it a defect in the
+            # four lines above reads exactly like a competitor's bad value.
+            unusable[field] = f"{type(error).__name__}: {error}"
             continue
-        if values.size != size or not np.all(np.isfinite(values)):
-            unusable.add(field)
+        if values.size != size:
+            unusable[field] = f"expected {size} values, got {values.size}"
+            continue
+        if not np.all(np.isfinite(values)):
+            unusable[field] = "not every value is finite"
             continue
         usable[field] = values
     return usable, unusable
@@ -264,7 +268,9 @@ class BalloonPoppingEnv(gym.Env):
         self.current_step = 0
         self.num_timesteps = 0
         self._popped_count = 0
+        self._episode_ending = None
         self._balloon_release_at_step = None
+        self._start_wall_time = None
 
         self._rocketpy_env = None
 
@@ -407,6 +413,7 @@ class BalloonPoppingEnv(gym.Env):
         self.current_step = 0
         self.num_timesteps = self._balloon_flights.shape[2]
         self._popped_count = 0
+        self._episode_ending = None
 
         observation = self._get_obs()
         info = self._get_info()
@@ -415,6 +422,8 @@ class BalloonPoppingEnv(gym.Env):
         self.render_balloons = None
         self.render_rocket = None
         self._render_frame()
+
+        self._start_wall_time = time.monotonic()
 
         return observation, info
 
@@ -441,15 +450,20 @@ class BalloonPoppingEnv(gym.Env):
             self._unusable_action_counts[field] += 1
             if self._unusable_action_counts[field] in _UNUSABLE_ACTION_LOG_STEPS:
                 logger.warning(
-                    "Step %d: ignoring %s, which the environment cannot use "
+                    "Step %d: ignoring %s, which the environment cannot use: %s "
                     "(%d such steps for that field)",
                     self.current_step,
                     field,
+                    unusable[field],
                     self._unusable_action_counts[field],
                 )
 
         if not self.rocket_launched:
             _rocket_finished = False
+            # `tvc`, `throttle` and `roll` are read on this step and not applied.
+            # The rocket is still on the rail, so they would not change where it
+            # goes; the step after launch is the first that applies them (#80).
+            #
             # Refused rather than dropped, because there is no previous attitude
             # to fall back on. The agent can launch on any later step.
             if _wants_launch(commands) and "launch_inclination_heading" in commands:
@@ -502,27 +516,32 @@ class BalloonPoppingEnv(gym.Env):
         else:
             self.trajectories.append(step_record)
 
-        # An episode is done iff reaches max time or end of trajectory
+        # An episode is done iff reaches max time, max wall time, or end of trajectory
+        _max_wall_time = (
+            time.monotonic() - self._start_wall_time
+            >= self.simulation_parameters.get("max_wall_time", float("inf"))
+        )
         _timeout = self.current_step >= self.num_timesteps - 1
-        if _timeout:
-            logger.info("Truncated: Reached max time")
-            # An agent is free never to launch, in which case there is no flight
-            # to post-process and these calls would raise instead of ending the
-            # episode.
-            if self._rocket_flight is not None:
+        if _timeout or _max_wall_time:
+            if _timeout:
+                logger.info("Truncated: Reached max simulation time")
+            elif _max_wall_time:
+                logger.info(
+                    "Truncated: Reached max wall time after %.1f sec",
+                    time.monotonic() - self._start_wall_time,
+                )
+            if self._rocket_flight is not None:  # Agent might never launch
                 self._rocket_flight.post_process_simulation()
                 self._rocket_flight.initialize_prints_plots()
         elif _rocket_finished:
             logger.info("Terminated: Rocket flight finished")
-        # Gymnasium keeps these apart on purpose. terminated means the MDP
-        # reached a terminal state, which here is the flight ending. truncated
-        # means something outside it stopped the episode, which is what running
-        # out of precomputed horizon is. An algorithm bootstraps the value of
-        # the final state when it was truncated and does not when it terminated,
-        # so reporting the clock as termination teaches an agent that running
-        # out of time is absorbing.
+
         terminated = _rocket_finished
-        truncated = _timeout
+        truncated = _timeout or _max_wall_time
+        if terminated:
+            self._episode_ending = "terminated"
+        elif truncated:
+            self._episode_ending = "truncated"
 
         # Calculate reward based on newly popped balloons at this step
         new_count = np.sum(self._balloon_status[:, 0] == 2)
@@ -537,11 +556,6 @@ class BalloonPoppingEnv(gym.Env):
         _remainder = np.remainder(
             self.current_step, 0.1 / self.simulation_parameters["time_step"]
         )  # print every 0.1 sec
-        # Both endings, not only termination. This used to read ``terminated``
-        # while that flag covered the clock as well, so an episode ending on the
-        # horizon always drew its last frame. Splitting the two causes quietly
-        # took that away from every truncated episode whose final step does not
-        # land on the 0.1 s cadence, which for scenario 1 is the usual ending.
         if _remainder == 0 or terminated or truncated:
             self._render_frame()
 

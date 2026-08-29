@@ -37,6 +37,8 @@ class TestPackForSubmission(unittest.TestCase):
         # with dill under the default allow_pickle=True.
         self.env = SimpleNamespace(
             _popped_count=5,
+            _episode_ending="terminated",
+            current_step=123,
             np_random_seed=0,
             trajectories=[
                 {
@@ -118,7 +120,7 @@ class TestPackForSubmission(unittest.TestCase):
 
     def test_required_fields_and_format_version(self):
         data = self._load()
-        self.assertEqual(data["format_version"], 1)
+        self.assertEqual(data["format_version"], 2)
         self.assertEqual(data["team"]["name"], "unittest_team")
         self.assertEqual(data["leaderboard_info"]["team_name"], "unittest_team")
         self.assertEqual(data["leaderboard_info"]["final_reward"], 5)

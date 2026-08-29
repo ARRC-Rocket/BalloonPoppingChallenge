@@ -35,8 +35,8 @@ import json
 import os
 import unittest
 from importlib.util import find_spec
-from typing import NamedTuple
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 

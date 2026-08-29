@@ -18,7 +18,6 @@ logging.
 
 import ast
 import importlib.util
-from importlib.util import find_spec
 import io
 import json
 import logging
@@ -27,6 +26,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from importlib.util import find_spec
 from pathlib import Path
 from unittest import mock
 
@@ -740,7 +740,7 @@ class TestTheRecordsProductionActuallyEmits(unittest.TestCase):
         self.assertEqual(steps, env.num_timesteps - 1)
         self.assertEqual(
             [record.getMessage() for record in caught.records],
-            ["Truncated: Reached max time"],
+            ["Truncated: Reached max simulation time"],
         )
         for record in caught.records:
             self.assertEqual(record.levelno, logging.INFO)

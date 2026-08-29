@@ -10,8 +10,8 @@ skip, but a broken import inside this package is a failure and must stay loud.
 """
 
 import glob
-import json
 import http.client
+import json
 import os
 import unittest
 import urllib.error
@@ -29,6 +29,8 @@ def _fake_env():
     """The smallest object ``pack_for_submission`` accepts."""
     return SimpleNamespace(
         _popped_count=3,
+        _episode_ending="terminated",
+        current_step=123,
         np_random_seed=0,
         trajectories=[{"rocket_states": [1.0], "balloon_states": [[0.0] * 6]}],
         _balloon_release_at_step=[0],

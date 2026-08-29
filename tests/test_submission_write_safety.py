@@ -12,9 +12,9 @@ Only ``rocketpy`` is guarded: a missing simulation stack is a legitimate skip,
 but a broken import inside this package is a failure and must stay loud.
 """
 
-import logging
 import io
 import json
+import logging
 import os
 import tempfile
 import unittest
@@ -37,6 +37,10 @@ class _FakeEnv:
     """
 
     _popped_count = 7
+
+    _episode_ending = "terminated"
+
+    current_step = 123
     np_random_seed = 0
     trajectories = [{"time": 0.0}]
     _balloon_release_at_step = [0]

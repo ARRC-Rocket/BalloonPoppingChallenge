@@ -34,7 +34,6 @@ _STACK_AVAILABLE = find_spec("rocketpy") is not None
 
 if _STACK_AVAILABLE:
     import yaml
-
     from rocketpy import MonteCarlo
 
     from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
