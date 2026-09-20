@@ -168,6 +168,17 @@ If you installed with pip, activate `.venv` and run
     - Open the [evaluate_scenario_colab.ipynb](./doc/examples/evaluate_scenario_colab.ipynb) notebook in Google Colab.
     - Follow the instructions in the notebook to run the evaluation in the cloud.
 
+5. RocketPy flight and stability demo:
+    - See the [demo guide](./doc/workshop_demos/00_rocketpy_competition_demo/README.md).
+    - Open [rocketpy_competition_demo.ipynb](./doc/workshop_demos/00_rocketpy_competition_demo/rocketpy_competition_demo.ipynb).
+    - For a local Jupyter session, run `uv sync --extra notebook`, followed by
+      `uv run jupyter lab doc/workshop_demos/00_rocketpy_competition_demo/rocketpy_competition_demo.ipynb`.
+    - The default launch site is Pingtung Jiupeng, using the GFS forecast at 02:00
+      Taiwan time on the execution day. Adjust the target static margin, body CG shift, or fin
+      position, then rerun to compare stability, attitude, performance, trajectory,
+      and Google Earth output. Every run is saved in one output folder with a
+      `{value}cal_{timestamp}` suffix for side-by-side comparison.
+
 ## Testing
 
 Run the cleanup invariant tests (uses only the Python standard library and PyYAML):

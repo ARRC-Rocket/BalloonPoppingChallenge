@@ -32,6 +32,10 @@ dev = [
 vpython = [
 	"vpython>=7.6.5",
 ]
+notebook = [
+	"ipykernel>=6.0",
+	"jupyterlab>=4.0",
+]
 
 [tool.uv.sources]
 activerocketpy = { path = "ActiveRocketPy", editable = true }

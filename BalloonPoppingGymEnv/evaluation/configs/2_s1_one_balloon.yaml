@@ -1,0 +1,8 @@
+scenario_number: 1
+render_mode: null
+agent_module_path: "./BalloonPoppingGymEnv/agents/2_s1_one_balloon_agent.py"
+agent_class_name: "OneBalloonAgent"
+agent_name: "Workshop Scenario 1 One Balloon"
+agent_kwargs:
+  launch_time: 49.5
+leaderboard_submission: false
