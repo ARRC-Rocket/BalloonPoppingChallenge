@@ -13,6 +13,7 @@ import pymap3d as pm
 from gymnasium import spaces
 from rocketpy import (
     Environment,
+    Function,
     Flight,
     LinearGenericSurface,
     MonteCarlo,
@@ -881,23 +882,24 @@ class BalloonPoppingEnv(gym.Env):
                 -altitude_nodes / gust_param["gust_decay_height"]
             )  # Exponential decay of gust speed with altitude
 
-            def gust_x(height_asl):
-                # X direction = East
-                return np.interp(
-                    height_asl,
-                    altitude_nodes,
-                    x_gust_nodes * gust_decay,
-                )
-
-            def gust_y(height_asl):
-                # Y direction = North
-                return np.interp(
-                    height_asl,
-                    altitude_nodes,
-                    y_gust_nodes * gust_decay,
-                )
-
-            self._rocketpy_env.add_wind_gust(gust_x, gust_y)
+            x_gust_profile = np.column_stack(
+                (altitude_nodes, x_gust_nodes * gust_decay)
+            )
+            y_gust_profile = np.column_stack(
+                (altitude_nodes, y_gust_nodes * gust_decay)
+            )
+            self._rocketpy_env.add_wind_gust(
+                Function(
+                    x_gust_profile,
+                    interpolation="spline",
+                    extrapolation="constant",
+                ),
+                Function(
+                    y_gust_profile,
+                    interpolation="spline",
+                    extrapolation="constant",
+                ),
+            )
 
     def __reset_balloon_release_sequence(self):
         n = self.balloon_parameters["num"]
