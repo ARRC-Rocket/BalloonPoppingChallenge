@@ -1,8 +1,9 @@
-# Parameters exposed to agents for scenario 40
+# Parameters exposed to agents for scenario 40. This is the updated scenario 4 for TASTI Finale
 environment:
   - latitude
   - longitude
   - elevation
+  # date is no longer given in scenario 40. Date will be drawn prior to the evaluation. Agents should not have this information.
 simulation:
   - time_step
   - max_time
