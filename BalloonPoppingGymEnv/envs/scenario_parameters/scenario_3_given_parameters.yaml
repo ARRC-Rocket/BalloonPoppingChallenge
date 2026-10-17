@@ -1,4 +1,4 @@
-# Parameters exposed to agents for scenario 1
+# Parameters exposed to agents for scenario 3
 environment:
   - date
   - latitude
