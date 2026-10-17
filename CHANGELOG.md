@@ -16,6 +16,18 @@ to the pull request that made the change.
 
 ### Changed
 
+## [0.2.3] - 2026-10-17
+
+### Documentation
+
+### Fixed
+
+* Fix comments in scenario 2&3&4 given parameter.
+
+### Changed
+
+* Add scenario 40 parameters
+
 ## [0.2.2] - 2026-09-26
 
 ### Fixed
