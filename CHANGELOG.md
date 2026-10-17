@@ -16,7 +16,7 @@ to the pull request that made the change.
 
 ### Changed
 
-## [not released] - 2026-10-17
+## [0.2.3] - 2026-10-17
 
 ### Documentation
 
