@@ -1,0 +1,11 @@
+scenario_number: 0
+render_mode: null
+agent_module_path: "./BalloonPoppingGymEnv/agents/1_s0_ten_balloon_agent.py"
+agent_class_name: "TenBalloonRateControlAgent"
+agent_name: "Workshop Ten Balloon Rate Control"
+agent_kwargs:
+  launch_time: 1.0
+  pitch_yaw_kp: 100.0
+  roll_kp: 100.0
+  roll_ki: 5.0
+leaderboard_submission: false
